@@ -44,9 +44,100 @@ frontend/dist/
 
 这些已经写进 `.gitignore`。
 
-## 4. 本地启动
+## 4. 运行环境准备
 
-### 4.1 初始化数据库
+在启动项目前，建议先安装并检查下面这些环境。这个项目是前后端分离架构，所以运行时需要分别满足后端和前端的依赖。
+
+### 4.1 必装环境
+
+#### Git
+用于克隆和管理项目代码。
+
+验证命令：
+```powershell
+git --version
+```
+
+#### JDK 17
+后端基于 Java 17 和 Spring Boot 4，必须安装 JDK 17。
+
+建议配置：
+- `JAVA_HOME`
+- `Path` 中包含 `%JAVA_HOME%\bin`
+
+验证命令：
+```powershell
+java -version
+javac -version
+```
+
+#### Maven
+后端使用 Maven 构建和启动。
+
+建议配置：
+- `MAVEN_HOME`
+- `Path` 中包含 `%MAVEN_HOME%\bin`
+
+验证命令：
+```powershell
+mvn -version
+```
+
+#### MySQL 8.0+
+项目主数据库为 MySQL，默认连接 `lab_booking` 数据库。
+
+默认配置在：
+
+```text
+backend/src/main/resources/application.yml
+```
+
+如果本机 MySQL 密码不是空，需要同步修改这里的 `spring.datasource.password`。
+
+验证命令：
+```powershell
+mysql --version
+```
+
+#### Node.js + npm
+前端基于 Vue 3 + Vite，需要安装 Node.js，npm 会随 Node.js 一起安装。
+
+验证命令：
+```powershell
+node -v
+npm -v
+```
+
+### 4.2 可选环境
+
+#### Redis
+项目里保留了缓存、限流、热门预约等扩展能力，但默认关闭，所以不是必需。
+
+#### RocketMQ
+项目里保留了异步预约和审计日志的 MQ 扩展能力，但默认关闭，所以不是必需。
+
+#### IDE
+推荐 IntelliJ IDEA 或 VS Code，便于运行后端和前端。
+
+### 4.3 数据库初始化
+
+启动 MySQL 后，先执行数据库脚本：
+
+```sql
+source E:/lab-booking-course/sql/lab-booking-rebuild-init.sql;
+```
+
+也可以直接在数据库工具里打开并执行：
+
+```text
+E:\lab-booking-course\sql\lab-booking-rebuild-init.sql
+```
+
+注意：`lab-booking-rebuild-init.sql` 会重建 `lab_booking` 数据库相关表，并插入演示数据。
+
+## 5. 本地启动
+
+### 5.1 初始化数据库
 
 先启动 MySQL，然后执行：
 
@@ -78,7 +169,7 @@ password: ""
 
 如果本机 MySQL 密码不是空，改这里的 `spring.datasource.password`。
 
-### 4.2 启动后端
+### 5.2 启动后端
 
 ```powershell
 cd D:\lab-booking-course\backend
@@ -99,7 +190,7 @@ D:\lab-booking-course\scripts\start-backend.ps1
 
 如果提示 `mvn` 找不到，说明本机没有配置 Maven，可以用 IDEA 打开 `backend` 目录运行 `LabResourceBookingApplication`，或者安装 Maven 后再用命令行启动。
 
-### 4.3 启动前端
+### 5.3 启动前端
 
 ```powershell
 cd D:\lab-booking-course\frontend
@@ -127,7 +218,7 @@ D:\lab-booking-course\scripts\start-frontend.ps1
 
 也就是说前端代码里请求 `/api/auth/login`，实际会转发到后端 `/auth/login`。
 
-## 5. 演示账号
+## 6. 演示账号
 
 | 角色 | 用户名 | 密码 | 说明 |
 | --- | --- | --- | --- |
@@ -137,7 +228,7 @@ D:\lab-booking-course\scripts\start-frontend.ps1
 
 初始化脚本里的密码是明文 `123456`。后端登录成功后会自动把旧密码升级为 BCrypt 加密格式。
 
-## 6. 前端页面
+## 7. 前端页面
 
 | 路由 | 页面 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -153,7 +244,7 @@ D:\lab-booking-course\scripts\start-frontend.ps1
 | `#/admin/reservations` | 预约管理 | 管理员 | 查看所有预约 |
 | `#/admin/dict` | 字典管理 | 管理员 | 维护资源类型、资源状态等字典 |
 
-## 7. 数据库设计
+## 8. 数据库设计
 
 核心表：
 
@@ -206,7 +297,7 @@ D:\lab-booking-course\scripts\start-frontend.ps1
 | 时段状态 | `OPEN`、`CLOSED` |
 | 预约状态 | `BOOKED`、`CANCELLED`、`FINISHED` |
 
-## 8. 后端接口约定
+## 9. 后端接口约定
 
 后端真实接口地址以 `http://127.0.0.1:8081` 为基础。前端开发时统一通过 `/api` 代理访问。
 
@@ -228,9 +319,9 @@ Authorization: Bearer <token>
 
 管理员接口需要当前登录用户角色为 `ADMIN`。
 
-## 9. API 清单
+## 10. API 清单
 
-### 9.1 认证接口
+### 10.1 认证接口
 
 | 方法 | 后端路径 | 前端代理路径 | 权限 | 参数 / 请求体 | 说明 |
 | --- | --- | --- | --- | --- | --- |
@@ -249,7 +340,7 @@ Authorization: Bearer <token>
 }
 ```
 
-### 9.2 资源接口
+### 10.2 资源接口
 
 | 方法 | 后端路径 | 前端代理路径 | 权限 | 参数 / 请求体 | 说明 |
 | --- | --- | --- | --- | --- | --- |
@@ -273,7 +364,7 @@ Authorization: Bearer <token>
 }
 ```
 
-### 9.3 预约时段接口
+### 10.3 预约时段接口
 
 | 方法 | 后端路径 | 前端代理路径 | 权限 | 参数 / 请求体 | 说明 |
 | --- | --- | --- | --- | --- | --- |
@@ -298,7 +389,7 @@ Authorization: Bearer <token>
 }
 ```
 
-### 9.4 预约接口
+### 10.4 预约接口
 
 | 方法 | 后端路径 | 前端代理路径 | 权限 | 参数 / 请求体 | 说明 |
 | --- | --- | --- | --- | --- | --- |
@@ -326,7 +417,7 @@ Authorization: Bearer <token>
 }
 ```
 
-### 9.5 通知接口
+### 10.5 通知接口
 
 | 方法 | 后端路径 | 前端代理路径 | 权限 | 参数 / 请求体 | 说明 |
 | --- | --- | --- | --- | --- | --- |
@@ -335,7 +426,7 @@ Authorization: Bearer <token>
 | `PUT` | `/notification/{id}/read` | `/api/notification/{id}/read` | 登录 | path: `id` | 标记单条通知已读 |
 | `PUT` | `/notification/read-all` | `/api/notification/read-all` | 登录 | 无 | 全部标记已读 |
 
-### 9.6 用户管理接口
+### 10.6 用户管理接口
 
 这些接口全部需要管理员权限。
 
@@ -363,7 +454,7 @@ Authorization: Bearer <token>
 }
 ```
 
-### 9.7 字典接口
+### 10.7 字典接口
 
 | 方法 | 后端路径 | 前端代理路径 | 权限 | 参数 / 请求体 | 说明 |
 | --- | --- | --- | --- | --- | --- |
@@ -375,15 +466,15 @@ Authorization: Bearer <token>
 | `PUT` | `/dict/data` | `/api/dict/data` | 管理员 | body: `id`, `dictLabel`, `dictValue`, `isDefault`, `sortOrder` | 修改字典项 |
 | `DELETE` | `/dict/data/{id}` | `/api/dict/data/{id}` | 管理员 | path: `id` | 删除字典项 |
 
-### 9.8 管理看板接口
+### 10.8 管理看板接口
 
 | 方法 | 后端路径 | 前端代理路径 | 权限 | 参数 / 请求体 | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | `GET` | `/admin/dashboard/overview` | `/api/admin/dashboard/overview` | 管理员 | 无 | 管理端系统概览 |
 
-## 10. 业务流程说明
+## 11. 业务流程说明
 
-### 10.1 普通预约流程
+### 11.1 普通预约流程
 
 1. 用户登录，前端保存 token。
 2. 用户进入资源列表，查询 `resource`。
@@ -394,14 +485,14 @@ Authorization: Bearer <token>
 7. 后端插入 `reservation` 记录，状态为 `BOOKED`。
 8. 用户在“我的预约”里看到新预约。
 
-### 10.2 取消预约流程
+### 11.2 取消预约流程
 
 1. 用户在“我的预约”里点击取消。
 2. 后端校验该预约属于当前用户，并且当前状态允许取消。
 3. 后端把 `reservation.status` 改为 `CANCELLED`。
 4. 后端释放对应时段名额，增加 `resource_slot.remain_quota`。
 
-### 10.3 管理员维护流程
+### 11.3 管理员维护流程
 
 1. 管理员登录。
 2. 进入资源与时段管理。
@@ -410,7 +501,7 @@ Authorization: Bearer <token>
 5. 在预约管理里查看所有用户预约。
 6. 在字典管理里维护资源类型、资源状态等基础数据。
 
-## 11. 交接注意事项
+## 12. 交接注意事项
 
 1. 组员接手时先看这个 README，不需要再找其他文档。
 2. 如果前端请求失败，先确认后端是否在 `8081`，前端是否在 `5175`。
@@ -420,7 +511,7 @@ Authorization: Bearer <token>
 6. 如果新增接口，需要同步更新本 README 的 API 清单。
 7. 数据库课程汇报时重点讲核心表和预约流程，不建议展开 Redis、RocketMQ、Outbox、异步消费这些复杂工程能力。
 
-## 12. Git 协作
+## 13. Git 协作
 
 当前目录已经是一个干净 Git 仓库。
 
