@@ -1,0 +1,212 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont,5 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+/* ========================================
+   全局动画系统 - 柔和流畅风格
+   ======================================== */
+
+/* 统一缓动曲线 */
+:root {
+  /* 标准缓动 - 最常用 */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  /* 减速缓动 - 元素进入 */
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+  /* 加速缓动 - 元素离开 */
+  --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+
+  /* 标准时长 */
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 350ms;
+  --duration-slower: 500ms;
+}
+
+/* 页面切换过渡 */
+.page-enter-active {
+  transition: all var(--duration-slow) var(--ease-decelerate);
+}
+
+.page-leave-active {
+  transition: all var(--duration-normal) var(--ease-accelerate);
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* 列表项交错进入动画 */
+.list-enter-active {
+  transition: all var(--duration-slow) var(--ease-decelerate);
+}
+
+.list-leave-active {
+  transition: all var(--duration-normal) var(--ease-accelerate);
+  position: absolute;
+}
+
+.list-enter-from {
+  opacity: 0;
+  transform: translateX(-16px);
+}
+
+.list-leave-to {
+  opacity: 0;
+  transform: translateX(16px);
+}
+
+.list-move {
+  transition: transform var(--duration-slow) var(--ease-standard);
+}
+
+/* 淡入淡出 */
+.fade-enter-active {
+  transition: opacity var(--duration-normal) var(--ease-decelerate);
+}
+
+.fade-leave-active {
+  transition: opacity var(--duration-fast) var(--ease-accelerate);
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* 缩放淡入 */
+.scale-enter-active {
+  transition: all var(--duration-slow) var(--ease-decelerate);
+}
+
+.scale-leave-active {
+  transition: all var(--duration-normal) var(--ease-accelerate);
+}
+
+.scale-enter-from {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+.scale-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+/* ========================================
+   全局微交互增强
+   ======================================== */
+
+/* 按钮点击反馈 */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* 卡片通用交互增强 */
+.n-card {
+  transition: box-shadow var(--duration-normal) var(--ease-standard),
+              transform var(--duration-normal) var(--ease-standard),
+              border-color var(--duration-normal) var(--ease-standard);
+}
+
+/* 统一所有卡片 hover 动画 - 柔和流畅 */
+[class$="-card"]:hover,
+[class*="-card "]:hover {
+  transition-timing-function: var(--ease-standard);
+}
+
+/* Naive UI 弹窗动画优化 */
+.n-modal-mask {
+  transition: opacity var(--duration-normal) var(--ease-standard) !important;
+}
+
+.n-modal {
+  transition: all var(--duration-slow) var(--ease-decelerate) !important;
+}
+
+/* 侧边栏折叠动画优化 */
+.n-layout-sider {
+  transition: all var(--duration-slower) var(--ease-standard) !important;
+}
+
+/* 菜单项过渡优化 */
+.n-menu-item {
+  transition: all var(--duration-fast) var(--ease-standard) !important;
+}
+
+/* 标签切换过渡 */
+.n-tag {
+  transition: all var(--duration-fast) var(--ease-standard);
+}
+
+/* 输入框聚焦过渡 */
+.n-input,
+.n-select {
+  transition: all var(--duration-normal) var(--ease-standard);
+}
+
+/* 开关过渡 */
+.n-switch {
+  transition: all var(--duration-normal) var(--ease-standard);
+}
+
+/* ========================================
+   滚动优化
+   ======================================== */
+
+/* 平滑滚动 */
+html {
+  scroll-behavior: smooth;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+  transition: background var(--duration-normal) var(--ease-standard);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* ========================================
+   文字渲染优化
+   ======================================== */
+
+/* 防止文字闪烁 */
+h1, h2, h3, h4, h5, h6 {
+  text-rendering: optimizeLegibility;
+}
+
+/* 选中文字样式 */
+::selection {
+  background: rgba(102, 126, 234, 0.2);
+  color: #1a1a1a;
+}

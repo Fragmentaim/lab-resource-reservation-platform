@@ -1,0 +1,74 @@
+server:
+  port: 8081
+
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/lab_booking?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8
+    username: root
+    password: ""
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
+      timeout: 3000ms
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+app:
+  jwt:
+    secret: lab-booking-jwt-secret-key-change-this-for-production-2026
+    expire-hours: 24
+  cors:
+    allowed-origins: http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,http://127.0.0.1:5188,http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5188
+  reservation:
+    submit-guard-enabled: false
+    submit-guard-ttl-seconds: 5
+    hot-redis-enabled: false
+    hot-init-wait-millis: 1000
+    async:
+      enabled: false
+      name-server: 192.168.91.129:9876
+      topic: reservation-create
+      producer-group: lab-booking-reservation-producer-group
+      consumer-group: lab-booking-reservation-consumer-group
+      relay-delay-millis: 200
+      batch-size: 20
+      max-reconsume-times: -1
+      request-timeout-seconds: 30
+      timeout-scan-delay-millis: 5000
+      timeout-scan-batch-size: 20
+      cleanup-delay-millis: 10000
+      cleanup-batch-size: 100
+      success-retention-days: 7
+      failed-retention-days: 14
+    rate-limit:
+      enabled: false
+      normal-max-requests: 5
+      normal-window-seconds: 10
+      hot-max-requests: 3
+      hot-window-seconds: 10
+  audit:
+    enabled: true
+    mq:
+      enabled: false
+      name-server: 192.168.91.129:9876
+      topic: admin-audit-log
+      producer-group: lab-booking-audit-producer-group
+      consumer-group: lab-booking-audit-consumer-group
+      max-reconsume-times: -1
+      outbox:
+        relay-delay-millis: 5000
+        batch-size: 20
+      demo:
+        fail-once-enabled: false
+        fail-once-match:
+        fail-always-match:
+  snowflake:
+    worker-id: 1
+    datacenter-id: 1
+  resource-cache:
+    enabled: false
+    ttl-seconds: 300
