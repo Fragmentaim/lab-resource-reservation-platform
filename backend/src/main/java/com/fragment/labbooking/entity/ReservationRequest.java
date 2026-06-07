@@ -27,6 +27,9 @@ public class ReservationRequest {
     @TableField("slot_id")
     private Long slotId;
 
+    @TableField("active_key")
+    private String activeKey;
+
     @TableField("source_type")
     private String sourceType;
 

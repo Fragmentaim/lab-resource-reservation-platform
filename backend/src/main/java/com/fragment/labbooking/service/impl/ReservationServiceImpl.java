@@ -13,6 +13,7 @@ import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ReservationRateLimiter;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.redis.ReservationSubmitGuard;
+import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
 import com.fragment.labbooking.dto.ReservationCreateDTO;
 import com.fragment.labbooking.dto.ReservationPageQueryDTO;
@@ -87,10 +88,16 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
     private ReservationReminderTaskService reservationReminderTaskService;
 
     @Autowired
+    private ReservationAutoCancelService reservationAutoCancelService;
+
+    @Autowired
     private ReservationRequestService reservationRequestService;
 
     @Value("${app.reservation.async.enabled:true}")
     private boolean asyncReservationEnabled;
+
+    @Value("${app.reservation.auto-cancel.check-in-before-start-minutes:30}")
+    private long checkInBeforeStartMinutes;
 
     @Override
     public List<ReservationVO> getReservationByUserId(Long userId) {
@@ -173,9 +180,11 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
             reservation.setIsActive(1);
             reservation.setStatus(ReservationStatusConstants.BOOKED);
             reservation.setSourceType(slot.getSlotType());
+            reservationAutoCancelService.fillAutoCancelDeadline(reservation);
 
             saveReservationWithRetry(reservation);
             reservationReminderTaskService.createBeforeStartReminder(reservation);
+            reservationAutoCancelService.schedule(reservation);
             resourceRedisCacheService.invalidateResourceSlotList(dto.getResourceId());
             reservationSubmitGuard.completeAfterTransaction(submitGuardKey);
             completed = true;
@@ -184,6 +193,46 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
             if (!completed && submitGuardKey != null) {
                 reservationSubmitGuard.release(submitGuardKey);
             }
+        }
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void checkIn(Long userId, Long id) {
+        if (id == null) {
+            throw new BusinessException("预约ID不能为空");
+        }
+
+        Reservation reservation = this.getById(id);
+        if (reservation == null) {
+            throw new BusinessException("预约记录不存在");
+        }
+        if (!reservation.getUserId().equals(userId)) {
+            throw new BusinessException(403, "不能签到他人的预约");
+        }
+        if (reservation.getCheckedInAt() != null) {
+            return;
+        }
+        if (!ReservationStatusConstants.BOOKED.equals(reservation.getStatus())) {
+            throw new BusinessException("当前预约状态不允许签到");
+        }
+
+        validateCheckInWindow(reservation);
+
+        LocalDateTime now = LocalDateTime.now();
+        int updatedRows = baseMapper.update(null, new LambdaUpdateWrapper<Reservation>()
+                .eq(Reservation::getId, id)
+                .eq(Reservation::getUserId, userId)
+                .eq(Reservation::getStatus, ReservationStatusConstants.BOOKED)
+                .isNull(Reservation::getCheckedInAt)
+                .set(Reservation::getCheckedInAt, now)
+                .set(Reservation::getUpdatedAt, now));
+        if (updatedRows <= 0) {
+            Reservation latest = this.getById(id);
+            if (latest != null && latest.getCheckedInAt() != null) {
+                return;
+            }
+            throw new BusinessException("当前预约状态不允许签到");
         }
     }
 
@@ -383,6 +432,7 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
             reservationVO.setLocation(reservation.getResourceLocation());
             reservationVO.setStartDatetime(reservation.getSlotStartDatetime());
             reservationVO.setEndDatetime(reservation.getSlotEndDatetime());
+            reservationVO.setCheckedIn(reservation.getCheckedInAt() != null);
 
             ResourceSlot slot = slotMap.get(reservation.getSlotId());
             if (reservationVO.getResourceId() == null && slot != null) {
@@ -435,6 +485,23 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
             if (LocalDateTime.now().isBefore(slot.getOpenTime())) {
                 throw new BusinessException("热门时段尚未开放预约");
             }
+        }
+    }
+
+    private void validateCheckInWindow(Reservation reservation) {
+        LocalDateTime startDatetime = reservation.getSlotStartDatetime();
+        LocalDateTime deadline = reservationAutoCancelService.resolveAutoCancelDeadline(reservation);
+        if (startDatetime == null || deadline == null) {
+            throw new BusinessException("预约时间不完整，无法签到");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime openTime = startDatetime.minusMinutes(Math.max(checkInBeforeStartMinutes, 0));
+        if (now.isBefore(openTime)) {
+            throw new BusinessException("未到签到时间");
+        }
+        if (now.isAfter(deadline)) {
+            throw new BusinessException("签到已超时");
         }
     }
 

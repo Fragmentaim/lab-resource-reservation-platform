@@ -21,6 +21,9 @@ public class ReservationVO {
 
     private LocalDateTime startDatetime;
     private LocalDateTime endDatetime;
+    private LocalDateTime checkedInAt;
+    private LocalDateTime autoCancelDeadline;
+    private Boolean checkedIn;
 
     private String userNickname;
     private String userPhone;

@@ -1,0 +1,20 @@
+app:
+  reservation:
+    async:
+      enabled: true
+      timeout-scan-fallback-enabled: false
+    reminder:
+      enabled: true
+      scan-fallback-enabled: false
+    auto-cancel:
+      enabled: true
+  delay-message:
+    enabled: true
+    name-server: 192.168.91.129:9876
+    topic: reservation-delay
+    producer-group: lab-booking-delay-producer-group
+    consumer-group: lab-booking-delay-consumer-group
+    max-reconsume-times: -1
+    outbox:
+      relay-delay-millis: 1000
+      batch-size: 20

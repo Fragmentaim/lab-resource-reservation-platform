@@ -18,6 +18,7 @@ public class ReservationRequestGovernanceScheduler {
 
     private final ReservationRequestService reservationRequestService;
     private final boolean enabled;
+    private final boolean timeoutScanFallbackEnabled;
     private final long requestTimeoutSeconds;
     private final int timeoutBatchSize;
     private final int cleanupBatchSize;
@@ -26,6 +27,7 @@ public class ReservationRequestGovernanceScheduler {
 
     public ReservationRequestGovernanceScheduler(ReservationRequestService reservationRequestService,
                                                  @Value("${app.reservation.async.enabled:true}") boolean enabled,
+                                                 @Value("${app.reservation.async.timeout-scan-fallback-enabled:true}") boolean timeoutScanFallbackEnabled,
                                                  @Value("${app.reservation.async.request-timeout-seconds:30}") long requestTimeoutSeconds,
                                                  @Value("${app.reservation.async.timeout-scan-batch-size:20}") int timeoutBatchSize,
                                                  @Value("${app.reservation.async.cleanup-batch-size:100}") int cleanupBatchSize,
@@ -33,6 +35,7 @@ public class ReservationRequestGovernanceScheduler {
                                                  @Value("${app.reservation.async.failed-retention-days:14}") long failedRetentionDays) {
         this.reservationRequestService = reservationRequestService;
         this.enabled = enabled;
+        this.timeoutScanFallbackEnabled = timeoutScanFallbackEnabled;
         this.requestTimeoutSeconds = requestTimeoutSeconds;
         this.timeoutBatchSize = timeoutBatchSize;
         this.cleanupBatchSize = cleanupBatchSize;
@@ -42,7 +45,7 @@ public class ReservationRequestGovernanceScheduler {
 
     @Scheduled(fixedDelayString = "${app.reservation.async.timeout-scan-delay-millis:5000}")
     public void failTimedOutRequests() {
-        if (!enabled || requestTimeoutSeconds <= 0) {
+        if (!enabled || !timeoutScanFallbackEnabled || requestTimeoutSeconds <= 0) {
             return;
         }
 

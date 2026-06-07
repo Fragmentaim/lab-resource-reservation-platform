@@ -42,6 +42,12 @@ public class Reservation {
     @TableField(value = "slot_end_datetime")
     private LocalDateTime slotEndDatetime;
 
+    @TableField(value = "checked_in_at")
+    private LocalDateTime checkedInAt;
+
+    @TableField(value = "auto_cancel_deadline")
+    private LocalDateTime autoCancelDeadline;
+
     @TableField(value = "is_active")
     private Integer isActive;
 
