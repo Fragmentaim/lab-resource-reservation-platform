@@ -11,6 +11,7 @@ import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ReservationRateLimiter;
 import com.fragment.labbooking.common.redis.ReservationSubmitGuard;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
+import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
 import com.fragment.labbooking.dto.ReservationCreateDTO;
 import com.fragment.labbooking.entity.Reservation;
@@ -66,6 +67,8 @@ class ReservationServiceImplTest {
     @Mock
     private ReservationReminderTaskService reservationReminderTaskService;
     @Mock
+    private ReservationAutoCancelService reservationAutoCancelService;
+    @Mock
     private ReservationRequestService reservationRequestService;
     @Mock
     private ReservationMapper reservationMapper;
@@ -85,8 +88,10 @@ class ReservationServiceImplTest {
         ReflectionTestUtils.setField(reservationService, "resourceRedisCacheService", resourceRedisCacheService);
         ReflectionTestUtils.setField(reservationService, "reservationNoGenerator", reservationNoGenerator);
         ReflectionTestUtils.setField(reservationService, "reservationReminderTaskService", reservationReminderTaskService);
+        ReflectionTestUtils.setField(reservationService, "reservationAutoCancelService", reservationAutoCancelService);
         ReflectionTestUtils.setField(reservationService, "reservationRequestService", reservationRequestService);
         ReflectionTestUtils.setField(reservationService, "asyncReservationEnabled", true);
+        ReflectionTestUtils.setField(reservationService, "checkInBeforeStartMinutes", 30L);
         ReflectionTestUtils.setField(reservationService, "baseMapper", reservationMapper);
     }
 
@@ -126,6 +131,8 @@ class ReservationServiceImplTest {
 
         verify(resourceSlotService).deductQuotaIfAvailable(10L);
         verify(reservationReminderTaskService).createBeforeStartReminder(savedReservation);
+        verify(reservationAutoCancelService).fillAutoCancelDeadline(savedReservation);
+        verify(reservationAutoCancelService).schedule(savedReservation);
         verify(resourceRedisCacheService).invalidateResourceSlotList(1L);
         verify(reservationSubmitGuard).completeAfterTransaction("guard:7:10");
         verify(reservationSubmitGuard, never()).release(any());
@@ -202,6 +209,94 @@ class ReservationServiceImplTest {
         verify(reservationReminderTaskService).cancelPendingByReservationId(55L);
         verify(resourceRedisCacheService).invalidateResourceSlotList(1L);
         verify(hotReservationRedisService).releaseAfterSuccessfulCancellation(ResourceSlotTypeConstants.HOT, 10L, 7L);
+    }
+
+    @Test
+    void checkInShouldUpdateOwnBookedReservationWithinWindow() {
+        LocalDateTime now = LocalDateTime.now();
+        Reservation reservation = new Reservation();
+        reservation.setId(66L);
+        reservation.setUserId(7L);
+        reservation.setStatus(ReservationStatusConstants.BOOKED);
+        reservation.setSlotStartDatetime(now.plusMinutes(10));
+        reservation.setAutoCancelDeadline(now.plusMinutes(25));
+
+        when(reservationMapper.selectById(66L)).thenReturn(reservation);
+        when(reservationAutoCancelService.resolveAutoCancelDeadline(reservation))
+                .thenReturn(reservation.getAutoCancelDeadline());
+        when(reservationMapper.update(eq(null), any())).thenReturn(1);
+
+        reservationService.checkIn(7L, 66L);
+
+        verify(reservationMapper).update(eq(null), any());
+    }
+
+    @Test
+    void checkInShouldRejectOtherUsersReservation() {
+        Reservation reservation = new Reservation();
+        reservation.setId(66L);
+        reservation.setUserId(8L);
+        reservation.setStatus(ReservationStatusConstants.BOOKED);
+
+        when(reservationMapper.selectById(66L)).thenReturn(reservation);
+
+        assertThatThrownBy(() -> reservationService.checkIn(7L, 66L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("不能签到他人的预约");
+
+        verify(reservationMapper, never()).update(eq(null), any());
+    }
+
+    @Test
+    void checkInShouldRejectNonBookedReservation() {
+        Reservation reservation = new Reservation();
+        reservation.setId(66L);
+        reservation.setUserId(7L);
+        reservation.setStatus(ReservationStatusConstants.CANCELLED);
+
+        when(reservationMapper.selectById(66L)).thenReturn(reservation);
+
+        assertThatThrownBy(() -> reservationService.checkIn(7L, 66L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("当前预约状态不允许签到");
+
+        verify(reservationMapper, never()).update(eq(null), any());
+    }
+
+    @Test
+    void checkInShouldRejectWhenWindowNotOpenYet() {
+        LocalDateTime now = LocalDateTime.now();
+        Reservation reservation = new Reservation();
+        reservation.setId(66L);
+        reservation.setUserId(7L);
+        reservation.setStatus(ReservationStatusConstants.BOOKED);
+        reservation.setSlotStartDatetime(now.plusHours(2));
+        reservation.setAutoCancelDeadline(now.plusHours(2).plusMinutes(15));
+
+        when(reservationMapper.selectById(66L)).thenReturn(reservation);
+        when(reservationAutoCancelService.resolveAutoCancelDeadline(reservation))
+                .thenReturn(reservation.getAutoCancelDeadline());
+
+        assertThatThrownBy(() -> reservationService.checkIn(7L, 66L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("未到签到时间");
+
+        verify(reservationMapper, never()).update(eq(null), any());
+    }
+
+    @Test
+    void checkInShouldTreatRepeatedCheckInAsSuccess() {
+        Reservation reservation = new Reservation();
+        reservation.setId(66L);
+        reservation.setUserId(7L);
+        reservation.setStatus(ReservationStatusConstants.BOOKED);
+        reservation.setCheckedInAt(LocalDateTime.now().minusMinutes(1));
+
+        when(reservationMapper.selectById(66L)).thenReturn(reservation);
+
+        reservationService.checkIn(7L, 66L);
+
+        verify(reservationMapper, never()).update(eq(null), any());
     }
 
     private Resource buildResource(Long id, String code, String name) {

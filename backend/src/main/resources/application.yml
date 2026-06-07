@@ -38,6 +38,7 @@ app:
       batch-size: 20
       max-reconsume-times: -1
       request-timeout-seconds: 30
+      timeout-scan-fallback-enabled: true
       timeout-scan-delay-millis: 5000
       timeout-scan-batch-size: 20
       cleanup-delay-millis: 10000
@@ -50,6 +51,27 @@ app:
       normal-window-seconds: 10
       hot-max-requests: 3
       hot-window-seconds: 10
+    reminder:
+      enabled: true
+      before-start-minutes: 10
+      scan-fallback-enabled: true
+      scheduler:
+        delay-millis: 60000
+        batch-size: 20
+    auto-cancel:
+      enabled: true
+      grace-minutes: 15
+      check-in-before-start-minutes: 30
+  delay-message:
+    enabled: false
+    name-server: 192.168.91.129:9876
+    topic: reservation-delay
+    producer-group: lab-booking-delay-producer-group
+    consumer-group: lab-booking-delay-consumer-group
+    max-reconsume-times: -1
+    outbox:
+      relay-delay-millis: 1000
+      batch-size: 20
   audit:
     enabled: true
     mq:

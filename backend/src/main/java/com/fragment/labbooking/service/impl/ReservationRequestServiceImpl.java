@@ -2,6 +2,9 @@ package com.fragment.labbooking.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
+import com.fragment.labbooking.common.delay.DelayMessageOutboxService;
+import com.fragment.labbooking.common.delay.ReservationRequestTimeoutDelayPayload;
 import com.fragment.labbooking.common.constants.ReservationRequestStatusConstants;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
@@ -10,6 +13,7 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.id.ReservationNoGenerator;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
+import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationCreateEvent;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationRequest;
@@ -21,6 +25,7 @@ import com.fragment.labbooking.service.ReservationReminderTaskService;
 import com.fragment.labbooking.service.ReservationRequestService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -45,6 +50,10 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     private final HotReservationRedisService hotReservationRedisService;
     private final ResourceRedisCacheService resourceRedisCacheService;
     private final ReservationNoGenerator reservationNoGenerator;
+    private final DelayMessageOutboxService delayMessageOutboxService;
+    private final ReservationAutoCancelService reservationAutoCancelService;
+    private final boolean delayMessageEnabled;
+    private final long requestTimeoutSeconds;
 
     public ReservationRequestServiceImpl(ReservationRequestMapper reservationRequestMapper,
                                          ReservationMapper reservationMapper,
@@ -53,7 +62,11 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                                          ReservationReminderTaskService reservationReminderTaskService,
                                          HotReservationRedisService hotReservationRedisService,
                                          ResourceRedisCacheService resourceRedisCacheService,
-                                         ReservationNoGenerator reservationNoGenerator) {
+                                         ReservationNoGenerator reservationNoGenerator,
+                                         DelayMessageOutboxService delayMessageOutboxService,
+                                         ReservationAutoCancelService reservationAutoCancelService,
+                                         @org.springframework.beans.factory.annotation.Value("${app.delay-message.enabled:false}") boolean delayMessageEnabled,
+                                         @org.springframework.beans.factory.annotation.Value("${app.reservation.async.request-timeout-seconds:30}") long requestTimeoutSeconds) {
         this.reservationRequestMapper = reservationRequestMapper;
         this.reservationMapper = reservationMapper;
         this.resourceService = resourceService;
@@ -62,24 +75,44 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
         this.hotReservationRedisService = hotReservationRedisService;
         this.resourceRedisCacheService = resourceRedisCacheService;
         this.reservationNoGenerator = reservationNoGenerator;
+        this.delayMessageOutboxService = delayMessageOutboxService;
+        this.reservationAutoCancelService = reservationAutoCancelService;
+        this.delayMessageEnabled = delayMessageEnabled;
+        this.requestTimeoutSeconds = requestTimeoutSeconds;
     }
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public ReservationRequest createPendingHotRequest(Long userId, Long resourceId, Long slotId, String sourceType) {
+        String activeKey = buildActiveKey(userId, slotId);
+        ReservationRequest unfinishedRequest = findUnfinishedRequest(userId, slotId);
+        if (unfinishedRequest != null) {
+            return unfinishedRequest;
+        }
+
         LocalDateTime now = LocalDateTime.now();
         ReservationRequest request = new ReservationRequest();
         request.setRequestNo(reservationNoGenerator.nextRequestNo());
         request.setUserId(userId);
         request.setResourceId(resourceId);
         request.setSlotId(slotId);
+        request.setActiveKey(activeKey);
         request.setSourceType(sourceType);
         request.setStatus(ReservationRequestStatusConstants.PENDING);
         request.setDispatchStatus(DISPATCH_PENDING);
         request.setDispatchRetryCount(0);
         request.setCreatedAt(now);
         request.setUpdatedAt(now);
-        reservationRequestMapper.insert(request);
+        try {
+            reservationRequestMapper.insert(request);
+        } catch (DuplicateKeyException duplicateKeyException) {
+            ReservationRequest existingRequest = findUnfinishedRequest(userId, slotId);
+            if (existingRequest != null) {
+                return existingRequest;
+            }
+            throw duplicateKeyException;
+        }
+        enqueueTimeoutMessage(request);
         return request;
     }
 
@@ -95,7 +128,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     @Override
     public List<ReservationRequest> findDispatchTimeoutBatch(LocalDateTime createdBefore, int batchSize) {
         return reservationRequestMapper.selectList(new LambdaQueryWrapper<ReservationRequest>()
-                .eq(ReservationRequest::getDispatchStatus, DISPATCH_PENDING)
                 .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
                 .le(ReservationRequest::getCreatedAt, createdBefore)
                 .orderByAsc(ReservationRequest::getId)
@@ -132,9 +164,9 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
         int updatedRows = reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
                 .eq(ReservationRequest::getId, request.getId())
                 .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
-                .eq(ReservationRequest::getDispatchStatus, DISPATCH_PENDING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.FAILED)
                 .set(ReservationRequest::getDispatchStatus, DISPATCH_FAILED)
+                .set(ReservationRequest::getActiveKey, null)
                 .set(ReservationRequest::getFailReason, truncate(failReason, 255))
                 .set(ReservationRequest::getLastDispatchErrorMessage, truncate(failReason, 512))
                 .set(ReservationRequest::getCompletedAt, now)
@@ -144,6 +176,15 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
             return true;
         }
         return false;
+    }
+
+    @Override
+    public boolean markTimedOutByRequestNo(String requestNo, String failReason) {
+        ReservationRequest request = getByRequestNo(requestNo);
+        if (request == null) {
+            return false;
+        }
+        return markTimedOut(request, failReason);
     }
 
     @Override
@@ -190,11 +231,8 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public void processPendingHotRequest(String requestNo) {
-        ReservationRequest request = getByRequestNo(requestNo);
+        ReservationRequest request = tryStartProcessing(requestNo);
         if (request == null) {
-            return;
-        }
-        if (!ReservationRequestStatusConstants.PENDING.equals(request.getStatus())) {
             return;
         }
 
@@ -231,14 +269,20 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
             return;
         }
 
+        boolean quotaDeducted = false;
         try {
             resourceSlotService.deductQuotaIfAvailable(request.getSlotId());
+            quotaDeducted = true;
             Reservation reservation = buildReservation(request, resource, slot);
             saveReservationWithRetry(reservation);
             reservationReminderTaskService.createBeforeStartReminder(reservation);
+            reservationAutoCancelService.schedule(reservation);
             resourceRedisCacheService.invalidateResourceSlotList(request.getResourceId());
             markSuccess(request, reservation);
         } catch (BusinessException exception) {
+            if (quotaDeducted) {
+                resourceSlotService.restoreQuota(request.getSlotId());
+            }
             markFailedAndRelease(request, exception.getMessage());
         }
     }
@@ -256,32 +300,41 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
         reservation.setIsActive(1);
         reservation.setStatus(ReservationStatusConstants.BOOKED);
         reservation.setSourceType(slot.getSlotType());
+        reservationAutoCancelService.fillAutoCancelDeadline(reservation);
         return reservation;
     }
 
     private void markSuccess(ReservationRequest request, Reservation reservation) {
         LocalDateTime now = LocalDateTime.now();
-        reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
+        int updatedRows = reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
                 .eq(ReservationRequest::getId, request.getId())
-                .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
+                .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PROCESSING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.SUCCESS)
+                .set(ReservationRequest::getActiveKey, null)
                 .set(ReservationRequest::getReservationId, reservation.getId())
                 .set(ReservationRequest::getReservationNo, reservation.getReservationNo())
                 .set(ReservationRequest::getCompletedAt, now)
                 .set(ReservationRequest::getUpdatedAt, now)
                 .set(ReservationRequest::getFailReason, null));
+        if (updatedRows <= 0) {
+            throw new IllegalStateException("Reservation request status changed before marking success. requestNo="
+                    + request.getRequestNo());
+        }
     }
 
     private void markFailedAndRelease(ReservationRequest request, String reason) {
         LocalDateTime now = LocalDateTime.now();
-        reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
+        int updatedRows = reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
                 .eq(ReservationRequest::getId, request.getId())
-                .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
+                .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PROCESSING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.FAILED)
+                .set(ReservationRequest::getActiveKey, null)
                 .set(ReservationRequest::getFailReason, truncate(reason, 255))
                 .set(ReservationRequest::getCompletedAt, now)
                 .set(ReservationRequest::getUpdatedAt, now));
-        hotReservationRedisService.releaseAfterCommit(request.getSourceType(), request.getSlotId(), request.getUserId());
+        if (updatedRows > 0) {
+            hotReservationRedisService.releaseAfterCommit(request.getSourceType(), request.getSlotId(), request.getUserId());
+        }
     }
 
     private void saveReservationWithRetry(Reservation reservation) {
@@ -327,5 +380,55 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
             return null;
         }
         return text.length() <= maxLength ? text : text.substring(0, maxLength);
+    }
+
+    private ReservationRequest tryStartProcessing(String requestNo) {
+        if (requestNo == null) {
+            return null;
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        int updatedRows = reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
+                .eq(ReservationRequest::getRequestNo, requestNo)
+                .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
+                .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.PROCESSING)
+                .set(ReservationRequest::getUpdatedAt, now)
+                .set(ReservationRequest::getLastDispatchErrorMessage, null));
+        if (updatedRows <= 0) {
+            return null;
+        }
+
+        return getByRequestNo(requestNo);
+    }
+
+    private ReservationRequest findUnfinishedRequest(Long userId, Long slotId) {
+        String activeKey = buildActiveKey(userId, slotId);
+        if (activeKey == null) {
+            return null;
+        }
+
+        return reservationRequestMapper.selectOne(new LambdaQueryWrapper<ReservationRequest>()
+                .eq(ReservationRequest::getActiveKey, activeKey)
+                .last("LIMIT 1"));
+    }
+
+    private String buildActiveKey(Long userId, Long slotId) {
+        if (userId == null || slotId == null) {
+            return null;
+        }
+        return userId + ":" + slotId;
+    }
+
+    private void enqueueTimeoutMessage(ReservationRequest request) {
+        if (!delayMessageEnabled || requestTimeoutSeconds <= 0) {
+            return;
+        }
+
+        delayMessageOutboxService.enqueue(
+                DelayMessageEventTypes.RESERVATION_REQUEST_TIMEOUT,
+                request.getRequestNo(),
+                request.getCreatedAt().plusSeconds(requestTimeoutSeconds),
+                new ReservationRequestTimeoutDelayPayload(request.getRequestNo())
+        );
     }
 }
