@@ -20,6 +20,8 @@ public interface ReservationRequestService {
 
     boolean markTimedOut(ReservationRequest request, String failReason);
 
+    boolean markTimedOutByRequestNo(String requestNo, String failReason);
+
     ReservationRequest getByRequestNo(String requestNo);
 
     void processPendingHotRequest(String requestNo);

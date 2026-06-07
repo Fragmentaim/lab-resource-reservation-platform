@@ -19,6 +19,8 @@ public interface ReservationService extends IService<Reservation> {
 
     ReservationSubmitVO createReservation(Long userId, ReservationCreateDTO dto);
 
+    void checkIn(Long userId, Long id);
+
     void cancelReservation(Long userId, Long id, ReservationCancelDTO dto);
 
     Page<ReservationVO> pageReservation(ReservationPageQueryDTO queryDTO);

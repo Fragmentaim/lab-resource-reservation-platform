@@ -64,6 +64,12 @@ public class ReservationController {
         return Result.success(reservationService.createReservation(UserContext.requireUser().getId(), dto));
     }
 
+    @PutMapping("/{id}/check-in")
+    public Result<Void> checkIn(@PathVariable Long id) {
+        reservationService.checkIn(UserContext.requireUser().getId(), id);
+        return Result.success();
+    }
+
     @PutMapping("/{id}/cancel")
     public Result<Void> cancelReservation(@PathVariable Long id,
                                           @Valid @RequestBody ReservationCancelDTO dto) {

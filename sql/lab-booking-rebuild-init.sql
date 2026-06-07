@@ -12,6 +12,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS admin_audit_outbox;
 DROP TABLE IF EXISTS admin_audit_log;
+DROP TABLE IF EXISTS delay_message_outbox;
 DROP TABLE IF EXISTS user_notification;
 DROP TABLE IF EXISTS reservation_reminder_task;
 DROP TABLE IF EXISTS reservation_request;
@@ -99,6 +100,8 @@ CREATE TABLE reservation (
     resource_location VARCHAR(255) NULL,
     slot_start_datetime DATETIME NULL,
     slot_end_datetime DATETIME NULL,
+    checked_in_at DATETIME NULL,
+    auto_cancel_deadline DATETIME NULL,
     is_active TINYINT NULL,
     status VARCHAR(16) NOT NULL,
     source_type VARCHAR(16) NOT NULL,
@@ -120,6 +123,7 @@ CREATE TABLE reservation_request (
     user_id BIGINT NOT NULL,
     resource_id BIGINT NOT NULL,
     slot_id BIGINT NOT NULL,
+    active_key VARCHAR(128) NULL,
     source_type VARCHAR(16) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
     dispatch_status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
@@ -132,6 +136,7 @@ CREATE TABLE reservation_request (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     completed_at DATETIME NULL,
     UNIQUE KEY uk_reservation_request_no (request_no),
+    UNIQUE KEY uk_reservation_request_active_key (active_key),
     KEY idx_reservation_request_user_created (user_id, created_at),
     KEY idx_reservation_request_dispatch_status_created (dispatch_status, created_at),
     KEY idx_reservation_request_status_created (status, created_at)
@@ -171,6 +176,28 @@ CREATE TABLE user_notification (
     read_at DATETIME NULL,
     UNIQUE KEY uk_user_notification_reminder_task (reminder_task_id),
     KEY idx_user_notification_user_read_created (user_id, is_read, created_at)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE delay_message_outbox (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    event_id VARCHAR(128) NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    business_key VARCHAR(128) NOT NULL,
+    topic VARCHAR(128) NOT NULL,
+    tag VARCHAR(64) NOT NULL,
+    message_key VARCHAR(128) NOT NULL,
+    deliver_at DATETIME NOT NULL,
+    payload TEXT NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    retry_count INT NOT NULL DEFAULT 0,
+    last_error_message VARCHAR(512) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    sent_at DATETIME NULL,
+    UNIQUE KEY uk_delay_message_event_id (event_id),
+    KEY idx_delay_message_status_id (status, id),
+    KEY idx_delay_message_event_type_status (event_type, status),
+    KEY idx_delay_message_deliver_at (deliver_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE TABLE admin_audit_log (
@@ -250,27 +277,32 @@ INSERT INTO reservation (
     id, reservation_no, user_id, resource_id, slot_id,
     resource_name, resource_code, resource_location,
     slot_start_datetime, slot_end_datetime,
+    checked_in_at, auto_cancel_deadline,
     is_active, status, source_type, cancel_reason,
     created_at, updated_at
 )
 VALUES
     (1, 'R202604200001', 2, 1, 1, '1号靶车', 'TC-01', '室外联调区',
      '2026-04-21 09:00:00', '2026-04-21 11:00:00',
+     NULL, '2026-04-21 09:15:00',
      1, 'BOOKED', 'NORMAL', NULL,
      '2026-04-20 10:00:00', '2026-04-20 10:00:00'),
 
     (2, 'R202604190001', 2, 2, 3, '室内测试场', 'TF-01', '测试楼一层',
      '2026-04-21 13:00:00', '2026-04-21 15:00:00',
+     '2026-04-21 12:55:00', '2026-04-21 13:15:00',
      NULL, 'FINISHED', 'NORMAL', NULL,
      '2026-04-19 15:00:00', '2026-04-19 18:00:00'),
 
     (3, 'R202604180001', 2, 1, 2, '1号靶车', 'TC-01', '室外联调区',
      '2026-04-22 14:00:00', '2026-04-22 16:00:00',
+     NULL, '2026-04-22 14:15:00',
      NULL, 'CANCELLED', 'HOT', '测试后主动取消',
      '2026-04-18 09:00:00', '2026-04-18 12:00:00'),
 
     (4, 'R202604200002', 1, 4, 4, '频谱仪', 'DV-01', '仪器室',
      '2026-04-23 10:00:00', '2026-04-23 12:00:00',
+     NULL, '2026-04-23 10:15:00',
      1, 'BOOKED', 'NORMAL', NULL,
      '2026-04-20 11:00:00', '2026-04-20 11:00:00');
 
@@ -282,4 +314,5 @@ ALTER TABLE resource_slot AUTO_INCREMENT = 20;
 ALTER TABLE reservation AUTO_INCREMENT = 20;
 ALTER TABLE reservation_request AUTO_INCREMENT = 10;
 ALTER TABLE reservation_reminder_task AUTO_INCREMENT = 10;
+ALTER TABLE delay_message_outbox AUTO_INCREMENT = 10;
 ALTER TABLE user_notification AUTO_INCREMENT = 10;

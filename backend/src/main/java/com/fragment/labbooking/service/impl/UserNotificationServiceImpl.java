@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.dto.NotificationPageQueryDTO;
+import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationReminderTask;
 import com.fragment.labbooking.entity.UserNotification;
 import com.fragment.labbooking.mapper.UserNotificationMapper;
@@ -14,12 +15,15 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 @Service
 public class UserNotificationServiceImpl extends ServiceImpl<UserNotificationMapper, UserNotification>
         implements UserNotificationService {
 
     private static final String TYPE_RESERVATION_REMINDER = "RESERVATION_REMINDER";
+    private static final String TYPE_RESERVATION_AUTO_CANCEL = "RESERVATION_AUTO_CANCEL";
+    private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     @Override
     public Page<UserNotificationVO> pageMyNotifications(Long userId, NotificationPageQueryDTO queryDTO) {
@@ -93,10 +97,34 @@ public class UserNotificationServiceImpl extends ServiceImpl<UserNotificationMap
         this.save(notification);
     }
 
+    @Override
+    public void createAutoCancelNotification(Reservation reservation) {
+        if (reservation == null) {
+            return;
+        }
+
+        UserNotification notification = new UserNotification();
+        notification.setUserId(reservation.getUserId());
+        notification.setType(TYPE_RESERVATION_AUTO_CANCEL);
+        notification.setTitle("预约已自动取消");
+        notification.setContent(buildAutoCancelContent(reservation));
+        notification.setRelatedReservationId(reservation.getId());
+        notification.setIsRead(0);
+        this.save(notification);
+    }
+
     private UserNotificationVO toVO(UserNotification notification) {
         UserNotificationVO vo = new UserNotificationVO();
         BeanUtils.copyProperties(notification, vo);
         vo.setRead(notification.getIsRead() != null && notification.getIsRead() == 1);
         return vo;
+    }
+
+    private String buildAutoCancelContent(Reservation reservation) {
+        String resourceName = reservation.getResourceName() == null ? "您预约的资源" : reservation.getResourceName();
+        String startText = reservation.getSlotStartDatetime() == null
+                ? "预约开始后"
+                : reservation.getSlotStartDatetime().format(DATETIME_FORMATTER);
+        return "您预约的资源“" + resourceName + "”在 " + startText + " 后未完成签到，系统已自动取消并释放名额。";
     }
 }
