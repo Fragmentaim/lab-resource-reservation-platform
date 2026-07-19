@@ -1,6 +1,7 @@
 package com.fragment.labbooking.common.reservation;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fragment.labbooking.common.outbox.MessageOutboxEnvelope;
 import com.fragment.labbooking.service.ReservationRequestService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.client.consumer.DefaultMQPushConsumer;
@@ -83,7 +84,7 @@ public class ReservationMqConsumer {
     ConsumeConcurrentlyStatus consumeMessages(List<MessageExt> messages) {
         for (MessageExt message : messages) {
             try {
-                ReservationCreateEvent event = objectMapper.readValue(message.getBody(), ReservationCreateEvent.class);
+                ReservationCreateEvent event = parseEvent(message);
                 reservationRequestService.processPendingHotRequest(event.getRequestNo());
             } catch (Exception exception) {
                 log.error("Failed to consume reservation create event, requesting re-consume later.", exception);
@@ -91,5 +92,17 @@ public class ReservationMqConsumer {
             }
         }
         return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+    }
+
+    private ReservationCreateEvent parseEvent(MessageExt message) throws Exception {
+        try {
+            MessageOutboxEnvelope envelope = objectMapper.readValue(message.getBody(), MessageOutboxEnvelope.class);
+            if (StringUtils.hasText(envelope.getPayload())) {
+                return objectMapper.readValue(envelope.getPayload(), ReservationCreateEvent.class);
+            }
+        } catch (Exception exception) {
+            log.debug("Reservation message is not an outbox envelope, trying legacy payload format.");
+        }
+        return objectMapper.readValue(message.getBody(), ReservationCreateEvent.class);
     }
 }

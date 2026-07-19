@@ -3,7 +3,7 @@ package com.fragment.labbooking.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
-import com.fragment.labbooking.common.delay.DelayMessageOutboxService;
+import com.fragment.labbooking.common.delay.DelayMessageTags;
 import com.fragment.labbooking.common.delay.ReservationRequestTimeoutDelayPayload;
 import com.fragment.labbooking.common.constants.ReservationRequestStatusConstants;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
@@ -11,10 +11,12 @@ import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.id.ReservationNoGenerator;
+import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationCreateEvent;
+import com.fragment.labbooking.common.reservation.ReservationMqPublisher;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationRequest;
 import com.fragment.labbooking.entity.Resource;
@@ -38,9 +40,7 @@ import java.util.List;
 public class ReservationRequestServiceImpl implements ReservationRequestService {
 
     private static final int RESERVATION_NO_RETRY_TIMES = 3;
-    private static final String DISPATCH_PENDING = "PENDING";
-    private static final String DISPATCH_SENT = "SENT";
-    private static final String DISPATCH_FAILED = "FAILED";
+    private static final String RESERVATION_CREATE_EVENT_TYPE = "RESERVATION_CREATE";
 
     private final ReservationRequestMapper reservationRequestMapper;
     private final ReservationMapper reservationMapper;
@@ -50,9 +50,10 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     private final HotReservationRedisService hotReservationRedisService;
     private final ResourceRedisCacheService resourceRedisCacheService;
     private final ReservationNoGenerator reservationNoGenerator;
-    private final DelayMessageOutboxService delayMessageOutboxService;
+    private final MessageOutboxService messageOutboxService;
     private final ReservationAutoCancelService reservationAutoCancelService;
-    private final boolean delayMessageEnabled;
+    private final String reservationCreateTopic;
+    private final String delayTopic;
     private final long requestTimeoutSeconds;
 
     public ReservationRequestServiceImpl(ReservationRequestMapper reservationRequestMapper,
@@ -63,9 +64,10 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                                          HotReservationRedisService hotReservationRedisService,
                                          ResourceRedisCacheService resourceRedisCacheService,
                                          ReservationNoGenerator reservationNoGenerator,
-                                         DelayMessageOutboxService delayMessageOutboxService,
+                                         MessageOutboxService messageOutboxService,
                                          ReservationAutoCancelService reservationAutoCancelService,
-                                         @org.springframework.beans.factory.annotation.Value("${app.delay-message.enabled:false}") boolean delayMessageEnabled,
+                                         @org.springframework.beans.factory.annotation.Value("${app.reservation.async.topic:reservation-create}") String reservationCreateTopic,
+                                         @org.springframework.beans.factory.annotation.Value("${app.message-outbox.delay-topic:reservation-delay}") String delayTopic,
                                          @org.springframework.beans.factory.annotation.Value("${app.reservation.async.request-timeout-seconds:30}") long requestTimeoutSeconds) {
         this.reservationRequestMapper = reservationRequestMapper;
         this.reservationMapper = reservationMapper;
@@ -75,9 +77,10 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
         this.hotReservationRedisService = hotReservationRedisService;
         this.resourceRedisCacheService = resourceRedisCacheService;
         this.reservationNoGenerator = reservationNoGenerator;
-        this.delayMessageOutboxService = delayMessageOutboxService;
+        this.messageOutboxService = messageOutboxService;
         this.reservationAutoCancelService = reservationAutoCancelService;
-        this.delayMessageEnabled = delayMessageEnabled;
+        this.reservationCreateTopic = reservationCreateTopic;
+        this.delayTopic = delayTopic;
         this.requestTimeoutSeconds = requestTimeoutSeconds;
     }
 
@@ -99,8 +102,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
         request.setActiveKey(activeKey);
         request.setSourceType(sourceType);
         request.setStatus(ReservationRequestStatusConstants.PENDING);
-        request.setDispatchStatus(DISPATCH_PENDING);
-        request.setDispatchRetryCount(0);
         request.setCreatedAt(now);
         request.setUpdatedAt(now);
         try {
@@ -112,17 +113,9 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
             }
             throw duplicateKeyException;
         }
+        enqueueReservationCreateMessage(request);
         enqueueTimeoutMessage(request);
         return request;
-    }
-
-    @Override
-    public List<ReservationRequest> findPendingDispatchBatch(int batchSize) {
-        return reservationRequestMapper.selectList(new LambdaQueryWrapper<ReservationRequest>()
-                .eq(ReservationRequest::getDispatchStatus, DISPATCH_PENDING)
-                .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
-                .orderByAsc(ReservationRequest::getId)
-                .last("LIMIT " + Math.max(batchSize, 1)));
     }
 
     @Override
@@ -135,29 +128,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     }
 
     @Override
-    public void markDispatched(ReservationRequest request) {
-        LocalDateTime now = LocalDateTime.now();
-        reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
-                .eq(ReservationRequest::getId, request.getId())
-                .eq(ReservationRequest::getDispatchStatus, DISPATCH_PENDING)
-                .set(ReservationRequest::getDispatchStatus, DISPATCH_SENT)
-                .set(ReservationRequest::getUpdatedAt, now)
-                .set(ReservationRequest::getLastDispatchErrorMessage, null));
-    }
-
-    @Override
-    public void markDispatchFailure(ReservationRequest request, String errorMessage) {
-        LocalDateTime now = LocalDateTime.now();
-        reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
-                .eq(ReservationRequest::getId, request.getId())
-                .eq(ReservationRequest::getDispatchStatus, DISPATCH_PENDING)
-                .set(ReservationRequest::getDispatchRetryCount,
-                        request.getDispatchRetryCount() == null ? 1 : request.getDispatchRetryCount() + 1)
-                .set(ReservationRequest::getLastDispatchErrorMessage, truncate(errorMessage, 512))
-                .set(ReservationRequest::getUpdatedAt, now));
-    }
-
-    @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public boolean markTimedOut(ReservationRequest request, String failReason) {
         LocalDateTime now = LocalDateTime.now();
@@ -165,10 +135,8 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                 .eq(ReservationRequest::getId, request.getId())
                 .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.FAILED)
-                .set(ReservationRequest::getDispatchStatus, DISPATCH_FAILED)
                 .set(ReservationRequest::getActiveKey, null)
                 .set(ReservationRequest::getFailReason, truncate(failReason, 255))
-                .set(ReservationRequest::getLastDispatchErrorMessage, truncate(failReason, 512))
                 .set(ReservationRequest::getCompletedAt, now)
                 .set(ReservationRequest::getUpdatedAt, now));
         if (updatedRows > 0) {
@@ -197,8 +165,7 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                 .last("LIMIT 1"));
     }
 
-    @Override
-    public ReservationCreateEvent toCreateEvent(ReservationRequest request) {
+    private ReservationCreateEvent toCreateEvent(ReservationRequest request) {
         ReservationCreateEvent event = new ReservationCreateEvent();
         event.setRequestNo(request.getRequestNo());
         event.setUserId(request.getUserId());
@@ -392,8 +359,7 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                 .eq(ReservationRequest::getRequestNo, requestNo)
                 .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.PROCESSING)
-                .set(ReservationRequest::getUpdatedAt, now)
-                .set(ReservationRequest::getLastDispatchErrorMessage, null));
+                .set(ReservationRequest::getUpdatedAt, now));
         if (updatedRows <= 0) {
             return null;
         }
@@ -420,15 +386,32 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     }
 
     private void enqueueTimeoutMessage(ReservationRequest request) {
-        if (!delayMessageEnabled || requestTimeoutSeconds <= 0) {
+        if (requestTimeoutSeconds <= 0) {
             return;
         }
 
-        delayMessageOutboxService.enqueue(
+        messageOutboxService.enqueue(
+                "RESERVATION_REQUEST",
+                request.getRequestNo(),
                 DelayMessageEventTypes.RESERVATION_REQUEST_TIMEOUT,
+                delayTopic,
+                DelayMessageTags.tagFor(DelayMessageEventTypes.RESERVATION_REQUEST_TIMEOUT),
                 request.getRequestNo(),
                 request.getCreatedAt().plusSeconds(requestTimeoutSeconds),
                 new ReservationRequestTimeoutDelayPayload(request.getRequestNo())
+        );
+    }
+
+    private void enqueueReservationCreateMessage(ReservationRequest request) {
+        messageOutboxService.enqueue(
+                "RESERVATION_REQUEST",
+                request.getRequestNo(),
+                RESERVATION_CREATE_EVENT_TYPE,
+                reservationCreateTopic,
+                ReservationMqPublisher.TAG,
+                request.getRequestNo(),
+                LocalDateTime.now(),
+                toCreateEvent(request)
         );
     }
 }

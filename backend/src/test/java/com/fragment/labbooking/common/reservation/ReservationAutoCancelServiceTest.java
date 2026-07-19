@@ -5,8 +5,8 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
-import com.fragment.labbooking.common.delay.DelayMessageOutboxService;
 import com.fragment.labbooking.common.delay.ReservationAutoCancelDelayPayload;
+import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.entity.Reservation;
@@ -44,7 +44,7 @@ class ReservationAutoCancelServiceTest {
     @Mock
     private UserNotificationService userNotificationService;
     @Mock
-    private DelayMessageOutboxService delayMessageOutboxService;
+    private MessageOutboxService messageOutboxService;
 
     private ReservationAutoCancelService autoCancelService;
 
@@ -57,7 +57,8 @@ class ReservationAutoCancelServiceTest {
                 hotReservationRedisService,
                 resourceRedisCacheService,
                 userNotificationService,
-                delayMessageOutboxService,
+                messageOutboxService,
+                "reservation-delay",
                 true,
                 15
         );
@@ -76,8 +77,12 @@ class ReservationAutoCancelServiceTest {
         assertThat(reservation.getAutoCancelDeadline()).isEqualTo(start.plusMinutes(15));
         ArgumentCaptor<ReservationAutoCancelDelayPayload> payloadCaptor =
                 ArgumentCaptor.forClass(ReservationAutoCancelDelayPayload.class);
-        verify(delayMessageOutboxService).enqueue(
+        verify(messageOutboxService).enqueue(
+                eq("RESERVATION"),
+                eq("88"),
                 eq(DelayMessageEventTypes.RESERVATION_AUTO_CANCEL),
+                eq("reservation-delay"),
+                eq("reservation-auto-cancel"),
                 eq("88"),
                 eq(start.plusMinutes(15)),
                 payloadCaptor.capture()

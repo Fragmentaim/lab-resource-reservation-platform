@@ -7,7 +7,7 @@ import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
 import com.fragment.labbooking.common.id.ReservationNoGenerator;
-import com.fragment.labbooking.common.delay.DelayMessageOutboxService;
+import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
@@ -54,7 +54,7 @@ class ReservationRequestServiceImplTest {
         HotReservationRedisService hotReservationRedisService = mock(HotReservationRedisService.class);
         ResourceRedisCacheService resourceRedisCacheService = mock(ResourceRedisCacheService.class);
         ReservationNoGenerator reservationNoGenerator = mock(ReservationNoGenerator.class);
-        DelayMessageOutboxService delayMessageOutboxService = mock(DelayMessageOutboxService.class);
+        MessageOutboxService messageOutboxService = mock(MessageOutboxService.class);
 
         ReservationRequest request = new ReservationRequest();
         request.setRequestNo("REQ-1");
@@ -70,7 +70,7 @@ class ReservationRequestServiceImplTest {
                 hotReservationRedisService,
                 resourceRedisCacheService,
                 reservationNoGenerator,
-                delayMessageOutboxService,
+                messageOutboxService,
                 false
         );
 
@@ -83,10 +83,10 @@ class ReservationRequestServiceImplTest {
     }
 
     @Test
-    void createPendingHotRequestShouldEnqueueTimeoutDelayMessageWhenDelayMessageEnabled() {
+    void createPendingHotRequestShouldEnqueueCreateAndTimeoutMessages() {
         ReservationRequestMapper reservationRequestMapper = mock(ReservationRequestMapper.class);
         ReservationNoGenerator reservationNoGenerator = mock(ReservationNoGenerator.class);
-        DelayMessageOutboxService delayMessageOutboxService = mock(DelayMessageOutboxService.class);
+        MessageOutboxService messageOutboxService = mock(MessageOutboxService.class);
         ReservationRequestServiceImpl service = buildService(
                 reservationRequestMapper,
                 mock(ReservationMapper.class),
@@ -96,7 +96,7 @@ class ReservationRequestServiceImplTest {
                 mock(HotReservationRedisService.class),
                 mock(ResourceRedisCacheService.class),
                 reservationNoGenerator,
-                delayMessageOutboxService,
+                messageOutboxService,
                 true
         );
 
@@ -106,8 +106,22 @@ class ReservationRequestServiceImplTest {
 
         assertThat(request.getRequestNo()).isEqualTo("REQ-2");
         assertThat(request.getActiveKey()).isEqualTo("7:10");
-        verify(delayMessageOutboxService).enqueue(
+        verify(messageOutboxService).enqueue(
+                eq("RESERVATION_REQUEST"),
+                eq("REQ-2"),
+                eq("RESERVATION_CREATE"),
+                eq("reservation-create"),
+                eq("reservation-create"),
+                eq("REQ-2"),
+                any(LocalDateTime.class),
+                any()
+        );
+        verify(messageOutboxService).enqueue(
+                eq("RESERVATION_REQUEST"),
+                eq("REQ-2"),
                 eq(DelayMessageEventTypes.RESERVATION_REQUEST_TIMEOUT),
+                eq("reservation-delay"),
+                eq("reservation-timeout"),
                 eq("REQ-2"),
                 any(LocalDateTime.class),
                 any()
@@ -123,7 +137,7 @@ class ReservationRequestServiceImplTest {
         when(reservationRequestMapper.selectOne(any())).thenReturn(existingRequest);
 
         ReservationNoGenerator reservationNoGenerator = mock(ReservationNoGenerator.class);
-        DelayMessageOutboxService delayMessageOutboxService = mock(DelayMessageOutboxService.class);
+        MessageOutboxService messageOutboxService = mock(MessageOutboxService.class);
         ReservationRequestServiceImpl service = buildService(
                 reservationRequestMapper,
                 mock(ReservationMapper.class),
@@ -133,7 +147,7 @@ class ReservationRequestServiceImplTest {
                 mock(HotReservationRedisService.class),
                 mock(ResourceRedisCacheService.class),
                 reservationNoGenerator,
-                delayMessageOutboxService,
+                messageOutboxService,
                 true
         );
 
@@ -142,7 +156,7 @@ class ReservationRequestServiceImplTest {
         assertThat(request.getRequestNo()).isEqualTo("REQ-EXISTING");
         verify(reservationRequestMapper, never()).insert(any(ReservationRequest.class));
         verify(reservationNoGenerator, never()).nextRequestNo();
-        verify(delayMessageOutboxService, never()).enqueue(any(), any(), any(), any());
+        verify(messageOutboxService, never()).enqueue(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -157,7 +171,7 @@ class ReservationRequestServiceImplTest {
 
         ReservationNoGenerator reservationNoGenerator = mock(ReservationNoGenerator.class);
         when(reservationNoGenerator.nextRequestNo()).thenReturn("REQ-NEW");
-        DelayMessageOutboxService delayMessageOutboxService = mock(DelayMessageOutboxService.class);
+        MessageOutboxService messageOutboxService = mock(MessageOutboxService.class);
         ReservationRequestServiceImpl service = buildService(
                 reservationRequestMapper,
                 mock(ReservationMapper.class),
@@ -167,14 +181,14 @@ class ReservationRequestServiceImplTest {
                 mock(HotReservationRedisService.class),
                 mock(ResourceRedisCacheService.class),
                 reservationNoGenerator,
-                delayMessageOutboxService,
+                messageOutboxService,
                 true
         );
 
         ReservationRequest request = service.createPendingHotRequest(7L, 1L, 10L, "HOT");
 
         assertThat(request.getRequestNo()).isEqualTo("REQ-EXISTING");
-        verify(delayMessageOutboxService, never()).enqueue(any(), any(), any(), any());
+        verify(messageOutboxService, never()).enqueue(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -191,7 +205,7 @@ class ReservationRequestServiceImplTest {
                 hotReservationRedisService,
                 mock(ResourceRedisCacheService.class),
                 mock(ReservationNoGenerator.class),
-                mock(DelayMessageOutboxService.class),
+                mock(MessageOutboxService.class),
                 false
         );
         ReservationRequest request = pendingRequest();
@@ -222,7 +236,7 @@ class ReservationRequestServiceImplTest {
                 hotReservationRedisService,
                 mock(ResourceRedisCacheService.class),
                 reservationNoGenerator,
-                mock(DelayMessageOutboxService.class),
+                mock(MessageOutboxService.class),
                 false
         );
         ReservationRequest request = pendingRequest();
@@ -274,7 +288,7 @@ class ReservationRequestServiceImplTest {
                 mock(HotReservationRedisService.class),
                 resourceRedisCacheService,
                 reservationNoGenerator,
-                mock(DelayMessageOutboxService.class),
+                mock(MessageOutboxService.class),
                 reservationAutoCancelService,
                 false
         );
@@ -325,7 +339,7 @@ class ReservationRequestServiceImplTest {
                 hotReservationRedisService,
                 mock(ResourceRedisCacheService.class),
                 mock(ReservationNoGenerator.class),
-                mock(DelayMessageOutboxService.class),
+                mock(MessageOutboxService.class),
                 false
         );
         ReservationRequest request = new ReservationRequest();
@@ -358,7 +372,7 @@ class ReservationRequestServiceImplTest {
                 hotReservationRedisService,
                 mock(ResourceRedisCacheService.class),
                 mock(ReservationNoGenerator.class),
-                mock(DelayMessageOutboxService.class),
+                mock(MessageOutboxService.class),
                 false
         );
         ReservationRequest request = new ReservationRequest();
@@ -383,7 +397,7 @@ class ReservationRequestServiceImplTest {
                                                        HotReservationRedisService hotReservationRedisService,
                                                        ResourceRedisCacheService resourceRedisCacheService,
                                                        ReservationNoGenerator reservationNoGenerator,
-                                                       DelayMessageOutboxService delayMessageOutboxService,
+                                                       MessageOutboxService messageOutboxService,
                                                        boolean delayMessageEnabled) {
         return buildService(
                 reservationRequestMapper,
@@ -394,7 +408,7 @@ class ReservationRequestServiceImplTest {
                 hotReservationRedisService,
                 resourceRedisCacheService,
                 reservationNoGenerator,
-                delayMessageOutboxService,
+                messageOutboxService,
                 mock(ReservationAutoCancelService.class),
                 delayMessageEnabled
         );
@@ -408,7 +422,7 @@ class ReservationRequestServiceImplTest {
                                                        HotReservationRedisService hotReservationRedisService,
                                                        ResourceRedisCacheService resourceRedisCacheService,
                                                        ReservationNoGenerator reservationNoGenerator,
-                                                       DelayMessageOutboxService delayMessageOutboxService,
+                                                       MessageOutboxService messageOutboxService,
                                                        ReservationAutoCancelService reservationAutoCancelService,
                                                        boolean delayMessageEnabled) {
         return new ReservationRequestServiceImpl(
@@ -420,9 +434,10 @@ class ReservationRequestServiceImplTest {
                 hotReservationRedisService,
                 resourceRedisCacheService,
                 reservationNoGenerator,
-                delayMessageOutboxService,
+                messageOutboxService,
                 reservationAutoCancelService,
-                delayMessageEnabled,
+                "reservation-create",
+                "reservation-delay",
                 30
         );
     }

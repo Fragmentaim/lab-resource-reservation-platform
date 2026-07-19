@@ -32,10 +32,7 @@ app:
       enabled: false
       name-server: 192.168.91.129:9876
       topic: reservation-create
-      producer-group: lab-booking-reservation-producer-group
       consumer-group: lab-booking-reservation-consumer-group
-      relay-delay-millis: 200
-      batch-size: 20
       max-reconsume-times: -1
       request-timeout-seconds: 30
       timeout-scan-fallback-enabled: true
@@ -62,13 +59,14 @@ app:
       enabled: true
       grace-minutes: 15
       check-in-before-start-minutes: 30
-  delay-message:
+  message-outbox:
     enabled: false
-    name-server: 192.168.91.129:9876
-    topic: reservation-delay
-    producer-group: lab-booking-delay-producer-group
-    consumer-group: lab-booking-delay-consumer-group
+    name-server: 127.0.0.1:9876
+    producer-group: lab-booking-message-outbox-producer-group
     max-reconsume-times: -1
+    lock-seconds: 60
+    delay-topic: reservation-delay
+    delay-consumer-group: lab-booking-delay-consumer-group
     outbox:
       relay-delay-millis: 1000
       batch-size: 20
@@ -78,12 +76,8 @@ app:
       enabled: false
       name-server: 192.168.91.129:9876
       topic: admin-audit-log
-      producer-group: lab-booking-audit-producer-group
       consumer-group: lab-booking-audit-consumer-group
       max-reconsume-times: -1
-      outbox:
-        relay-delay-millis: 5000
-        batch-size: 20
       demo:
         fail-once-enabled: false
         fail-once-match:
@@ -94,3 +88,34 @@ app:
   resource-cache:
     enabled: false
     ttl-seconds: 300
+  knowledge:
+    ai-service:
+      base-url: http://127.0.0.1:8000
+      connect-timeout: 5000
+      read-timeout: 180000
+    storage:
+      type: local
+      local-dir: ../uploads/knowledge
+      minio:
+        endpoint: http://127.0.0.1:9000
+        access-key: minioadmin
+        secret-key: minioadmin
+        bucket: lab-knowledge
+        presign-expiry-seconds: 900
+    document-processing:
+      enabled: false
+      name-server: 127.0.0.1:9876
+      topic: knowledge-document-process
+      tag: KNOWLEDGE_DOCUMENT_PROCESS
+      event-type: KNOWLEDGE_DOCUMENT_PROCESS
+      consumer-group: lab-booking-knowledge-document-consumer-group
+      max-reconsume-times: -1
+      max-retry-attempts: 3
+    chat:
+      context-max-turns: 8
+      max-prompt-tokens: 12000
+      answer-reserve-tokens: 2000
+      summary-budget-tokens: 1000
+      history-budget-tokens: 2000
+      evidence-budget-tokens: 7000
+      summary-trigger-turns: 6

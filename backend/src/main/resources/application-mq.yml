@@ -8,13 +8,26 @@ app:
       scan-fallback-enabled: false
     auto-cancel:
       enabled: true
-  delay-message:
+  message-outbox:
     enabled: true
-    name-server: 192.168.91.129:9876
-    topic: reservation-delay
-    producer-group: lab-booking-delay-producer-group
-    consumer-group: lab-booking-delay-consumer-group
+    name-server: 127.0.0.1:9876
+    producer-group: lab-booking-message-outbox-producer-group
     max-reconsume-times: -1
+    lock-seconds: 60
+    delay-topic: reservation-delay
+    delay-consumer-group: lab-booking-delay-consumer-group
     outbox:
       relay-delay-millis: 1000
       batch-size: 20
+  knowledge:
+    storage:
+      type: minio
+    document-processing:
+      enabled: true
+      name-server: 127.0.0.1:9876
+      topic: knowledge-document-process
+      tag: KNOWLEDGE_DOCUMENT_PROCESS
+      event-type: KNOWLEDGE_DOCUMENT_PROCESS
+      consumer-group: lab-booking-knowledge-document-consumer-group
+      max-reconsume-times: -1
+      max-retry-attempts: 3

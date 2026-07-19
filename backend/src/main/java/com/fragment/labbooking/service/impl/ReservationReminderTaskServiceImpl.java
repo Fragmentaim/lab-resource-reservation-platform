@@ -4,9 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
-import com.fragment.labbooking.common.delay.DelayMessageOutboxService;
+import com.fragment.labbooking.common.delay.DelayMessageTags;
 import com.fragment.labbooking.common.delay.ReservationReminderDelayPayload;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
+import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationReminderTask;
 import com.fragment.labbooking.mapper.ReservationReminderTaskMapper;
@@ -33,14 +34,17 @@ public class ReservationReminderTaskServiceImpl extends ServiceImpl<ReservationR
 
     private final boolean enabled;
     private final long beforeStartMinutes;
-    private final DelayMessageOutboxService delayMessageOutboxService;
+    private final MessageOutboxService messageOutboxService;
+    private final String delayTopic;
 
     public ReservationReminderTaskServiceImpl(@Value("${app.reservation.reminder.enabled:true}") boolean enabled,
                                               @Value("${app.reservation.reminder.before-start-minutes:10}") long beforeStartMinutes,
-                                              DelayMessageOutboxService delayMessageOutboxService) {
+                                              @Value("${app.message-outbox.delay-topic:reservation-delay}") String delayTopic,
+                                              MessageOutboxService messageOutboxService) {
         this.enabled = enabled;
         this.beforeStartMinutes = beforeStartMinutes;
-        this.delayMessageOutboxService = delayMessageOutboxService;
+        this.delayTopic = delayTopic;
+        this.messageOutboxService = messageOutboxService;
     }
 
     @Override
@@ -67,8 +71,12 @@ public class ReservationReminderTaskServiceImpl extends ServiceImpl<ReservationR
         task.setStatus(STATUS_PENDING);
         task.setRetryCount(0);
         this.save(task);
-        delayMessageOutboxService.enqueue(
+        messageOutboxService.enqueue(
+                "RESERVATION_REMINDER_TASK",
+                String.valueOf(task.getId()),
                 DelayMessageEventTypes.RESERVATION_REMINDER,
+                delayTopic,
+                DelayMessageTags.tagFor(DelayMessageEventTypes.RESERVATION_REMINDER),
                 String.valueOf(task.getId()),
                 task.getPlanSendTime(),
                 new ReservationReminderDelayPayload(task.getId())

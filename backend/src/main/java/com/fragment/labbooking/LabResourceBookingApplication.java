@@ -5,7 +5,10 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-@MapperScan("com.fragment.labbooking.mapper")
+@MapperScan({
+        "com.fragment.labbooking.mapper",
+        "com.fragment.labbooking.knowledge.mapper"
+})
 @SpringBootApplication
 @EnableScheduling
 public class LabResourceBookingApplication {

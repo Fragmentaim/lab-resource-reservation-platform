@@ -21,10 +21,6 @@ public class AdminDashboardRequestVO {
 
     private String status;
 
-    private String dispatchStatus;
-
-    private Integer dispatchRetryCount;
-
     private String failReason;
 
     private LocalDateTime createdAt;

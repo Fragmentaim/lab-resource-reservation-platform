@@ -13,6 +13,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS admin_audit_outbox;
 DROP TABLE IF EXISTS admin_audit_log;
 DROP TABLE IF EXISTS delay_message_outbox;
+DROP TABLE IF EXISTS message_outbox;
 DROP TABLE IF EXISTS user_notification;
 DROP TABLE IF EXISTS reservation_reminder_task;
 DROP TABLE IF EXISTS reservation_request;
@@ -126,9 +127,6 @@ CREATE TABLE reservation_request (
     active_key VARCHAR(128) NULL,
     source_type VARCHAR(16) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    dispatch_status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    dispatch_retry_count INT NOT NULL DEFAULT 0,
-    last_dispatch_error_message VARCHAR(512) NULL,
     fail_reason VARCHAR(255) NULL,
     reservation_id BIGINT NULL,
     reservation_no VARCHAR(64) NULL,
@@ -138,7 +136,6 @@ CREATE TABLE reservation_request (
     UNIQUE KEY uk_reservation_request_no (request_no),
     UNIQUE KEY uk_reservation_request_active_key (active_key),
     KEY idx_reservation_request_user_created (user_id, created_at),
-    KEY idx_reservation_request_dispatch_status_created (dispatch_status, created_at),
     KEY idx_reservation_request_status_created (status, created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -178,26 +175,29 @@ CREATE TABLE user_notification (
     KEY idx_user_notification_user_read_created (user_id, is_read, created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-CREATE TABLE delay_message_outbox (
+CREATE TABLE message_outbox (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    event_id VARCHAR(128) NOT NULL,
+    event_id VARCHAR(191) NOT NULL,
+    aggregate_type VARCHAR(64) NOT NULL,
+    aggregate_id VARCHAR(128) NOT NULL,
     event_type VARCHAR(64) NOT NULL,
-    business_key VARCHAR(128) NOT NULL,
     topic VARCHAR(128) NOT NULL,
     tag VARCHAR(64) NOT NULL,
     message_key VARCHAR(128) NOT NULL,
-    deliver_at DATETIME NOT NULL,
     payload TEXT NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    available_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     retry_count INT NOT NULL DEFAULT 0,
+    locked_until DATETIME NULL,
     last_error_message VARCHAR(512) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     sent_at DATETIME NULL,
-    UNIQUE KEY uk_delay_message_event_id (event_id),
-    KEY idx_delay_message_status_id (status, id),
-    KEY idx_delay_message_event_type_status (event_type, status),
-    KEY idx_delay_message_deliver_at (deliver_at)
+    UNIQUE KEY uk_message_outbox_event_id (event_id),
+    KEY idx_message_outbox_status_available_id (status, available_at, id),
+    KEY idx_message_outbox_status_locked_until (status, locked_until),
+    KEY idx_message_outbox_aggregate (aggregate_type, aggregate_id),
+    KEY idx_message_outbox_event_type_status (event_type, status)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE TABLE admin_audit_log (
@@ -217,23 +217,6 @@ CREATE TABLE admin_audit_log (
     KEY idx_admin_audit_operator_id (operator_id),
     KEY idx_admin_audit_module_action (module, action),
     KEY idx_admin_audit_created_at (created_at)
-) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
-CREATE TABLE admin_audit_outbox (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    event_id VARCHAR(64) NOT NULL,
-    topic VARCHAR(128) NOT NULL,
-    tag VARCHAR(64) NOT NULL,
-    message_key VARCHAR(128) NOT NULL,
-    payload LONGTEXT NOT NULL,
-    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    retry_count INT NOT NULL DEFAULT 0,
-    last_error_message VARCHAR(512) NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    sent_at DATETIME NULL,
-    UNIQUE KEY uk_admin_audit_outbox_event_id (event_id),
-    KEY idx_admin_audit_outbox_status_created (status, created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 INSERT INTO sys_user (id, username, password_hash, nickname, role, phone, status, created_at, updated_at)
@@ -314,5 +297,5 @@ ALTER TABLE resource_slot AUTO_INCREMENT = 20;
 ALTER TABLE reservation AUTO_INCREMENT = 20;
 ALTER TABLE reservation_request AUTO_INCREMENT = 10;
 ALTER TABLE reservation_reminder_task AUTO_INCREMENT = 10;
-ALTER TABLE delay_message_outbox AUTO_INCREMENT = 10;
+ALTER TABLE message_outbox AUTO_INCREMENT = 10;
 ALTER TABLE user_notification AUTO_INCREMENT = 10;
