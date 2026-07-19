@@ -1,6 +1,7 @@
 package com.fragment.labbooking.knowledge.service;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
 
 import java.util.List;
 import java.util.Map;
@@ -8,6 +9,11 @@ import java.util.Map;
 public interface NativeToolCallingClient {
 
     ToolRound nextRound(String question, List<Map<String, Object>> tools, List<ExecutedToolCall> executedCalls);
+
+    default ToolRound nextRound(String question, List<Map<String, Object>> tools, List<ExecutedToolCall> executedCalls,
+                                AgentConversationContext context) {
+        return nextRound(question, tools, executedCalls);
+    }
 
     record ToolRound(List<PlannedToolCall> toolCalls, String answer, String model) {}
 

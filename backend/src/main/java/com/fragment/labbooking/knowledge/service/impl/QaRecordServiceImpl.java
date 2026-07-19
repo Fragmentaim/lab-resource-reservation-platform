@@ -4,6 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.exception.BusinessException;
+import com.fragment.labbooking.knowledge.agent.SessionContextPlan;
+import com.fragment.labbooking.knowledge.agent.SessionContextPlanner;
+import com.fragment.labbooking.knowledge.agent.SessionTurn;
+import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
 import com.fragment.labbooking.knowledge.dto.QaAskDTO;
 import com.fragment.labbooking.knowledge.dto.QaFeedbackDTO;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
@@ -24,6 +28,7 @@ import com.fragment.labbooking.knowledge.service.AssistantToolRouter;
 import com.fragment.labbooking.knowledge.service.NativeToolCallingService;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
+import com.fragment.labbooking.knowledge.service.SessionEventService;
 import com.fragment.labbooking.knowledge.service.ToolRouteResult;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
@@ -85,14 +90,12 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     @Autowired
     private QaContextTraceMapper qaContextTraceMapper;
 
-    @Autowired
-    private QaFeedbackMapper qaFeedbackMapper;
+    @Autowired private QaFeedbackMapper qaFeedbackMapper;
+    @Autowired private SessionContextPlanner sessionContextPlanner;
+    @Autowired private SessionEventService sessionEventService;
 
     @Autowired
     private ObjectMapper objectMapper;
-
-    @Value("${app.knowledge.chat.context-max-turns:8}")
-    private int contextMaxTurns;
 
     @Value("${app.knowledge.chat.max-prompt-tokens:12000}")
     private int maxPromptTokens;
@@ -109,16 +112,15 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     @Value("${app.knowledge.chat.evidence-budget-tokens:7000}")
     private int evidenceBudgetTokens;
 
-    @Value("${app.knowledge.chat.summary-trigger-turns:6}")
-    private int summaryTriggerTurns;
-
     @Override
     public QaAnswerVO ask(QaAskDTO dto, LoginUser actor) {
         Long userId = actor.getId();
         QaSession session = resolveSession(dto.getSessionId(), userId, dto.getQuestion());
         String sessionId = session.getSessionId();
-        List<AiServiceClient.ChatMessage> chatHistory = loadRecentChatHistory(sessionId, userId);
-        AiServiceClient.ContextOptions contextOptions = contextOptions();
+        SessionContextPlan sessionPlan = planSessionContext(session, dto.getQuestion());
+        List<AiServiceClient.ChatMessage> chatHistory = sessionPlan.historyMessages();
+        AiServiceClient.ContextOptions contextOptions = contextOptions(sessionPlan);
+        int turnNo = nextTurnNo(session);
 
         // Save question record
         QaRecord record = new QaRecord();
@@ -131,10 +133,13 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         record.setCreatedAt(LocalDateTime.now());
         save(record);
         agentRunService.start(record);
+        sessionEventService.appendUserInput(record, turnNo);
+        agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
 
         try {
             java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
-                    dto.getQuestion(), actor, sessionId, record.getTraceId());
+                    dto.getQuestion(), actor, sessionId, record.getTraceId(),
+                    new AgentConversationContext(session.getSummary(), chatHistory));
             if (routed.isEmpty()) {
                 routed = assistantToolRouter.route(dto.getQuestion(), actor);
             }
@@ -150,8 +155,9 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 toolStats.put("tool_calls", routed.get().toolCalls());
                 toolStats.put("runtime_managed", routed.get().runtimeManaged());
                 toolStats.put("selected_source_count", routed.get().sourceCount());
+                toolStats.put("session_context_plan", sessionPlan.safeDetail());
                 answer.setContextStats(toolStats);
-                finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion());
+                finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
                 return answer;
             }
             List<Long> readyDocumentIds = kbDocumentService.listAccessibleReadyDocumentIds(actor);
@@ -166,6 +172,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                     contextOptions,
                     record.getTraceId()
             );
+            enrichContextStats(answer, sessionPlan);
 
             // Update record with answer
             record.setAnswer(answer.getAnswer());
@@ -178,6 +185,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             saveSources(record.getId(), answer.getSources());
             saveContextTrace(record, dto.getQuestion(), answer);
             agentRunService.finishRag(record, answer);
+            sessionEventService.appendAssistantOutput(record, answer, turnNo);
             updateSessionAfterAnswer(sessionId, userId, dto.getQuestion(), record.getTraceId());
             triggerSummaryRefresh(sessionId, userId);
 
@@ -195,15 +203,18 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         }
     }
 
-    private void finishToolAnswer(QaRecord record, QaAnswerVO answer, String sessionId, Long userId, String question) {
+    private void finishToolAnswer(QaRecord record, QaAnswerVO answer, String sessionId, Long userId, String question,
+                                  int turnNo) {
         record.setAnswer(answer.getAnswer());
         record.setLatencyMs(answer.getLatencyMs());
         record.setStatus("ANSWERED");
         record.setModelName(answer.getModelName());
         record.setQuestionType(answer.getQuestionType());
         updateById(record);
+        saveSources(record.getId(), answer.getSources());
         saveContextTrace(record, question, answer);
         agentRunService.finishTool(record, answer);
+        sessionEventService.appendAssistantOutput(record, answer, turnNo);
         updateSessionAfterAnswer(sessionId, userId, question, record.getTraceId());
         triggerSummaryRefresh(sessionId, userId);
         answer.setRecordId(record.getId());
@@ -223,8 +234,10 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         QaSession session = resolveSession(dto.getSessionId(), userId, dto.getQuestion());
         String sessionId = session.getSessionId();
         final String streamSessionId = sessionId;
-        List<AiServiceClient.ChatMessage> chatHistory = loadRecentChatHistory(streamSessionId, userId);
-        AiServiceClient.ContextOptions contextOptions = contextOptions();
+        SessionContextPlan sessionPlan = planSessionContext(session, dto.getQuestion());
+        List<AiServiceClient.ChatMessage> chatHistory = sessionPlan.historyMessages();
+        AiServiceClient.ContextOptions contextOptions = contextOptions(sessionPlan);
+        int turnNo = nextTurnNo(session);
 
         QaRecord record = new QaRecord();
         record.setUserId(userId);
@@ -236,6 +249,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         record.setCreatedAt(LocalDateTime.now());
         save(record);
         agentRunService.start(record);
+        sessionEventService.appendUserInput(record, turnNo);
+        agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
 
         StringBuilder answerBuilder = new StringBuilder();
         List<QaSourceVO> streamedSources = new ArrayList<>();
@@ -252,7 +267,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                     "traceId", record.getTraceId()));
 
             java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
-                    dto.getQuestion(), actor, streamSessionId, record.getTraceId());
+                    dto.getQuestion(), actor, streamSessionId, record.getTraceId(),
+                    new AgentConversationContext(session.getSummary(), chatHistory));
             if (routed.isEmpty()) {
                 routed = assistantToolRouter.route(dto.getQuestion(), actor);
             }
@@ -268,15 +284,16 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 toolStats.put("tool_calls", routed.get().toolCalls());
                 toolStats.put("runtime_managed", routed.get().runtimeManaged());
                 toolStats.put("selected_source_count", routed.get().sourceCount());
+                toolStats.put("session_context_plan", sessionPlan.safeDetail());
                 toolAnswer.setContextStats(toolStats);
-                finishToolAnswer(record, toolAnswer, streamSessionId, userId, dto.getQuestion());
+                finishToolAnswer(record, toolAnswer, streamSessionId, userId, dto.getQuestion(), turnNo);
                 sendEvent(emitter, event("meta",
                         "recordId", record.getId(), "sessionId", streamSessionId, "traceId", record.getTraceId(),
-                        "contextStats", toolStats, "sources", Collections.emptyList(), "modelName", toolAnswer.getModelName()));
+                        "contextStats", toolStats, "sources", toolAnswer.getSources(), "modelName", toolAnswer.getModelName()));
                 sendEvent(emitter, event("delta", "content", toolAnswer.getAnswer()));
                 sendEvent(emitter, event("done",
                         "recordId", record.getId(), "sessionId", streamSessionId, "traceId", record.getTraceId(),
-                        "contextStats", toolStats, "sources", Collections.emptyList(), "latencyMs", 0,
+                        "contextStats", toolStats, "sources", toolAnswer.getSources(), "latencyMs", 0,
                         "modelName", toolAnswer.getModelName()));
                 emitter.complete();
                 return;
@@ -351,8 +368,9 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             streamedAnswer.setLatencyMs(latencyMs[0]);
             streamedAnswer.setModelName(modelName[0]);
             streamedAnswer.setSources(streamedSources);
-            streamedAnswer.setContextStats(contextStats.get());
+            streamedAnswer.setContextStats(enrichContextStats(contextStats.get(), sessionPlan));
             agentRunService.finishRag(record, streamedAnswer);
+            sessionEventService.appendAssistantOutput(record, streamedAnswer, turnNo);
             updateSessionAfterAnswer(streamSessionId, userId, dto.getQuestion(), record.getTraceId());
             triggerSummaryRefresh(streamSessionId, userId);
 
@@ -483,33 +501,38 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         return session;
     }
 
-    private List<AiServiceClient.ChatMessage> loadRecentChatHistory(String sessionId, Long userId) {
+    private List<SessionTurn> loadSessionTurns(String sessionId, Long userId) {
         List<QaRecord> records = baseMapper.selectList(new LambdaQueryWrapper<QaRecord>()
                 .eq(QaRecord::getSessionId, sessionId)
                 .eq(QaRecord::getUserId, userId)
                 .eq(QaRecord::getStatus, "ANSWERED")
-                .orderByDesc(QaRecord::getCreatedAt)
-                .last("LIMIT " + Math.max(1, contextMaxTurns)));
-        Collections.reverse(records);
-
-        List<AiServiceClient.ChatMessage> messages = new ArrayList<>();
-        for (QaRecord record : records) {
-            messages.add(new AiServiceClient.ChatMessage("user", record.getQuestion()));
-            if (StringUtils.hasText(record.getAnswer())) {
-                messages.add(new AiServiceClient.ChatMessage("assistant", record.getAnswer()));
-            }
-        }
-        return messages;
+                .orderByAsc(QaRecord::getCreatedAt)
+                .orderByAsc(QaRecord::getId));
+        return records.stream()
+                .map(record -> new SessionTurn(record.getId(), record.getTraceId(), record.getQuestion(), record.getAnswer()))
+                .toList();
     }
 
-    private AiServiceClient.ContextOptions contextOptions() {
+    private SessionContextPlan planSessionContext(QaSession session, String question) {
+        return sessionContextPlanner.plan(
+                session.getSummary(), question, loadSessionTurns(session.getSessionId(), session.getUserId()),
+                new SessionContextPlanner.ContextCapacity(maxPromptTokens, answerReserveTokens,
+                        historyBudgetTokens, evidenceBudgetTokens)
+        );
+    }
+
+    private AiServiceClient.ContextOptions contextOptions(SessionContextPlan plan) {
         return new AiServiceClient.ContextOptions(
                 maxPromptTokens,
                 answerReserveTokens,
                 summaryBudgetTokens,
-                historyBudgetTokens,
-                evidenceBudgetTokens
+                plan.historyTokens(),
+                plan.evidenceReservationTokens()
         );
+    }
+
+    private int nextTurnNo(QaSession session) {
+        return (session.getTurnCount() == null ? 0 : session.getTurnCount()) + 1;
     }
 
     private void updateSessionAfterAnswer(String sessionId, Long userId, String question, String traceId) {
@@ -573,10 +596,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         if (session == null) {
             return;
         }
-        int turnCount = session.getTurnCount() == null ? 0 : session.getTurnCount();
-        int summaryTurnCount = session.getSummaryTurnCount() == null ? 0 : session.getSummaryTurnCount();
-        if (turnCount - summaryTurnCount < summaryTriggerTurns
-                && estimateRecentHistoryTokens(sessionId, userId) <= historyBudgetTokens) {
+        SessionContextPlan plan = planSessionContext(session, "");
+        if (!plan.compactionRecommended()) {
             return;
         }
 
@@ -624,10 +645,17 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         }
     }
 
-    private int estimateRecentHistoryTokens(String sessionId, Long userId) {
-        return loadRecentChatHistory(sessionId, userId).stream()
-                .mapToInt(message -> estimateTokens(message.content()))
-                .sum();
+    private void enrichContextStats(QaAnswerVO answer, SessionContextPlan plan) {
+        answer.setContextStats(enrichContextStats(answer.getContextStats(), plan));
+    }
+
+    private Map<String, Object> enrichContextStats(Map<String, Object> stats, SessionContextPlan plan) {
+        Map<String, Object> enriched = new LinkedHashMap<>();
+        if (stats != null) {
+            enriched.putAll(stats);
+        }
+        enriched.put("session_context_plan", plan.safeDetail());
+        return enriched;
     }
 
     private void attachSources(List<QaRecordVO> records) {
@@ -778,21 +806,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             return json;
         }
         return json.substring(0, maxLength);
-    }
-
-    private int estimateTokens(String text) {
-        if (!StringUtils.hasText(text)) {
-            return 0;
-        }
-        int chineseChars = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c >= '\u4e00' && c <= '\u9fff') {
-                chineseChars++;
-            }
-        }
-        int otherChars = Math.max(0, text.length() - chineseChars);
-        return Math.max(1, (int) (chineseChars * 1.2 + otherChars / 4.0));
     }
 
     private Map<String, Object> event(String type, Object... kvPairs) {

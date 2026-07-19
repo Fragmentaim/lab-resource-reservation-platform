@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.knowledge.agent.AgentState;
 import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
 import com.fragment.labbooking.knowledge.agent.ContextPlan;
+import com.fragment.labbooking.knowledge.agent.SessionContextPlan;
 import com.fragment.labbooking.knowledge.agent.PolicyContext;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
@@ -107,6 +108,17 @@ public class AgentRunServiceImpl implements AgentRunService {
             AgentRun run = findRun(traceId);
             if (run != null) {
                 insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "model_tool_plan", SUCCEEDED, 0, null,
+                        plan.safeDetail());
+            }
+        });
+    }
+
+    @Override
+    public void recordSessionContextPlan(String traceId, SessionContextPlan plan) {
+        safely(traceId, () -> {
+            AgentRun run = findRun(traceId);
+            if (run != null) {
+                insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "session_context_plan", SUCCEEDED, 0, null,
                         plan.safeDetail());
             }
         });

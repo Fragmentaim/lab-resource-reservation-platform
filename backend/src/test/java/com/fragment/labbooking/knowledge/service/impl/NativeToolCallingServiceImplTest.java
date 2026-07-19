@@ -58,7 +58,7 @@ class NativeToolCallingServiceImplTest {
     void shouldExecuteModelSelectedWhitelistedToolThenReturnModelAnswer() {
         NativeToolCallingClient.PlannedToolCall toolCall = new NativeToolCallingClient.PlannedToolCall(
                 "call_context_1", "reservation_context", Map.of());
-        when(nativeClient.nextRound(any(), any(), any())).thenReturn(
+        when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
                 new NativeToolCallingClient.ToolRound(List.of(toolCall), null, "glm-5.1"),
                 new NativeToolCallingClient.ToolRound(List.of(), "你当前有 2 个进行中预约。", "glm-5.1")
         );
@@ -84,7 +84,7 @@ class NativeToolCallingServiceImplTest {
                 "call_knowledge_1", "knowledge_search", Map.of("query", "取消预约的规则"));
         NativeToolCallingClient.PlannedToolCall openCall = new NativeToolCallingClient.PlannedToolCall(
                 "call_knowledge_2", "knowledge_open_chunks", Map.of("chunkUids", List.of("chunk-12-3")));
-        when(nativeClient.nextRound(any(), any(), any())).thenReturn(
+        when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
                 new NativeToolCallingClient.ToolRound(List.of(searchCall), null, "glm-5.1"),
                 new NativeToolCallingClient.ToolRound(List.of(openCall), null, "glm-5.1"),
                 new NativeToolCallingClient.ToolRound(List.of(), "取消需要提前操作。", "glm-5.1")
@@ -115,7 +115,7 @@ class NativeToolCallingServiceImplTest {
         verify(aiServiceClient, never()).askQuestion(eq("取消预约的规则"), eq(""), eq(List.of(12L)));
         verify(auditService).recordSuccess(any(), eq("knowledge_search"), any(), any(),
                 eq("ACL_FILTERED_KNOWLEDGE"), anyLong(), any());
-        verify(nativeClient, atLeastOnce()).nextRound(any(), any(), any());
+        verify(nativeClient, atLeastOnce()).nextRound(any(), any(), any(), any());
     }
 
     private LoginUser user() {

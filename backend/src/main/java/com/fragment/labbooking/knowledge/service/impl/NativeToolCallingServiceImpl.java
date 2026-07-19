@@ -2,6 +2,7 @@ package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
+import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
 import com.fragment.labbooking.knowledge.agent.AgentState;
 import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
 import com.fragment.labbooking.knowledge.agent.ContextPlan;
@@ -51,7 +52,8 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
     private boolean enabled;
 
     @Override
-    public Optional<ToolRouteResult> tryAnswer(String question, LoginUser actor, String sessionId, String traceId) {
+    public Optional<ToolRouteResult> tryAnswer(String question, LoginUser actor, String sessionId, String traceId,
+                                               AgentConversationContext conversationContext) {
         if (!enabled || !isToolEligible(question) || actor == null || actor.getId() == null) {
             return Optional.empty();
         }
@@ -69,7 +71,9 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
             for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
                 state.planning(round + 1);
                 observeState(runtimeManaged, traceId, state);
-                NativeToolCallingClient.ToolRound plan = nativeToolCallingClient.nextRound(question, toolDefinitions(), executed);
+                NativeToolCallingClient.ToolRound plan = nativeToolCallingClient.nextRound(
+                        question, toolDefinitions(), executed,
+                        conversationContext == null ? AgentConversationContext.empty() : conversationContext);
                 observePlan(runtimeManaged, traceId, ContextPlan.from(round + 1, plan));
                 if (plan.toolCalls() == null || plan.toolCalls().isEmpty()) {
                     if (plan.answer() == null || plan.answer().isBlank()) {

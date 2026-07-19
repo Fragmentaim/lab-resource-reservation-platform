@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.exception.BusinessException;
+import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
 import com.fragment.labbooking.knowledge.service.NativeToolCallingClient;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -27,11 +28,21 @@ public class NativeToolCallingClientImpl implements NativeToolCallingClient {
 
     @Override
     public ToolRound nextRound(String question, List<Map<String, Object>> tools, List<ExecutedToolCall> executedCalls) {
+        return nextRound(question, tools, executedCalls, AgentConversationContext.empty());
+    }
+
+    @Override
+    public ToolRound nextRound(String question, List<Map<String, Object>> tools, List<ExecutedToolCall> executedCalls,
+                               AgentConversationContext context) {
         try {
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("question", question);
             request.put("tools", tools);
             request.put("executed_calls", executedCalls);
+            request.put("conversation_context", Map.of(
+                    "working_memory", context == null ? "" : context.workingMemory(),
+                    "history", context == null ? List.of() : context.history()
+            ));
             String raw = restClient.post()
                     .uri("/api/v1/ai/tool-calling/round")
                     .contentType(MediaType.APPLICATION_JSON)
