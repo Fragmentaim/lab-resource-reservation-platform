@@ -95,6 +95,52 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
 
     @Override
     public QaAnswerVO ask(QaAskDTO dto, LoginUser actor) {
+        RoutedAnswer result = routeAndBuildAnswer(dto, actor);
+        return result.answer();
+    }
+
+    @Override
+    public void askStream(QaAskDTO dto, LoginUser actor, ResponseBodyEmitter emitter) {
+        RoutedAnswer result = routeAndBuildAnswer(dto, actor);
+        QaAnswerVO answer = result.answer();
+        Map<String, Object> toolStats = answer.getContextStats();
+        String sessionId = answer.getSessionId();
+
+        try {
+            sendEvent(emitter, event("record",
+                    "recordId", answer.getRecordId(),
+                    "sessionId", sessionId,
+                    "traceId", answer.getTraceId()));
+            sendEvent(emitter, event("meta",
+                    "recordId", answer.getRecordId(), "sessionId", sessionId, "traceId", answer.getTraceId(),
+                    "contextStats", toolStats, "sources", answer.getSources(), "modelName", answer.getModelName()));
+            sendEvent(emitter, event("delta", "content", answer.getAnswer()));
+            sendEvent(emitter, event("done",
+                    "recordId", answer.getRecordId(), "sessionId", sessionId, "traceId", answer.getTraceId(),
+                    "contextStats", toolStats, "sources", answer.getSources(), "latencyMs", 0,
+                    "modelName", answer.getModelName()));
+            emitter.complete();
+        } catch (Exception e) {
+            log.error("Streaming QA failed for record {}: {}", answer.getRecordId(), e.getMessage());
+            try {
+                sendEvent(emitter, event("error",
+                        "message", e.getMessage(),
+                        "recordId", answer.getRecordId(),
+                        "sessionId", sessionId,
+                        "traceId", answer.getTraceId()));
+            } catch (IOException sendError) {
+                log.warn("Failed to send streaming error event for record {}: {}", answer.getRecordId(), sendError.getMessage());
+            } finally {
+                emitter.complete();
+            }
+        }
+    }
+
+    /**
+     * Shared core logic for both ask() and askStream():
+     * resolve session → prepare context → save record → route to AI → build answer → finish.
+     */
+    private RoutedAnswer routeAndBuildAnswer(QaAskDTO dto, LoginUser actor) {
         Long userId = actor.getId();
         QaSession session = resolveSession(dto.getSessionId(), userId, dto.getQuestion());
         PreparedSessionContext preparedContext = prepareSessionContext(session, dto.getQuestion());
@@ -104,7 +150,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         List<AiServiceClient.ChatMessage> chatHistory = sessionPlan.historyMessages();
         int turnNo = nextTurnNo(session);
 
-        // Save question record
         QaRecord record = new QaRecord();
         record.setUserId(userId);
         record.setSessionId(sessionId);
@@ -140,17 +185,21 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 toolStats.put("session_context_plan", sessionPlan.safeDetail());
                 answer.setContextStats(toolStats);
                 finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
-                return answer;
+                return new RoutedAnswer(answer);
             }
             throw new BusinessException("原生 Agent 当前不可用，请稍后重试");
+        } catch (BusinessException e) {
+            throw e;
         } catch (Exception e) {
             record.setStatus("FAILED");
             record.setAnswer("抱歉，问答服务暂时不可用: " + e.getMessage());
             updateById(record);
             agentRunService.fail(record, e);
-            throw e;
+            throw new RuntimeException(e);
         }
     }
+
+    private record RoutedAnswer(QaAnswerVO answer) {}
 
     private void finishToolAnswer(QaRecord record, QaAnswerVO answer, String sessionId, Long userId, String question,
                                   int turnNo) {
@@ -174,91 +223,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         boolean nativeFunctionCalling = result.toolCalls().stream()
                 .anyMatch(call -> "native_function_calling".equals(call.get("protocol")));
         return nativeFunctionCalling ? "native-function-calling" : "java-tool-router";
-    }
-
-    @Override
-    public void askStream(QaAskDTO dto, LoginUser actor, ResponseBodyEmitter emitter) {
-        Long userId = actor.getId();
-        QaSession session = resolveSession(dto.getSessionId(), userId, dto.getQuestion());
-        PreparedSessionContext preparedContext = prepareSessionContext(session, dto.getQuestion());
-        session = preparedContext.session();
-        String sessionId = session.getSessionId();
-        final String streamSessionId = sessionId;
-        SessionContextPlan sessionPlan = preparedContext.plan();
-        List<AiServiceClient.ChatMessage> chatHistory = sessionPlan.historyMessages();
-        int turnNo = nextTurnNo(session);
-
-        QaRecord record = new QaRecord();
-        record.setUserId(userId);
-        record.setSessionId(streamSessionId);
-        record.setQuestion(dto.getQuestion());
-        record.setStatus("PENDING");
-        record.setQuestionType("KB");
-        record.setTraceId(UUID.randomUUID().toString());
-        record.setCreatedAt(LocalDateTime.now());
-        save(record);
-        agentRunService.start(record);
-        sessionEventService.appendUserInput(record, turnNo);
-        agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
-
-        try {
-            sendEvent(emitter, event("record",
-                    "recordId", record.getId(),
-                    "sessionId", streamSessionId,
-                    "traceId", record.getTraceId()));
-
-            java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
-                    dto.getQuestion(), actor, streamSessionId, record.getTraceId(),
-                    new AgentConversationContext(session.getSummary(), chatHistory));
-            if (routed.isEmpty()) {
-                routed = assistantToolRouter.route(dto.getQuestion(), actor);
-            }
-            if (routed.isPresent()) {
-                QaAnswerVO toolAnswer = new QaAnswerVO();
-                toolAnswer.setAnswer(routed.get().answer());
-                toolAnswer.setLatencyMs(0);
-                toolAnswer.setModelName(toolRouteModel(routed.get()));
-                toolAnswer.setQuestionType("TOOL");
-                toolAnswer.setSources(routed.get().sources());
-                Map<String, Object> toolStats = new LinkedHashMap<>();
-                toolStats.put("route", "permission_scoped_tool");
-                toolStats.put("tool_calls", routed.get().toolCalls());
-                toolStats.put("runtime_managed", routed.get().runtimeManaged());
-                toolStats.put("selected_source_count", routed.get().sourceCount());
-                toolStats.put("session_context_plan", sessionPlan.safeDetail());
-                toolAnswer.setContextStats(toolStats);
-                finishToolAnswer(record, toolAnswer, streamSessionId, userId, dto.getQuestion(), turnNo);
-                sendEvent(emitter, event("meta",
-                        "recordId", record.getId(), "sessionId", streamSessionId, "traceId", record.getTraceId(),
-                        "contextStats", toolStats, "sources", toolAnswer.getSources(), "modelName", toolAnswer.getModelName()));
-                sendEvent(emitter, event("delta", "content", toolAnswer.getAnswer()));
-                sendEvent(emitter, event("done",
-                        "recordId", record.getId(), "sessionId", streamSessionId, "traceId", record.getTraceId(),
-                        "contextStats", toolStats, "sources", toolAnswer.getSources(), "latencyMs", 0,
-                        "modelName", toolAnswer.getModelName()));
-                emitter.complete();
-                return;
-            }
-
-            throw new BusinessException("原生 Agent 当前不可用，请稍后重试");
-        } catch (Exception e) {
-            record.setStatus("FAILED");
-            record.setAnswer("抱歉，问答服务暂时不可用: " + e.getMessage());
-            updateById(record);
-            agentRunService.fail(record, e);
-            log.error("Streaming QA failed for record {}: {}", record.getId(), e.getMessage());
-            try {
-                sendEvent(emitter, event("error",
-                        "message", e.getMessage(),
-                        "recordId", record.getId(),
-                        "sessionId", streamSessionId,
-                        "traceId", record.getTraceId()));
-            } catch (IOException sendError) {
-                log.warn("Failed to send streaming error event for record {}: {}", record.getId(), sendError.getMessage());
-            } finally {
-                emitter.complete();
-            }
-        }
     }
 
     @Override
