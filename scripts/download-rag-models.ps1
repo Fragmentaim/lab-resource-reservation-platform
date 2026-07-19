@@ -3,6 +3,7 @@ param(
     [string]$Target = 'both',
     [string]$ModelRoot = 'D:\AI-Models',
     [string]$PythonExe = 'D:\ComfyUI-FlashVSR\ComfyUI_windows_portable\python_embeded\python.exe',
+    [string]$ProxyUrl = 'http://127.0.0.1:7890',
     [int]$MinimumDFreeGb = 10,
     [int]$MinimumCFreeGb = 5
 )
@@ -29,6 +30,12 @@ $env:HF_HUB_DISABLE_XET = '1'
 $env:TEMP = Join-Path $ModelRoot 'tmp'
 $env:TMP = $env:TEMP
 $env:PIP_CACHE_DIR = Join-Path $ModelRoot 'pip-cache'
+if ($ProxyUrl) {
+    $env:HTTP_PROXY = $ProxyUrl
+    $env:HTTPS_PROXY = $ProxyUrl
+    $env:http_proxy = $ProxyUrl
+    $env:https_proxy = $ProxyUrl
+}
 
 @($env:HF_HOME, $env:HF_HUB_CACHE, $env:HF_XET_CACHE, $env:TEMP, $env:PIP_CACHE_DIR, (Join-Path $ModelRoot 'models')) |
     ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }
@@ -41,19 +48,53 @@ if ($Target -in @('reranker', 'both')) {
     $models += @{ Id = 'Qwen/Qwen3-Reranker-0.6B'; Directory = (Join-Path $ModelRoot 'models\Qwen3-Reranker-0.6B') }
 }
 
-$pythonCode = @'
+$modelJson = $models | ForEach-Object { @{ id = $_.Id; directory = $_.Directory } } | ConvertTo-Json -Compress
+$modelJsonBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($modelJson))
+
+$pythonCode = @"
+import base64
 import json
-import sys
 from huggingface_hub import snapshot_download
 
-specs = json.loads(sys.argv[1])
+specs = json.loads(base64.b64decode('$modelJsonBase64'))
 if isinstance(specs, dict):
     specs = [specs]
 
 for spec in specs:
-    path = snapshot_download(repo_id=spec["id"], local_dir=spec["directory"])
+    path = snapshot_download(
+        repo_id=spec["id"],
+        local_dir=spec["directory"],
+        ignore_patterns=["model.safetensors"],
+    )
     print(f"READY {spec['id']} -> {path}")
-'@
+"@
 
-$modelJson = $models | ForEach-Object { @{ id = $_.Id; directory = $_.Directory } } | ConvertTo-Json -Compress
-& $PythonExe -c $pythonCode $modelJson
+$pythonCodeBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pythonCode))
+$pythonRunner = "exec(__import__('base64').b64decode('$pythonCodeBase64'))"
+& $PythonExe -c $pythonRunner
+if ($LASTEXITCODE -ne 0) {
+    throw "模型配置下载失败。"
+}
+
+foreach ($model in $models) {
+    $modelFile = Join-Path $model.Directory 'model.safetensors'
+    if (Test-Path -LiteralPath $modelFile) {
+        Write-Output "WEIGHTS READY $($model.Id) -> $modelFile"
+        continue
+    }
+
+    $partialFile = "$modelFile.downloading"
+    $modelUrl = "https://huggingface.co/$($model.Id)/resolve/main/model.safetensors?download=true"
+    $curlArguments = @('--location', '--continue-at', '-', '--retry', '5', '--retry-delay', '3', '--fail', '--output', $partialFile, $modelUrl)
+    if ($ProxyUrl) {
+        $curlArguments = @('--proxy', $ProxyUrl) + $curlArguments
+    }
+
+    & curl.exe @curlArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "模型权重下载失败：$($model.Id)。保留可恢复分片：$partialFile"
+    }
+
+    Move-Item -LiteralPath $partialFile -Destination $modelFile
+    Write-Output "WEIGHTS READY $($model.Id) -> $modelFile"
+}
