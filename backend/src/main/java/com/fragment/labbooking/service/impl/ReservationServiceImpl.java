@@ -7,13 +7,13 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.constants.ReservationRequestStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
-import com.fragment.labbooking.common.id.ReservationNoGenerator;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ReservationRateLimiter;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.redis.ReservationSubmitGuard;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
+import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
 import com.fragment.labbooking.dto.ReservationCreateDTO;
 import com.fragment.labbooking.dto.ReservationPageQueryDTO;
@@ -37,7 +37,6 @@ import com.fragment.labbooking.vo.UserVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -57,8 +56,6 @@ import java.util.stream.Collectors;
 @Service
 public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reservation>
         implements ReservationService {
-
-    private static final int RESERVATION_NO_RETRY_TIMES = 3;
 
     @Autowired
     private ResourceService resourceService;
@@ -82,7 +79,7 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
     private ResourceRedisCacheService resourceRedisCacheService;
 
     @Autowired
-    private ReservationNoGenerator reservationNoGenerator;
+    private ReservationPersistenceHelper reservationPersistenceHelper;
 
     @Autowired
     private ReservationReminderTaskService reservationReminderTaskService;
@@ -134,17 +131,10 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
 
             submitGuardKey = reservationSubmitGuard.acquire(userId, dto.getSlotId());
 
+            hotReservationRedisService.reserveAndRegisterRollback(slot, userId);
+            checkDuplicateReservation(userId, dto.getSlotId());
+
             if (shouldUseAsyncHotReservation(slot)) {
-                hotReservationRedisService.reserveAndRegisterRollback(slot, userId);
-
-                long duplicateCount = this.count(new LambdaQueryWrapper<Reservation>()
-                        .eq(Reservation::getUserId, userId)
-                        .eq(Reservation::getSlotId, dto.getSlotId())
-                        .eq(Reservation::getStatus, ReservationStatusConstants.BOOKED));
-                if (duplicateCount > 0) {
-                    throw new BusinessException("当前用户已预约该时段");
-                }
-
                 ReservationRequest request = reservationRequestService.createPendingHotRequest(
                         userId,
                         dto.getResourceId(),
@@ -156,33 +146,12 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
                 return buildAsyncSubmitVO(request);
             }
 
-            hotReservationRedisService.reserveAndRegisterRollback(slot, userId);
-
-            long duplicateCount = this.count(new LambdaQueryWrapper<Reservation>()
-                .eq(Reservation::getUserId, userId)
-                .eq(Reservation::getSlotId, dto.getSlotId())
-                .eq(Reservation::getStatus, ReservationStatusConstants.BOOKED));
-            if (duplicateCount > 0) {
-                throw new BusinessException("当前用户已预约该时段");
-            }
-
             resourceSlotService.deductQuotaIfAvailable(dto.getSlotId());
 
-            Reservation reservation = new Reservation();
-            reservation.setUserId(userId);
-            reservation.setResourceId(dto.getResourceId());
-            reservation.setSlotId(dto.getSlotId());
-            reservation.setResourceName(resource.getResourceName());
-            reservation.setResourceCode(resource.getResourceCode());
-            reservation.setResourceLocation(resource.getLocation());
-            reservation.setSlotStartDatetime(slot.getStartDatetime());
-            reservation.setSlotEndDatetime(slot.getEndDatetime());
-            reservation.setIsActive(1);
-            reservation.setStatus(ReservationStatusConstants.BOOKED);
-            reservation.setSourceType(slot.getSlotType());
-            reservationAutoCancelService.fillAutoCancelDeadline(reservation);
+            Reservation reservation = reservationPersistenceHelper.buildReservation(
+                    userId, dto.getResourceId(), dto.getSlotId(), resource, slot);
 
-            saveReservationWithRetry(reservation);
+            reservationPersistenceHelper.saveWithRetry(reservation);
             reservationReminderTaskService.createBeforeStartReminder(reservation);
             reservationAutoCancelService.schedule(reservation);
             resourceRedisCacheService.invalidateResourceSlotList(dto.getResourceId());
@@ -488,6 +457,16 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
         }
     }
 
+    private void checkDuplicateReservation(Long userId, Long slotId) {
+        long duplicateCount = this.count(new LambdaQueryWrapper<Reservation>()
+                .eq(Reservation::getUserId, userId)
+                .eq(Reservation::getSlotId, slotId)
+                .eq(Reservation::getStatus, ReservationStatusConstants.BOOKED));
+        if (duplicateCount > 0) {
+            throw new BusinessException("当前用户已预约该时段");
+        }
+    }
+
     private void validateCheckInWindow(Reservation reservation) {
         LocalDateTime startDatetime = reservation.getSlotStartDatetime();
         LocalDateTime deadline = reservationAutoCancelService.resolveAutoCancelDeadline(reservation);
@@ -543,44 +522,6 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
         submitVO.setReservationNo(reservation.getReservationNo());
         submitVO.setMessage("预约成功");
         return submitVO;
-    }
-
-    private void saveReservationWithRetry(Reservation reservation) {
-        for (int attempt = 0; attempt < RESERVATION_NO_RETRY_TIMES; attempt++) {
-            reservation.setReservationNo(reservationNoGenerator.nextReservationNo());
-            try {
-                boolean saved = this.save(reservation);
-                if (!saved) {
-                    throw new BusinessException("创建预约失败，请重试");
-                }
-                return;
-            } catch (DataIntegrityViolationException exception) {
-                if (isReservationNoConflict(exception)) {
-                    continue;
-                }
-                if (isDuplicateActiveReservationConflict(exception)) {
-                    throw new BusinessException("当前用户已预约该时段");
-                }
-                throw exception;
-            }
-        }
-        throw new BusinessException("创建预约失败，请重试");
-    }
-
-    private boolean isReservationNoConflict(DataIntegrityViolationException exception) {
-        String message = getMostSpecificCauseMessage(exception);
-        return message != null && message.contains("uk_reservation_no");
-    }
-
-    private boolean isDuplicateActiveReservationConflict(DataIntegrityViolationException exception) {
-        String message = getMostSpecificCauseMessage(exception);
-        return message != null && message.contains("uk_reservation_user_slot_active");
-    }
-
-    private String getMostSpecificCauseMessage(DataIntegrityViolationException exception) {
-        return exception.getMostSpecificCause() == null
-                ? exception.getMessage()
-                : exception.getMostSpecificCause().getMessage();
     }
 
     private SysUser requireExistingUser(Long userId) {
