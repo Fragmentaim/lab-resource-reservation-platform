@@ -1,55 +1,65 @@
-"""Run a minimal GPU smoke test for the local Qwen reranker model."""
+"""Verify the production local GPU reranker endpoint with a deterministic pair."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import time
-from pathlib import Path
+import os
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+def request_json(url: str, payload: dict | None = None, api_key: str = "") -> dict:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request = Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
+    try:
+        with urlopen(request, timeout=90) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError) as error:
+        raise RuntimeError(f"Local reranker request failed: {error}") from error
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--model-path",
-        default=r"D:\AI-Models\models\Qwen3-Reranker-0.6B",
-        help="Local Hugging Face model directory.",
-    )
+    parser.add_argument("--base-url", default="http://127.0.0.1:8011")
+    parser.add_argument("--api-key", default=os.getenv("LOCAL_RERANKER_API_KEY", "lab-local-reranker"))
     args = parser.parse_args()
 
-    import torch
-    from sentence_transformers import CrossEncoder
+    base_url = args.base_url.rstrip("/")
+    health = request_json(f"{base_url}/healthz")
+    if not health.get("cuda_available"):
+        raise RuntimeError("The local reranker cannot see CUDA.")
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is unavailable. Run this with the verified GPU Python runtime.")
+    result = request_json(
+        f"{base_url}/v1/rerank",
+        {
+            "model": "Qwen3-Reranker-0.6B",
+            "query": "实验室预约提交后如何取消？",
+            "documents": [
+                "用户只能取消自己的、仍为 BOOKED 的预约。取消后会恢复时段配额。",
+                "设备使用前应检查防护装置和电源状态。",
+            ],
+            "top_n": 2,
+            "return_documents": False,
+        },
+        args.api_key,
+    )
+    ranked = result.get("results") or []
+    if len(ranked) != 2 or ranked[0].get("index") != 0:
+        raise RuntimeError(f"Unexpected rerank order: {ranked}")
 
-    model_path = Path(args.model_path)
-    model_file = model_path / "model.safetensors"
-    if not model_file.is_file():
-        raise FileNotFoundError(f"Missing model weights: {model_file}")
-
-    query = "实验室预约提交后如何取消？"
-    candidates = [
-        "用户可在我的预约页面取消仍处于已预约状态的记录，并填写可选的取消原因。",
-        "设备使用前应检查防护装置和电源状态。",
-    ]
-    started_at = time.perf_counter()
-    model = CrossEncoder(str(model_path), device="cuda", trust_remote_code=True)
-    scores = model.predict([(query, candidate) for candidate in candidates], show_progress_bar=False)
-    elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
-
-    if scores[0] <= scores[1]:
-        raise RuntimeError("Reranker did not rank the reservation-cancellation candidate first.")
-
-    result = {
-        "device": torch.cuda.get_device_name(0),
-        "cuda_available": True,
-        "model_path": str(model_path),
-        "load_and_rerank_ms": elapsed_ms,
-        "scores": [round(float(score), 6) for score in scores],
+    print(json.dumps({
+        "endpoint": base_url,
+        "cuda_available": health.get("cuda_available"),
+        "model_loaded": health.get("model_loaded"),
         "relevant_candidate_rank": 1,
-    }
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+        "scores": [item.get("relevance_score") for item in ranked],
+    }, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
