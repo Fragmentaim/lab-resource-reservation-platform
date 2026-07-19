@@ -21,6 +21,10 @@ pnpm-debug.log*
 .env
 .env.*
 
+# Local runtime data and one-off verification fixtures
+uploads/
+.codex-run/
+
 # IDE / OS
 .idea/
 .vscode/

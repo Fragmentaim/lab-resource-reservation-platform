@@ -41,6 +41,18 @@ const routes = [
     meta: { title: '我的通知' }
   },
   {
+    path: '/knowledge/chat',
+    name: 'KnowledgeChat',
+    component: () => import('@/views/KnowledgeChat.vue'),
+    meta: { title: '智能问答' }
+  },
+  {
+    path: '/knowledge/documents',
+    name: 'KnowledgeBase',
+    component: () => import('@/views/KnowledgeBase.vue'),
+    meta: { title: '知识库管理', admin: true }
+  },
+  {
     path: '/profile',
     name: 'Profile',
     component: () => import('@/views/Profile.vue'),

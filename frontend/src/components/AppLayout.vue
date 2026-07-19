@@ -27,7 +27,9 @@ import {
   LockClosedOutline,
   SettingsOutline,
   StatsChartOutline,
-  NotificationsOutline
+  NotificationsOutline,
+  ChatbubblesOutline,
+  FolderOpenOutline
 } from '@vicons/ionicons5'
 import { useUserStore } from '@/store/user'
 import { changePassword } from '@/api/auth'
@@ -42,7 +44,8 @@ const isLoginPage = computed(() => route.path === '/login')
 const userMenus = [
   { key: '/resources', label: '资源浏览', icon: BusinessOutline },
   { key: '/my-reservations', label: '我的预约', icon: BookOutline },
-  { key: '/notifications', label: '我的通知', icon: NotificationsOutline }
+  { key: '/notifications', label: '我的通知', icon: NotificationsOutline },
+  { key: '/knowledge/chat', label: '智能问答', icon: ChatbubblesOutline }
 ]
 
 const adminMenus = [
@@ -50,7 +53,8 @@ const adminMenus = [
   { key: '/admin/users', label: '用户管理', icon: PeopleOutline },
   { key: '/admin/resources', label: '资源与时段', icon: BusinessOutline },
   { key: '/admin/reservations', label: '预约管理', icon: BookOutline },
-  { key: '/admin/dict', label: '字典管理', icon: SettingsOutline }
+  { key: '/admin/dict', label: '字典管理', icon: SettingsOutline },
+  { key: '/knowledge/documents', label: '知识库管理', icon: FolderOpenOutline }
 ]
 
 const menuOptions = computed(() => {

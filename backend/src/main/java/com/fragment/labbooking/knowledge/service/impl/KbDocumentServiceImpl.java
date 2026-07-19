@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.outbox.MessageOutboxService;
+import com.fragment.labbooking.common.outbox.MessageOutboxProperties;
 import com.fragment.labbooking.entity.SysUser;
 import com.fragment.labbooking.knowledge.common.constants.DocumentStatusConstants;
 import com.fragment.labbooking.knowledge.dto.DocumentPageQueryDTO;
@@ -27,6 +28,8 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -38,6 +41,7 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Service
@@ -62,6 +66,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     private final SysUserMapper sysUserMapper;
     private final KbChunkMapper kbChunkMapper;
     private final MessageOutboxService outboxService;
+    private final MessageOutboxProperties outboxProperties;
     private final DocumentProcessProperties documentProcessProperties;
 
     public KbDocumentServiceImpl(AiServiceClient aiServiceClient,
@@ -69,12 +74,14 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                                  SysUserMapper sysUserMapper,
                                  KbChunkMapper kbChunkMapper,
                                  MessageOutboxService outboxService,
+                                 MessageOutboxProperties outboxProperties,
                                  DocumentProcessProperties documentProcessProperties) {
         this.aiServiceClient = aiServiceClient;
         this.minioService = minioService;
         this.sysUserMapper = sysUserMapper;
         this.kbChunkMapper = kbChunkMapper;
         this.outboxService = outboxService;
+        this.outboxProperties = outboxProperties;
         this.documentProcessProperties = documentProcessProperties;
     }
 
@@ -307,6 +314,22 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     }
 
     private void enqueueDocumentProcess(Long documentId, String traceId) {
+        // 本地开发未启动 RocketMQ 时，仍允许通过异步任务完成端到端验收。
+        // 生产环境开启 outbox 与文档处理消费者后，始终走可靠消息链路。
+        if (!outboxProperties.isEnabled() || !documentProcessProperties.isEnabled()) {
+            Runnable processTask = () -> processDocumentMessage(documentId, traceId);
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        CompletableFuture.runAsync(processTask);
+                    }
+                });
+            } else {
+                CompletableFuture.runAsync(processTask);
+            }
+            return;
+        }
         outboxService.enqueue(
                 "KB_DOCUMENT",
                 documentId + ":" + traceId,
