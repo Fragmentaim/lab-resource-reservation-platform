@@ -5,15 +5,19 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.exception.BusinessException;
+import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.outbox.MessageOutboxProperties;
 import com.fragment.labbooking.entity.SysUser;
 import com.fragment.labbooking.knowledge.common.constants.DocumentStatusConstants;
+import com.fragment.labbooking.knowledge.common.constants.DocumentVisibilityConstants;
 import com.fragment.labbooking.knowledge.dto.DocumentPageQueryDTO;
 import com.fragment.labbooking.knowledge.dto.DocumentUpdateDTO;
 import com.fragment.labbooking.knowledge.entity.KbChunk;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
+import com.fragment.labbooking.knowledge.entity.KbDocumentAccess;
 import com.fragment.labbooking.knowledge.mapper.KbChunkMapper;
+import com.fragment.labbooking.knowledge.mapper.KbDocumentAccessMapper;
 import com.fragment.labbooking.knowledge.mapper.KbDocumentMapper;
 import com.fragment.labbooking.knowledge.mq.DocumentProcessProperties;
 import com.fragment.labbooking.knowledge.mq.DocumentProcessMessage;
@@ -40,6 +44,10 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -65,6 +73,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     private final MinioService minioService;
     private final SysUserMapper sysUserMapper;
     private final KbChunkMapper kbChunkMapper;
+    private final KbDocumentAccessMapper kbDocumentAccessMapper;
     private final MessageOutboxService outboxService;
     private final MessageOutboxProperties outboxProperties;
     private final DocumentProcessProperties documentProcessProperties;
@@ -73,6 +82,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                                  MinioService minioService,
                                  SysUserMapper sysUserMapper,
                                  KbChunkMapper kbChunkMapper,
+                                 KbDocumentAccessMapper kbDocumentAccessMapper,
                                  MessageOutboxService outboxService,
                                  MessageOutboxProperties outboxProperties,
                                  DocumentProcessProperties documentProcessProperties) {
@@ -80,6 +90,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         this.minioService = minioService;
         this.sysUserMapper = sysUserMapper;
         this.kbChunkMapper = kbChunkMapper;
+        this.kbDocumentAccessMapper = kbDocumentAccessMapper;
         this.outboxService = outboxService;
         this.outboxProperties = outboxProperties;
         this.documentProcessProperties = documentProcessProperties;
@@ -88,7 +99,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     @Override
     @Transactional(rollbackFor = Exception.class)
     public KbDocumentVO uploadDocument(MultipartFile file, String title, String category,
-                                        String tags, Long uploaderId) {
+                                        String tags, String visibility, List<Long> allowedUserIds, Long uploaderId) {
         validateFile(file);
         String fileName = normalizeFileName(file.getOriginalFilename());
         String fileType = extractFileType(fileName);
@@ -115,9 +126,11 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             doc.setProcessTraceId(traceId);
             doc.setRetryCount(0);
             doc.setUploaderId(uploaderId);
+            doc.setVisibility(normalizeVisibility(visibility));
             doc.setCreatedAt(now);
             doc.setUpdatedAt(now);
             save(doc);
+            replaceAccessRules(doc, allowedUserIds);
 
             enqueueDocumentProcess(doc.getId(), traceId);
             return toVO(doc);
@@ -135,7 +148,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     }
 
     @Override
-    public Page<KbDocumentVO> pageDocuments(DocumentPageQueryDTO queryDTO) {
+    public Page<KbDocumentVO> pageDocuments(DocumentPageQueryDTO queryDTO, LoginUser actor) {
         DocumentPageQueryDTO q = queryDTO == null ? new DocumentPageQueryDTO() : queryDTO;
         long pageNum = q.getPageNum() == null ? 1L : q.getPageNum();
         long pageSize = q.getPageSize() == null ? 10L : q.getPageSize();
@@ -147,7 +160,9 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                 .and(StringUtils.hasText(q.getKeyword()), w -> w
                         .like(KbDocument::getTitle, q.getKeyword())
                         .or()
-                        .like(KbDocument::getFileName, q.getKeyword()))
+                        .like(KbDocument::getFileName, q.getKeyword()));
+        applyAccessFilter(wrapper, actor);
+        wrapper
                 .orderByDesc(KbDocument::getCreatedAt);
 
         Page<KbDocument> docPage = this.page(page, wrapper);
@@ -161,26 +176,29 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     }
 
     @Override
-    public KbDocumentVO getDocumentDetail(Long id) {
+    public KbDocumentVO getDocumentDetail(Long id, LoginUser actor) {
         KbDocument doc = getById(id);
         if (doc == null) {
             throw new BusinessException("文档不存在");
         }
+        assertCanRead(doc, actor);
         return toVO(doc);
     }
 
     @Override
-    public DocumentProcessStatusVO getDocumentStatus(Long id) {
+    public DocumentProcessStatusVO getDocumentStatus(Long id, LoginUser actor) {
         KbDocument doc = getById(id);
         if (doc == null) {
             throw new BusinessException("文档不存在");
         }
+        assertCanRead(doc, actor);
         DocumentProcessStatusVO vo = new DocumentProcessStatusVO();
         BeanUtils.copyProperties(doc, vo);
         return vo;
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void updateDocument(DocumentUpdateDTO dto) {
         KbDocument doc = getById(dto.getId());
         if (doc == null) {
@@ -189,8 +207,21 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         doc.setTitle(dto.getTitle());
         doc.setCategory(dto.getCategory());
         doc.setTags(dto.getTags());
+        if (StringUtils.hasText(dto.getVisibility())) {
+            doc.setVisibility(normalizeVisibility(dto.getVisibility()));
+            replaceAccessRules(doc, dto.getAllowedUserIds());
+        }
         doc.setUpdatedAt(LocalDateTime.now());
         updateById(doc);
+    }
+
+    @Override
+    public List<Long> listAccessibleReadyDocumentIds(LoginUser actor) {
+        LambdaQueryWrapper<KbDocument> wrapper = new LambdaQueryWrapper<KbDocument>()
+                .select(KbDocument::getId)
+                .eq(KbDocument::getStatus, DocumentStatusConstants.READY);
+        applyAccessFilter(wrapper, actor);
+        return list(wrapper).stream().map(KbDocument::getId).toList();
     }
 
     @Override
@@ -202,6 +233,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         }
         aiServiceClient.deleteDocumentVectors(id);
         deleteChunks(id);
+        deleteAccessRules(id);
         removeById(id);
         deleteOriginalFileQuietly(doc.getFileUrl());
     }
@@ -391,6 +423,120 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             }
         }
         return vo;
+    }
+
+    private void applyAccessFilter(LambdaQueryWrapper<KbDocument> wrapper, LoginUser actor) {
+        if (actor == null || actor.getId() == null) {
+            throw new BusinessException(401, "未登录或登录已失效");
+        }
+        if (actor.isAdmin()) {
+            return;
+        }
+        Long userId = actor.getId();
+        List<Long> assignedDocumentIds = assignedDocumentIds(userId);
+        wrapper.and(w -> {
+            w.eq(KbDocument::getVisibility, DocumentVisibilityConstants.PUBLIC)
+                    .or()
+                    .isNull(KbDocument::getVisibility)
+                    .or()
+                    .eq(KbDocument::getUploaderId, userId);
+            if (!assignedDocumentIds.isEmpty()) {
+                w.or().in(KbDocument::getId, assignedDocumentIds);
+            }
+        });
+    }
+
+    private void assertCanRead(KbDocument doc, LoginUser actor) {
+        if (actor == null || actor.getId() == null) {
+            throw new BusinessException(401, "未登录或登录已失效");
+        }
+        if (actor.isAdmin() || actor.getId().equals(doc.getUploaderId()) || isPublic(doc)) {
+            return;
+        }
+        if (DocumentVisibilityConstants.SPECIFIED_USERS.equals(doc.getVisibility())) {
+            Long count = kbDocumentAccessMapper.selectCount(new LambdaQueryWrapper<KbDocumentAccess>()
+                    .eq(KbDocumentAccess::getDocumentId, doc.getId())
+                    .eq(KbDocumentAccess::getUserId, actor.getId()));
+            if (count != null && count > 0) {
+                return;
+            }
+        }
+        throw new BusinessException(403, "无权访问该知识库文档");
+    }
+
+    private boolean isPublic(KbDocument doc) {
+        return !StringUtils.hasText(doc.getVisibility())
+                || DocumentVisibilityConstants.PUBLIC.equals(doc.getVisibility());
+    }
+
+    private List<Long> assignedDocumentIds(Long userId) {
+        return kbDocumentAccessMapper.selectList(new LambdaQueryWrapper<KbDocumentAccess>()
+                        .select(KbDocumentAccess::getDocumentId)
+                        .eq(KbDocumentAccess::getUserId, userId))
+                .stream()
+                .map(KbDocumentAccess::getDocumentId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+    }
+
+    private String normalizeVisibility(String visibility) {
+        String normalized = StringUtils.hasText(visibility)
+                ? visibility.trim().toUpperCase(Locale.ROOT)
+                : DocumentVisibilityConstants.PUBLIC;
+        if (!DocumentVisibilityConstants.isSupported(normalized)) {
+            throw new BusinessException("不支持的文档可见范围");
+        }
+        return normalized;
+    }
+
+    private void replaceAccessRules(KbDocument doc, List<Long> allowedUserIds) {
+        List<Long> normalizedUserIds = normalizeUserIds(allowedUserIds);
+        if (DocumentVisibilityConstants.SPECIFIED_USERS.equals(doc.getVisibility())
+                && normalizedUserIds.isEmpty()) {
+            throw new BusinessException("指定用户可见的文档至少需要一名授权用户");
+        }
+        if (!normalizedUserIds.isEmpty()) {
+            long existingUsers = sysUserMapper.selectBatchIds(normalizedUserIds).stream()
+                    .map(SysUser::getId)
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .count();
+            if (existingUsers != normalizedUserIds.size()) {
+                throw new BusinessException("存在无效的授权用户");
+            }
+        }
+
+        deleteAccessRules(doc.getId());
+        if (!DocumentVisibilityConstants.SPECIFIED_USERS.equals(doc.getVisibility())) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        for (Long userId : normalizedUserIds) {
+            KbDocumentAccess access = new KbDocumentAccess();
+            access.setDocumentId(doc.getId());
+            access.setUserId(userId);
+            access.setCreatedAt(now);
+            kbDocumentAccessMapper.insert(access);
+        }
+    }
+
+    private List<Long> normalizeUserIds(List<Long> allowedUserIds) {
+        if (allowedUserIds == null || allowedUserIds.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> uniqueUserIds = new LinkedHashSet<>();
+        for (Long userId : allowedUserIds) {
+            if (userId != null && userId > 0) {
+                uniqueUserIds.add(userId);
+            }
+        }
+        return new ArrayList<>(uniqueUserIds);
+    }
+
+    private void deleteAccessRules(Long documentId) {
+        kbDocumentAccessMapper.delete(new LambdaQueryWrapper<KbDocumentAccess>()
+                .eq(KbDocumentAccess::getDocumentId, documentId));
     }
 
     private void deleteChunks(Long documentId) {

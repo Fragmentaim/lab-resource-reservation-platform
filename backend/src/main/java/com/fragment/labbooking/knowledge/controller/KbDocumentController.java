@@ -23,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/knowledge/documents")
 public class KbDocumentController {
@@ -31,28 +33,32 @@ public class KbDocumentController {
     private KbDocumentService kbDocumentService;
 
     @PostMapping("/upload")
+    @AdminOnly
     public Result<KbDocumentVO> upload(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "title", required = false) String title,
             @RequestParam(value = "category", required = false) String category,
-            @RequestParam(value = "tags", required = false) String tags) {
+            @RequestParam(value = "tags", required = false) String tags,
+            @RequestParam(value = "visibility", required = false) String visibility,
+            @RequestParam(value = "allowedUserIds", required = false) List<Long> allowedUserIds) {
         Long uploaderId = UserContext.requireUser().getId();
-        return Result.success(kbDocumentService.uploadDocument(file, title, category, tags, uploaderId));
+        return Result.success(kbDocumentService.uploadDocument(
+                file, title, category, tags, visibility, allowedUserIds, uploaderId));
     }
 
     @GetMapping
     public Result<Page<KbDocumentVO>> list(DocumentPageQueryDTO queryDTO) {
-        return Result.success(kbDocumentService.pageDocuments(queryDTO));
+        return Result.success(kbDocumentService.pageDocuments(queryDTO, UserContext.requireUser()));
     }
 
     @GetMapping("/{id}")
     public Result<KbDocumentVO> detail(@PathVariable Long id) {
-        return Result.success(kbDocumentService.getDocumentDetail(id));
+        return Result.success(kbDocumentService.getDocumentDetail(id, UserContext.requireUser()));
     }
 
     @GetMapping("/{id}/status")
     public Result<DocumentProcessStatusVO> status(@PathVariable Long id) {
-        return Result.success(kbDocumentService.getDocumentStatus(id));
+        return Result.success(kbDocumentService.getDocumentStatus(id, UserContext.requireUser()));
     }
 
     @PutMapping("/{id}")

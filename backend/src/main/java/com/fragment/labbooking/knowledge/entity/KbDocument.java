@@ -63,6 +63,9 @@ public class KbDocument {
     @TableField(value = "uploader_id")
     private Long uploaderId;
 
+    @TableField(value = "visibility")
+    private String visibility;
+
     @TableField(value = "created_at")
     private LocalDateTime createdAt;
 

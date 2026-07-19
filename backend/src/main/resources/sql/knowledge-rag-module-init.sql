@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS kb_document (
     process_started_at  DATETIME     NULL,
     process_finished_at DATETIME     NULL,
     uploader_id         BIGINT       NOT NULL,
+    visibility          VARCHAR(32)  NOT NULL DEFAULT 'PUBLIC' COMMENT 'PUBLIC/UPLOADER_ONLY/ADMIN_ONLY/SPECIFIED_USERS',
     created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     KEY idx_status (status),
@@ -25,7 +26,17 @@ CREATE TABLE IF NOT EXISTS kb_document (
     KEY idx_process_trace_id (process_trace_id),
     KEY idx_category (category),
     KEY idx_uploader_id (uploader_id),
+    KEY idx_visibility_status (visibility, status),
     KEY idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS kb_document_access (
+    id          BIGINT PRIMARY KEY AUTO_INCREMENT,
+    document_id BIGINT       NOT NULL,
+    user_id     BIGINT       NOT NULL,
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_document_user (document_id, user_id),
+    KEY idx_user_document (user_id, document_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS kb_chunk (

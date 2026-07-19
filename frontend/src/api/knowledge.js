@@ -4,12 +4,14 @@ export function fetchKnowledgeDocuments(params) {
   return api.get('/knowledge/documents', { params })
 }
 
-export function uploadKnowledgeDocument({ file, title, category, tags }) {
+export function uploadKnowledgeDocument({ file, title, category, tags, visibility, allowedUserIds = [] }) {
   const formData = new FormData()
   formData.append('file', file)
   if (title) formData.append('title', title)
   if (category) formData.append('category', category)
   if (tags) formData.append('tags', tags)
+  if (visibility) formData.append('visibility', visibility)
+  allowedUserIds.forEach(userId => formData.append('allowedUserIds', userId))
   return api.post('/knowledge/documents/upload', formData)
 }
 

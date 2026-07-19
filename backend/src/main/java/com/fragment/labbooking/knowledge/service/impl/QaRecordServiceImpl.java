@@ -3,7 +3,6 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.fragment.labbooking.knowledge.common.constants.DocumentStatusConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.dto.QaAskDTO;
 import com.fragment.labbooking.knowledge.dto.QaFeedbackDTO;
@@ -13,8 +12,8 @@ import com.fragment.labbooking.knowledge.entity.QaContextTrace;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.knowledge.entity.QaSession;
 import com.fragment.labbooking.knowledge.entity.QaSource;
-import com.fragment.labbooking.knowledge.mapper.KbDocumentMapper;
 import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
+import com.fragment.labbooking.knowledge.mapper.KbDocumentMapper;
 import com.fragment.labbooking.knowledge.mapper.QaFeedbackMapper;
 import com.fragment.labbooking.knowledge.mapper.QaRecordMapper;
 import com.fragment.labbooking.knowledge.mapper.QaSessionMapper;
@@ -22,6 +21,7 @@ import com.fragment.labbooking.knowledge.mapper.QaSourceMapper;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AssistantToolRouter;
 import com.fragment.labbooking.knowledge.service.NativeToolCallingService;
+import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
 import com.fragment.labbooking.knowledge.service.ToolRouteResult;
 import com.fragment.labbooking.common.auth.LoginUser;
@@ -56,6 +56,9 @@ import java.util.stream.Collectors;
 @Slf4j
 public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         implements QaRecordService {
+
+    @Autowired
+    private KbDocumentService kbDocumentService;
 
     @Autowired
     private KbDocumentMapper kbDocumentMapper;
@@ -143,13 +146,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion());
                 return answer;
             }
-            List<Long> readyDocumentIds = kbDocumentMapper.selectList(
-                            new LambdaQueryWrapper<KbDocument>()
-                                    .select(KbDocument::getId)
-                                    .eq(KbDocument::getStatus, DocumentStatusConstants.READY)
-                    ).stream()
-                    .map(KbDocument::getId)
-                    .collect(Collectors.toList());
+            List<Long> readyDocumentIds = kbDocumentService.listAccessibleReadyDocumentIds(actor);
 
             // Call AI service
             QaAnswerVO answer = aiServiceClient.askQuestion(
@@ -270,13 +267,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 return;
             }
 
-            List<Long> readyDocumentIds = kbDocumentMapper.selectList(
-                            new LambdaQueryWrapper<KbDocument>()
-                                    .select(KbDocument::getId)
-                                    .eq(KbDocument::getStatus, DocumentStatusConstants.READY)
-                    ).stream()
-                    .map(KbDocument::getId)
-                    .collect(Collectors.toList());
+            List<Long> readyDocumentIds = kbDocumentService.listAccessibleReadyDocumentIds(actor);
 
             aiServiceClient.askQuestionStream(
                     dto.getQuestion(),

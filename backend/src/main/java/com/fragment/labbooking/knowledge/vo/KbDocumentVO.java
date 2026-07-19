@@ -21,6 +21,7 @@ public class KbDocumentVO {
     private String errorMessage;
     private String processTraceId;
     private Integer retryCount;
+    private String visibility;
     private LocalDateTime processStartedAt;
     private LocalDateTime processFinishedAt;
     private String uploaderName;

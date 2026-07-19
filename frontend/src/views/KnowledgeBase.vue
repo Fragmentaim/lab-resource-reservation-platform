@@ -26,7 +26,7 @@ const status = ref(null)
 const showUpload = ref(false)
 const submitting = ref(false)
 const uploadFiles = ref([])
-const uploadForm = ref({ title: '', category: '', tags: '' })
+const uploadForm = ref({ title: '', category: '', tags: '', visibility: 'PUBLIC', allowedUserIdsText: '' })
 let refreshTimer
 
 const statusOptions = [
@@ -35,6 +35,13 @@ const statusOptions = [
   { label: '处理中', value: 'PROCESSING' },
   { label: '可问答', value: 'READY' },
   { label: '处理失败', value: 'FAILED' }
+]
+
+const visibilityOptions = [
+  { label: '公开：所有登录用户可检索', value: 'PUBLIC' },
+  { label: '仅管理员：仅管理员可检索', value: 'ADMIN_ONLY' },
+  { label: '仅上传者：仅上传者和管理员可检索', value: 'UPLOADER_ONLY' },
+  { label: '指定用户：仅授权用户和管理员可检索', value: 'SPECIFIED_USERS' }
 ]
 
 const hasProcessingDocument = computed(() =>
@@ -47,6 +54,12 @@ function statusLabel(value) {
 
 function statusType(value) {
   return ({ PENDING: 'warning', PROCESSING: 'info', READY: 'success', FAILED: 'error' })[value] || 'default'
+}
+
+function visibilityLabel(value) {
+  return ({
+    PUBLIC: '公开', ADMIN_ONLY: '管理员', UPLOADER_ONLY: '上传者', SPECIFIED_USERS: '指定用户'
+  })[value] || '公开'
 }
 
 function formatDate(value) {
@@ -83,7 +96,7 @@ function handleSearch() {
 
 function openUpload() {
   uploadFiles.value = []
-  uploadForm.value = { title: '', category: '', tags: '' }
+  uploadForm.value = { title: '', category: '', tags: '', visibility: 'PUBLIC', allowedUserIdsText: '' }
   showUpload.value = true
 }
 
@@ -95,7 +108,14 @@ async function submitUpload() {
   }
   try {
     submitting.value = true
-    await uploadKnowledgeDocument({ file, ...uploadForm.value })
+    const allowedUserIds = uploadForm.value.allowedUserIdsText.split(',')
+      .map(value => Number(value.trim()))
+      .filter(value => Number.isInteger(value) && value > 0)
+    if (uploadForm.value.visibility === 'SPECIFIED_USERS' && !allowedUserIds.length) {
+      message.warning('指定用户范围至少填写一名用户 ID')
+      return
+    }
+    await uploadKnowledgeDocument({ file, ...uploadForm.value, allowedUserIds })
     message.success('文档已入队，处理完成后即可参与问答')
     showUpload.value = false
     await loadDocuments()
@@ -135,6 +155,7 @@ const columns = computed(() => [
     ])
   },
   { title: '状态', key: 'status', width: 120, render: row => h(NTag, { type: statusType(row.status), round: true, size: 'small' }, { default: () => statusLabel(row.status) }) },
+  { title: '可见范围', key: 'visibility', width: 110, render: row => h(NTag, { bordered: false, size: 'small' }, { default: () => visibilityLabel(row.visibility) }) },
   { title: '分块', key: 'chunkCount', width: 90, render: row => row.chunkCount ?? 0 },
   { title: '分类 / 标签', key: 'category', minWidth: 160, render: row => h('div', { class: 'doc-meta' }, [row.category || '未分类', row.tags ? ` · ${row.tags}` : '']) },
   { title: '上传时间', key: 'createdAt', width: 180, render: row => formatDate(row.createdAt) },
@@ -207,8 +228,14 @@ onBeforeUnmount(() => window.clearInterval(refreshTimer))
         <n-form-item label="标题（可选）"><n-input v-model:value="uploadForm.title" placeholder="默认使用文件名" /></n-form-item>
         <n-form-item label="分类（可选）"><n-input v-model:value="uploadForm.category" placeholder="例如：预约规则、设备说明" /></n-form-item>
         <n-form-item label="标签（可选）"><n-input v-model:value="uploadForm.tags" placeholder="用逗号分隔，例如：靶车,安全规范" /></n-form-item>
+        <n-form-item label="可见范围">
+          <n-select v-model:value="uploadForm.visibility" :options="visibilityOptions" />
+        </n-form-item>
+        <n-form-item v-if="uploadForm.visibility === 'SPECIFIED_USERS'" label="授权用户 ID">
+          <n-input v-model:value="uploadForm.allowedUserIdsText" placeholder="多个用户 ID 用英文逗号分隔，例如：12,18" />
+        </n-form-item>
       </n-form>
-      <p class="upload-note"><n-icon :component="RefreshOutline" /> 上传后会在后台解析、切片并写入检索库；页面会自动刷新处理状态。</p>
+      <p class="upload-note"><n-icon :component="RefreshOutline" /> 访问范围会在后端筛选文档 ID 后再传给向量检索，模型无法绕过该限制。</p>
       <template #footer><n-space justify="end"><n-button @click="showUpload = false">取消</n-button><n-button type="primary" :loading="submitting" @click="submitUpload">开始处理</n-button></n-space></template>
     </n-modal>
   </main>
