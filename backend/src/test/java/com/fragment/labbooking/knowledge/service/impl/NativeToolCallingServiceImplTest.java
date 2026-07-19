@@ -117,7 +117,6 @@ class NativeToolCallingServiceImplTest {
                 .containsExactly("knowledge_search", "knowledge_open_chunks");
         verify(aiServiceClient).retrieveKnowledge("取消预约的规则", List.of(12L));
         verify(aiServiceClient).openKnowledgeChunks(List.of("chunk-12-3"), List.of(12L));
-        verify(aiServiceClient, never()).askQuestion(eq("取消预约的规则"), eq(""), eq(List.of(12L)));
         verify(auditService).recordSuccess(any(), eq("knowledge_search"), any(), any(),
                 eq("ACL_FILTERED_KNOWLEDGE"), anyLong(), any());
         verify(nativeClient, atLeastOnce()).nextRound(any(), any(), any(), any());

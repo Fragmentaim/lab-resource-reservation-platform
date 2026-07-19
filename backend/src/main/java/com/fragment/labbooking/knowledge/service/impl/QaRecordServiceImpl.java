@@ -28,7 +28,6 @@ import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.AssistantToolRouter;
 import com.fragment.labbooking.knowledge.service.NativeToolCallingService;
-import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
 import com.fragment.labbooking.knowledge.service.SessionEventService;
 import com.fragment.labbooking.knowledge.service.ToolRouteResult;
@@ -55,17 +54,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 @Service
 @Slf4j
 public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         implements QaRecordService {
-
-    @Autowired
-    private KbDocumentService kbDocumentService;
 
     @Autowired
     private AgentRunService agentRunService;
@@ -103,10 +97,11 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     public QaAnswerVO ask(QaAskDTO dto, LoginUser actor) {
         Long userId = actor.getId();
         QaSession session = resolveSession(dto.getSessionId(), userId, dto.getQuestion());
+        PreparedSessionContext preparedContext = prepareSessionContext(session, dto.getQuestion());
+        session = preparedContext.session();
         String sessionId = session.getSessionId();
-        SessionContextPlan sessionPlan = planSessionContext(session, dto.getQuestion());
+        SessionContextPlan sessionPlan = preparedContext.plan();
         List<AiServiceClient.ChatMessage> chatHistory = sessionPlan.historyMessages();
-        AiServiceClient.ContextOptions contextOptions = contextOptions(sessionPlan);
         int turnNo = nextTurnNo(session);
 
         // Save question record
@@ -147,40 +142,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
                 return answer;
             }
-            List<Long> readyDocumentIds = kbDocumentService.listAccessibleReadyDocumentIds(actor);
-
-            // Call AI service
-            QaAnswerVO answer = aiServiceClient.askQuestion(
-                    dto.getQuestion(),
-                    sessionId,
-                    readyDocumentIds,
-                    session.getSummary(),
-                    chatHistory,
-                    contextOptions,
-                    record.getTraceId()
-            );
-            enrichContextStats(answer, sessionPlan);
-
-            // Update record with answer
-            record.setAnswer(answer.getAnswer());
-            record.setLatencyMs(answer.getLatencyMs());
-            record.setStatus("ANSWERED");
-            record.setModelName(answer.getModelName());
-            record.setQuestionType("KB");
-            updateById(record);
-
-            saveSources(record.getId(), answer.getSources());
-            saveContextTrace(record, dto.getQuestion(), answer);
-            agentRunService.finishRag(record, answer);
-            sessionEventService.appendAssistantOutput(record, answer, turnNo);
-            updateSessionAfterAnswer(sessionId, userId, dto.getQuestion(), record.getTraceId());
-            triggerSummaryRefresh(sessionId, userId);
-
-            answer.setRecordId(record.getId());
-            answer.setSessionId(sessionId);
-            answer.setTraceId(record.getTraceId());
-            answer.setQuestionType("KB");
-            return answer;
+            throw new BusinessException("原生 Agent 当前不可用，请稍后重试");
         } catch (Exception e) {
             record.setStatus("FAILED");
             record.setAnswer("抱歉，问答服务暂时不可用: " + e.getMessage());
@@ -203,7 +165,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         agentRunService.finishTool(record, answer);
         sessionEventService.appendAssistantOutput(record, answer, turnNo);
         updateSessionAfterAnswer(sessionId, userId, question, record.getTraceId());
-        triggerSummaryRefresh(sessionId, userId);
         answer.setRecordId(record.getId());
         answer.setSessionId(sessionId);
         answer.setTraceId(record.getTraceId());
@@ -219,11 +180,12 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     public void askStream(QaAskDTO dto, LoginUser actor, ResponseBodyEmitter emitter) {
         Long userId = actor.getId();
         QaSession session = resolveSession(dto.getSessionId(), userId, dto.getQuestion());
+        PreparedSessionContext preparedContext = prepareSessionContext(session, dto.getQuestion());
+        session = preparedContext.session();
         String sessionId = session.getSessionId();
         final String streamSessionId = sessionId;
-        SessionContextPlan sessionPlan = planSessionContext(session, dto.getQuestion());
+        SessionContextPlan sessionPlan = preparedContext.plan();
         List<AiServiceClient.ChatMessage> chatHistory = sessionPlan.historyMessages();
-        AiServiceClient.ContextOptions contextOptions = contextOptions(sessionPlan);
         int turnNo = nextTurnNo(session);
 
         QaRecord record = new QaRecord();
@@ -238,14 +200,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         agentRunService.start(record);
         sessionEventService.appendUserInput(record, turnNo);
         agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
-
-        StringBuilder answerBuilder = new StringBuilder();
-        List<QaSourceVO> streamedSources = new ArrayList<>();
-        Integer[] latencyMs = new Integer[1];
-        String[] modelName = new String[1];
-        AtomicReference<String> rewrittenQuestion = new AtomicReference<>();
-        AtomicReference<Boolean> rewriteApplied = new AtomicReference<>(false);
-        AtomicReference<Map<String, Object>> contextStats = new AtomicReference<>(Collections.emptyMap());
 
         try {
             sendEvent(emitter, event("record",
@@ -286,92 +240,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 return;
             }
 
-            List<Long> readyDocumentIds = kbDocumentService.listAccessibleReadyDocumentIds(actor);
-
-            aiServiceClient.askQuestionStream(
-                    dto.getQuestion(),
-                    streamSessionId,
-                    readyDocumentIds,
-                    session.getSummary(),
-                    chatHistory,
-                    contextOptions,
-                    record.getTraceId(),
-                    aiEvent -> {
-                switch (aiEvent.type()) {
-                    case "meta" -> {
-                        if (aiEvent.sources() != null) {
-                            streamedSources.clear();
-                            streamedSources.addAll(aiEvent.sources());
-                        }
-                        if (aiEvent.model() != null) {
-                            modelName[0] = aiEvent.model();
-                        }
-                        if (aiEvent.rewrittenQuestion() != null) {
-                            rewrittenQuestion.set(aiEvent.rewrittenQuestion());
-                        }
-                        if (aiEvent.rewriteApplied() != null) {
-                            rewriteApplied.set(aiEvent.rewriteApplied());
-                        }
-                        if (aiEvent.contextStats() != null) {
-                            contextStats.set(aiEvent.contextStats());
-                        }
-                        sendEvent(emitter, event("meta",
-                                "recordId", record.getId(),
-                                "sessionId", streamSessionId,
-                                "traceId", record.getTraceId(),
-                                "rewrittenQuestion", rewrittenQuestion.get(),
-                                "rewriteApplied", rewriteApplied.get(),
-                                "contextStats", contextStats.get(),
-                                "sources", streamedSources,
-                                "modelName", modelName[0]));
-                    }
-                    case "delta" -> {
-                        if (aiEvent.content() != null) {
-                            answerBuilder.append(aiEvent.content());
-                            sendEvent(emitter, event("delta", "content", aiEvent.content()));
-                        }
-                    }
-                    case "done" -> {
-                        latencyMs[0] = aiEvent.latencyMs();
-                        if (aiEvent.model() != null) {
-                            modelName[0] = aiEvent.model();
-                        }
-                    }
-                    case "error" -> throw new BusinessException("AI 流式生成失败: " + aiEvent.message());
-                    default -> log.debug("Ignored AI stream event type={}", aiEvent.type());
-                }
-            });
-
-            record.setAnswer(answerBuilder.toString());
-            record.setLatencyMs(latencyMs[0]);
-            record.setStatus("ANSWERED");
-            record.setModelName(modelName[0]);
-            record.setQuestionType("KB");
-            updateById(record);
-
-            saveSources(record.getId(), streamedSources);
-            saveContextTrace(record, dto.getQuestion(), rewrittenQuestion.get(), rewriteApplied.get(), contextStats.get());
-            QaAnswerVO streamedAnswer = new QaAnswerVO();
-            streamedAnswer.setLatencyMs(latencyMs[0]);
-            streamedAnswer.setModelName(modelName[0]);
-            streamedAnswer.setSources(streamedSources);
-            streamedAnswer.setContextStats(enrichContextStats(contextStats.get(), sessionPlan));
-            agentRunService.finishRag(record, streamedAnswer);
-            sessionEventService.appendAssistantOutput(record, streamedAnswer, turnNo);
-            updateSessionAfterAnswer(streamSessionId, userId, dto.getQuestion(), record.getTraceId());
-            triggerSummaryRefresh(streamSessionId, userId);
-
-            sendEvent(emitter, event("done",
-                    "recordId", record.getId(),
-                    "sessionId", streamSessionId,
-                    "traceId", record.getTraceId(),
-                    "rewrittenQuestion", rewrittenQuestion.get(),
-                    "rewriteApplied", rewriteApplied.get(),
-                    "contextStats", contextStats.get(),
-                    "sources", streamedSources,
-                    "latencyMs", latencyMs[0],
-                    "modelName", modelName[0]));
-            emitter.complete();
+            throw new BusinessException("原生 Agent 当前不可用，请稍后重试");
         } catch (Exception e) {
             record.setStatus("FAILED");
             record.setAnswer("抱歉，问答服务暂时不可用: " + e.getMessage());
@@ -514,16 +383,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         );
     }
 
-    private AiServiceClient.ContextOptions contextOptions(SessionContextPlan plan) {
-        ModelContextProfileProperties.Profile profile = modelContextProfiles.active();
-        return new AiServiceClient.ContextOptions(
-                profile.getContextWindowTokens(),
-                profile.getMaxOutputTokens(),
-                profile.getSafetyMarginTokens(),
-                profile.effectiveSummaryMaxTokens()
-        );
-    }
-
     private SessionContextPlanner.ContextCapacity contextCapacity() {
         ModelContextProfileProperties.Profile profile = modelContextProfiles.active();
         return new SessionContextPlanner.ContextCapacity(
@@ -556,8 +415,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         update.setLastMessageAt(now);
         update.setLastTraceId(traceId);
         update.setUpdatedAt(now);
-        // Do not write the summary fields here: an asynchronous compaction may
-        // finish at the same time as a new answer.
+        // Summary fields are versioned separately by synchronous compaction.
         qaSessionMapper.update(update, new LambdaUpdateWrapper<QaSession>()
                 .eq(QaSession::getSessionId, sessionId)
                 .eq(QaSession::getUserId, userId));
@@ -599,74 +457,54 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         }
     }
 
-    private void triggerSummaryRefresh(String sessionId, Long userId) {
-        QaSession session = qaSessionMapper.selectById(sessionId);
-        if (session == null) {
-            return;
+    /**
+     * A request never enters the Agent with old turns silently discarded. If
+     * the active model window is full, this method waits for one LLM memory
+     * update, atomically persists it, and only then returns the final context.
+     */
+    private PreparedSessionContext prepareSessionContext(QaSession initialSession, String question) {
+        QaSession session = initialSession;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            SessionContextPlan plan = planSessionContext(session, question);
+            if (!plan.compactionRecommended()) {
+                return new PreparedSessionContext(session, plan);
+            }
+            compactSessionSummary(session, plan);
+            session = qaSessionMapper.selectById(session.getSessionId());
+            if (session == null || Boolean.TRUE.equals(session.getDeleted())
+                    || !initialSession.getUserId().equals(session.getUserId())) {
+                throw new BusinessException("会话不存在或无权访问");
+            }
         }
-        SessionContextPlan plan = planSessionContext(session, "");
-        if (!plan.compactionRecommended()) {
-            return;
-        }
-
-        CompletableFuture.runAsync(() -> refreshSummary(sessionId, userId));
+        throw new BusinessException("会话上下文正在更新，请稍后重试");
     }
 
-    private void refreshSummary(String sessionId, Long userId) {
-        try {
-            QaSession session = qaSessionMapper.selectById(sessionId);
-            if (session == null) {
-                return;
-            }
-            List<QaRecord> records = loadAnsweredSessionRecords(sessionId, userId);
-            int coveredTurnCount = Math.min(records.size(), Math.max(0,
-                    session.getSummaryTurnCount() == null ? 0 : session.getSummaryTurnCount()));
-            List<SessionTurn> uncompressedTurns = records.stream().skip(coveredTurnCount)
-                    .map(record -> new SessionTurn(record.getId(), record.getTraceId(), record.getQuestion(), record.getAnswer()))
-                    .toList();
-            SessionContextPlan plan = sessionContextPlanner.plan(session.getSummary(), "", uncompressedTurns,
-                    contextCapacity());
-            if (!plan.compactionRecommended() || plan.deferredTurns().isEmpty()) {
-                return;
-            }
-            List<AiServiceClient.ChatMessage> newTurns = plan.deferredTurns().stream()
-                    .flatMap(turn -> turn.messages().stream())
-                    .toList();
-
-            AiServiceClient.SummaryResult result = aiServiceClient.summarizeSession(
-                    session.getSummary(),
-                    newTurns,
-                    modelContextProfiles.active().effectiveSummaryMaxTokens()
-            );
-            QaSession update = new QaSession();
-            update.setSummary(result.summary());
-            update.setSummaryTurnCount(coveredTurnCount + plan.deferredTurns().size());
-            update.setUpdatedAt(LocalDateTime.now());
-            // The compare-and-set guard prevents a slow older summary from
-            // overwriting a newer compaction result.
-            int updated = qaSessionMapper.update(update, new LambdaUpdateWrapper<QaSession>()
-                    .eq(QaSession::getSessionId, sessionId)
-                    .eq(QaSession::getUserId, userId)
-                    .eq(QaSession::getSummaryTurnCount, coveredTurnCount));
-            if (updated == 0) {
-                log.info("Skipped stale summary refresh for session {}", sessionId);
-            }
-        } catch (Exception e) {
-            log.warn("Session summary refresh failed for session {}: {}", sessionId, e.getMessage());
+    private void compactSessionSummary(QaSession session, SessionContextPlan plan) {
+        if (plan.deferredTurns().isEmpty()) {
+            throw new BusinessException("会话上下文无法安全压缩");
+        }
+        int coveredTurnCount = Math.max(0, session.getSummaryTurnCount() == null ? 0 : session.getSummaryTurnCount());
+        List<AiServiceClient.ChatMessage> deferredMessages = plan.deferredTurns().stream()
+                .flatMap(turn -> turn.messages().stream())
+                .toList();
+        AiServiceClient.SummaryResult result = aiServiceClient.summarizeSession(
+                session.getSummary(), deferredMessages,
+                modelContextProfiles.active().effectiveSummaryMaxTokens()
+        );
+        QaSession update = new QaSession();
+        update.setSummary(result.summary());
+        update.setSummaryTurnCount(coveredTurnCount + plan.deferredTurns().size());
+        update.setUpdatedAt(LocalDateTime.now());
+        int updated = qaSessionMapper.update(update, new LambdaUpdateWrapper<QaSession>()
+                .eq(QaSession::getSessionId, session.getSessionId())
+                .eq(QaSession::getUserId, session.getUserId())
+                .eq(QaSession::getSummaryTurnCount, coveredTurnCount));
+        if (updated == 0) {
+            log.info("Session summary changed concurrently; recalculating context for {}", session.getSessionId());
         }
     }
 
-    private void enrichContextStats(QaAnswerVO answer, SessionContextPlan plan) {
-        answer.setContextStats(enrichContextStats(answer.getContextStats(), plan));
-    }
-
-    private Map<String, Object> enrichContextStats(Map<String, Object> stats, SessionContextPlan plan) {
-        Map<String, Object> enriched = new LinkedHashMap<>();
-        if (stats != null) {
-            enriched.putAll(stats);
-        }
-        enriched.put("session_context_plan", plan.safeDetail());
-        return enriched;
+    private record PreparedSessionContext(QaSession session, SessionContextPlan plan) {
     }
 
     private void attachSources(List<QaRecordVO> records) {

@@ -2,11 +2,8 @@ package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
-import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
-import com.fragment.labbooking.knowledge.vo.QaSourceVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
@@ -19,12 +16,9 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -225,45 +219,6 @@ public class AiServiceClientImpl implements AiServiceClient {
     }
 
     @Override
-    public QaAnswerVO askQuestion(String question, String sessionId, List<Long> documentIds) {
-        return askQuestion(question, sessionId, documentIds, null, Collections.emptyList(), null, null);
-    }
-
-    @Override
-    public QaAnswerVO askQuestion(String question, String sessionId, List<Long> documentIds,
-                                  String sessionSummary, List<ChatMessage> chatHistory,
-                                  ContextOptions contextOptions, String traceId) {
-        try {
-            String requestBody = objectMapper.writeValueAsString(
-                    qaRequestBody(question, sessionId, documentIds, sessionSummary, chatHistory, contextOptions, traceId)
-            );
-
-            String response = restClient.post()
-                    .uri("/api/v1/ai/qa/ask")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(requestBody)
-                    .retrieve()
-                    .body(String.class);
-
-            JsonNode data = objectMapper.readTree(response);
-
-            QaAnswerVO vo = new QaAnswerVO();
-            vo.setAnswer(data.path("answer").asText());
-            vo.setLatencyMs(data.path("latency_ms").asInt());
-            vo.setModelName(data.path("model").asText());
-            vo.setRewrittenQuestion(textOrNull(data, "rewritten_question"));
-            vo.setRewriteApplied(data.path("rewrite_applied").asBoolean(false));
-            vo.setContextStats(parseObject(data.path("context_stats")));
-
-            vo.setSources(parseQaSources(data.path("sources")));
-            return vo;
-        } catch (Exception e) {
-            log.error("Failed to ask question via AI service: {}", e.getMessage());
-            throw new BusinessException("AI 服务请求失败: " + e.getMessage());
-        }
-    }
-
-    @Override
     public KnowledgeSearchResult retrieveKnowledge(String question, List<Long> documentIds) {
         try {
             Map<String, Object> request = new LinkedHashMap<>();
@@ -300,49 +255,6 @@ public class AiServiceClientImpl implements AiServiceClient {
         } catch (Exception e) {
             log.error("Failed to open knowledge chunks via AI service: {}", e.getMessage());
             throw new BusinessException("知识库正文读取失败: " + e.getMessage());
-        }
-    }
-
-    @Override
-    public void askQuestionStream(String question, String sessionId, List<Long> documentIds,
-                                  StreamEventConsumer eventConsumer) {
-        askQuestionStream(question, sessionId, documentIds, null, Collections.emptyList(), null, null, eventConsumer);
-    }
-
-    @Override
-    public void askQuestionStream(String question, String sessionId, List<Long> documentIds,
-                                  String sessionSummary, List<ChatMessage> chatHistory,
-                                  ContextOptions contextOptions, String traceId,
-                                  StreamEventConsumer eventConsumer) {
-        try {
-            String requestBody = objectMapper.writeValueAsString(
-                    qaRequestBody(question, sessionId, documentIds, sessionSummary, chatHistory, contextOptions, traceId)
-            );
-
-            restClient.post()
-                    .uri("/api/v1/ai/qa/ask/stream")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.valueOf("application/x-ndjson"))
-                    .body(requestBody)
-                    .exchange((request, response) -> {
-                        if (response.getStatusCode().isError()) {
-                            throw new BusinessException("AI 流式服务请求失败: HTTP " + response.getStatusCode());
-                        }
-
-                        try (BufferedReader reader = new BufferedReader(
-                                new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
-                            String line;
-                            while ((line = reader.readLine()) != null) {
-                                if (!line.isBlank()) {
-                                    eventConsumer.accept(parseStreamEvent(line));
-                                }
-                            }
-                        }
-                        return null;
-                    });
-        } catch (Exception e) {
-            log.error("Failed to stream question via AI service: {}", e.getMessage());
-            throw new BusinessException("AI 流式服务请求失败: " + e.getMessage());
         }
     }
 
@@ -402,66 +314,6 @@ public class AiServiceClientImpl implements AiServiceClient {
         }
     }
 
-    private StreamEvent parseStreamEvent(String line) throws IOException {
-        JsonNode data = objectMapper.readTree(line);
-        String type = data.path("type").asText();
-        List<QaSourceVO> sources = null;
-
-        JsonNode sourcesNode = data.path("sources");
-        if (sourcesNode.isArray()) {
-            sources = parseQaSources(sourcesNode);
-        }
-
-        Integer latencyMs = data.hasNonNull("latency_ms") ? data.path("latency_ms").asInt() : null;
-        String model = data.hasNonNull("model") ? data.path("model").asText() : null;
-        String content = data.hasNonNull("content") ? data.path("content").asText() : null;
-        String message = data.hasNonNull("message") ? data.path("message").asText() : null;
-        String rewrittenQuestion = data.hasNonNull("rewritten_question") ? data.path("rewritten_question").asText() : null;
-        Boolean rewriteApplied = data.hasNonNull("rewrite_applied") ? data.path("rewrite_applied").asBoolean() : null;
-        Map<String, Object> contextStats = parseObject(data.path("context_stats"));
-        return new StreamEvent(type, content, sources, latencyMs, model, message,
-                rewrittenQuestion, rewriteApplied, contextStats);
-    }
-
-    private Map<String, Object> qaRequestBody(String question, String sessionId, List<Long> documentIds,
-                                              String sessionSummary, List<ChatMessage> chatHistory,
-                                              ContextOptions contextOptions, String traceId) {
-        Map<String, Object> request = new LinkedHashMap<>();
-        request.put("question", question);
-        request.put("session_id", sessionId != null ? sessionId : "");
-        request.put("document_ids", documentIds == null ? Collections.emptyList() : documentIds);
-        if (sessionSummary != null) {
-            request.put("session_summary", sessionSummary);
-        }
-        if (chatHistory != null && !chatHistory.isEmpty()) {
-            request.put("chat_history", chatHistory);
-        }
-        if (traceId != null) {
-            request.put("trace_id", traceId);
-        }
-        if (contextOptions != null) {
-            Map<String, Object> options = new LinkedHashMap<>();
-            options.put("context_window_tokens", contextOptions.contextWindowTokens());
-            options.put("max_output_tokens", contextOptions.maxOutputTokens());
-            options.put("safety_margin_tokens", contextOptions.safetyMarginTokens());
-            options.put("summary_max_tokens", contextOptions.summaryMaxTokens());
-            request.put("context_options", options);
-        }
-        return request;
-    }
-
-    private List<QaSourceVO> parseQaSources(JsonNode sourcesNode) {
-        if (sourcesNode == null || !sourcesNode.isArray()) {
-            return Collections.emptyList();
-        }
-
-        List<QaSourceVO> sources = new ArrayList<>();
-        for (JsonNode sourceNode : sourcesNode) {
-            sources.add(parseQaSource(sourceNode));
-        }
-        return sources;
-    }
-
     private List<KnowledgeCandidate> parseKnowledgeCandidates(JsonNode node) {
         if (node == null || !node.isArray()) {
             return Collections.emptyList();
@@ -497,29 +349,6 @@ public class AiServiceClientImpl implements AiServiceClient {
         return chunks;
     }
 
-    private QaSourceVO parseQaSource(JsonNode node) {
-        QaSourceVO source = new QaSourceVO();
-        source.setDocumentId(node.path("document_id").asLong());
-
-        String chunkId = textOrNull(node, "chunk_id");
-        source.setChunkId(chunkId);
-        source.setChunkUid(chunkId);
-        source.setChunkIndex(nullableInt(node, "chunk_index"));
-        source.setPageNo(nullableInt(node, "page_no"));
-        source.setSectionTitle(textOrNull(node, "section_title"));
-        source.setTitlePath(parseStringArray(node.path("title_path")));
-        source.setDocVersion(textOrNull(node, "doc_version"));
-        source.setContentHash(textOrNull(node, "content_hash"));
-        source.setScore(node.path("score").asDouble());
-        source.setRetrievalScore(nullableDouble(node, "retrieval_score"));
-        source.setRerankScore(nullableDouble(node, "rerank_score"));
-        source.setRerankProvider(textOrNull(node, "rerank_provider"));
-        source.setRetrievalSource(textOrNull(node, "retrieval_source"));
-        source.setExcerpt(node.path("excerpt").asText());
-        source.setDocumentTitle(textOrNull(node, "document_title"));
-        return source;
-    }
-
     private String textOrNull(JsonNode node, String fieldName) {
         JsonNode value = node.path(fieldName);
         return value.isMissingNode() || value.isNull() ? null : value.asText();
@@ -530,10 +359,4 @@ public class AiServiceClientImpl implements AiServiceClient {
         return value.isMissingNode() || value.isNull() ? null : value.asDouble();
     }
 
-    private Map<String, Object> parseObject(JsonNode node) {
-        if (node == null || !node.isObject()) {
-            return Collections.emptyMap();
-        }
-        return objectMapper.convertValue(node, new TypeReference<Map<String, Object>>() {});
-    }
 }

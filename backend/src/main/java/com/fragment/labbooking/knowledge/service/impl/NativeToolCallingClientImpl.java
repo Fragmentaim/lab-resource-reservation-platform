@@ -53,7 +53,10 @@ public class NativeToolCallingClientImpl implements NativeToolCallingClient {
             List<PlannedToolCall> calls = body.path("tool_calls").isArray()
                     ? objectMapper.convertValue(body.path("tool_calls"), new TypeReference<List<PlannedToolCall>>() {})
                     : Collections.emptyList();
-            return new ToolRound(calls, textOrNull(body, "answer"), textOrNull(body, "model"));
+            Map<String, Object> providerUsage = body.path("provider_usage").isObject()
+                    ? objectMapper.convertValue(body.path("provider_usage"), new TypeReference<Map<String, Object>>() {})
+                    : Map.of();
+            return new ToolRound(calls, textOrNull(body, "answer"), textOrNull(body, "model"), providerUsage);
         } catch (Exception exception) {
             throw new BusinessException("原生工具调用规划失败: " + exception.getMessage());
         }

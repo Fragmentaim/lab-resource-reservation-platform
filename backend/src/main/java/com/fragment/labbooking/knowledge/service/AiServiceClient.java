@@ -1,13 +1,9 @@
 package com.fragment.labbooking.knowledge.service;
 
-import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
-import com.fragment.labbooking.knowledge.vo.QaSourceVO;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 
 public interface AiServiceClient {
 
@@ -24,23 +20,9 @@ public interface AiServiceClient {
     ProcessResult processDocumentByUrl(Long documentId, String fileUrl, String fileName, String fileType,
                                        String docVersion);
 
-    QaAnswerVO askQuestion(String question, String sessionId, List<Long> documentIds);
-
-    QaAnswerVO askQuestion(String question, String sessionId, List<Long> documentIds,
-                           String sessionSummary, List<ChatMessage> chatHistory,
-                           ContextOptions contextOptions, String traceId);
-
     KnowledgeSearchResult retrieveKnowledge(String question, List<Long> documentIds);
 
     List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, List<Long> documentIds);
-
-    void askQuestionStream(String question, String sessionId, List<Long> documentIds,
-                           StreamEventConsumer eventConsumer);
-
-    void askQuestionStream(String question, String sessionId, List<Long> documentIds,
-                           String sessionSummary, List<ChatMessage> chatHistory,
-                           ContextOptions contextOptions, String traceId,
-                           StreamEventConsumer eventConsumer);
 
     SummaryResult summarizeSession(String existingSummary, List<ChatMessage> newTurns, Integer maxSummaryTokens);
 
@@ -73,13 +55,6 @@ public interface AiServiceClient {
 
     record ChatMessage(String role, String content) {}
 
-    record ContextOptions(
-            int contextWindowTokens,
-            int maxOutputTokens,
-            int safetyMarginTokens,
-            int summaryMaxTokens
-    ) {}
-
     record SummaryResult(String summary, Integer summaryTokens) {}
 
     record KnowledgeSearchResult(String query, List<KnowledgeCandidate> candidates) {}
@@ -96,13 +71,4 @@ public interface AiServiceClient {
             String sectionTitle, List<String> titlePath, String contentHash, Integer tokenCount, String content
     ) {}
 
-    record StreamEvent(String type, String content, List<QaSourceVO> sources,
-                       Integer latencyMs, String model, String message,
-                       String rewrittenQuestion, Boolean rewriteApplied,
-                       Map<String, Object> contextStats) {}
-
-    @FunctionalInterface
-    interface StreamEventConsumer {
-        void accept(StreamEvent event) throws IOException;
-    }
 }
