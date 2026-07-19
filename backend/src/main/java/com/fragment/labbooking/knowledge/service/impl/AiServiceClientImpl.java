@@ -264,7 +264,8 @@ public class AiServiceClientImpl implements AiServiceClient {
                 nullableInt(node, "scanned_unit_count"),
                 nullableInt(node, "empty_unit_count"),
                 nullableDouble(node, "quality_score"),
-                parseStringArray(node.path("warnings"))
+                parseStringArray(node.path("warnings")),
+                node.toString()
         );
     }
 

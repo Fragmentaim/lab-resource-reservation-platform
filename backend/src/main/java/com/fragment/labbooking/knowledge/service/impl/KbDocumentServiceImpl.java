@@ -3,7 +3,6 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.auth.LoginUser;
@@ -71,7 +70,6 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     private int presignExpirySeconds;
 
     private final AiServiceClient aiServiceClient;
-    private final ObjectMapper objectMapper;
     private final MinioService minioService;
     private final SysUserMapper sysUserMapper;
     private final KbChunkMapper kbChunkMapper;
@@ -81,7 +79,6 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     private final DocumentProcessProperties documentProcessProperties;
 
     public KbDocumentServiceImpl(AiServiceClient aiServiceClient,
-                                 ObjectMapper objectMapper,
                                  MinioService minioService,
                                  SysUserMapper sysUserMapper,
                                  KbChunkMapper kbChunkMapper,
@@ -90,7 +87,6 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                                  MessageOutboxProperties outboxProperties,
                                  DocumentProcessProperties documentProcessProperties) {
         this.aiServiceClient = aiServiceClient;
-        this.objectMapper = objectMapper;
         this.minioService = minioService;
         this.sysUserMapper = sysUserMapper;
         this.kbChunkMapper = kbChunkMapper;
@@ -442,13 +438,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         }
         document.setParserProvider(quality.provider());
         document.setParserVersion(quality.providerVersion());
-        try {
-            document.setParseQuality(objectMapper.writeValueAsString(quality));
-        } catch (Exception exception) {
-            log.warn("Failed to serialize parse quality for document {}: {}",
-                    document.getId(), exception.getMessage());
-            document.setParseQuality(null);
-        }
+        document.setParseQuality(quality.reportJson());
     }
 
     private void applyAccessFilter(LambdaQueryWrapper<KbDocument> wrapper, LoginUser actor) {

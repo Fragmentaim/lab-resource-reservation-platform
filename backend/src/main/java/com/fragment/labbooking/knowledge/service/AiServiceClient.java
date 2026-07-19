@@ -53,7 +53,8 @@ public interface AiServiceClient {
             Integer scannedUnitCount,
             Integer emptyUnitCount,
             Double qualityScore,
-            List<String> warnings
+            List<String> warnings,
+            String reportJson
     ) {}
 
     record ChunkResult(
