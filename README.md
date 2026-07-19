@@ -527,6 +527,7 @@ Authorization: Bearer <token>
 | `GET` | `/knowledge/qa/sessions` | `/api/knowledge/qa/sessions` | 登录 | 查询当前用户自己的问答会话。 |
 | `GET` | `/knowledge/tools/reservation-context/me` | `/api/knowledge/tools/reservation-context/me` | 登录 | 只读返回当前用户预约摘要和最多 3 条待使用预约。 |
 | `GET` | `/knowledge/tools/reservation-context/users/{userId}` | `/api/knowledge/tools/reservation-context/users/{userId}` | 管理员 | 管理员读取指定用户上下文；服务层再次做权限校验。 |
+| `GET` | `/knowledge/tools/reservation-context/audit/page` | `/api/knowledge/tools/reservation-context/audit/page` | 管理员 | 分页查询工具调用 trace、作用域、耗时和结果，参数只保留最小摘要。 |
 
 ## 11. 业务流程说明
 
