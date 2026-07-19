@@ -8,6 +8,7 @@ import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
 import com.fragment.labbooking.knowledge.agent.ContextPlan;
 import com.fragment.labbooking.knowledge.agent.EvidenceCard;
 import com.fragment.labbooking.knowledge.agent.PolicyContext;
+import com.fragment.labbooking.knowledge.agent.ToolResultContextPacker;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
@@ -47,6 +48,7 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
     @Autowired private KbDocumentService kbDocumentService;
     @Autowired private AiServiceClient aiServiceClient;
     @Autowired private AgentRunService agentRunService;
+    @Autowired private ToolResultContextPacker toolResultContextPacker;
 
     @Value("${app.knowledge.native-tool-calling.enabled:true}")
     private boolean enabled;
@@ -91,11 +93,13 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                     state.executingTool();
                     observeState(runtimeManaged, traceId, state);
                     ExecutedCall result = execute(call, actor, question, state, openedSources);
+                    ToolResultContextPacker.PackedToolResult packed = toolResultContextPacker.pack(
+                            result.toolName(), result.output());
                     executed.add(new NativeToolCallingClient.ExecutedToolCall(
-                            safeCallId(call.callId()), result.toolName(), result.arguments(), result.output()));
+                            safeCallId(call.callId()), result.toolName(), result.arguments(), packed.modelOutput()));
                     trace.add(result.trace());
                     sourceCount += result.sourceCount();
-                    observeTool(runtimeManaged, traceId, result.execution());
+                    observeTool(runtimeManaged, traceId, withContextPacking(result.execution(), packed.safeDetail()));
                     state.completeTool(result.toolName());
                     observeState(runtimeManaged, traceId, state);
                 }
@@ -332,6 +336,13 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
         if (runtimeManaged) {
             agentRunService.recordToolExecution(traceId, execution);
         }
+    }
+
+    private AgentToolExecution withContextPacking(AgentToolExecution execution, Map<String, Object> contextPacking) {
+        Map<String, Object> detail = new LinkedHashMap<>(execution.detail());
+        detail.put("context_pack", contextPacking);
+        return new AgentToolExecution(execution.toolName(), execution.status(), execution.latencyMs(),
+                execution.toolTraceId(), execution.protocol(), detail);
     }
 
     private String summarizeArguments(Map<String, Object> arguments) { return arguments.toString().substring(0, Math.min(arguments.toString().length(), 512)); }

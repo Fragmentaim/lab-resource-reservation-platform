@@ -1,6 +1,7 @@
 package com.fragment.labbooking.knowledge.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.exception.BusinessException;
@@ -501,21 +502,28 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         return session;
     }
 
-    private List<SessionTurn> loadSessionTurns(String sessionId, Long userId) {
-        List<QaRecord> records = baseMapper.selectList(new LambdaQueryWrapper<QaRecord>()
+    private List<QaRecord> loadAnsweredSessionRecords(String sessionId, Long userId) {
+        return baseMapper.selectList(new LambdaQueryWrapper<QaRecord>()
                 .eq(QaRecord::getSessionId, sessionId)
                 .eq(QaRecord::getUserId, userId)
                 .eq(QaRecord::getStatus, "ANSWERED")
                 .orderByAsc(QaRecord::getCreatedAt)
                 .orderByAsc(QaRecord::getId));
+    }
+
+    private List<SessionTurn> loadUncompressedSessionTurns(QaSession session) {
+        List<QaRecord> records = loadAnsweredSessionRecords(session.getSessionId(), session.getUserId());
+        int coveredTurnCount = Math.min(records.size(), Math.max(0,
+                session.getSummaryTurnCount() == null ? 0 : session.getSummaryTurnCount()));
         return records.stream()
+                .skip(coveredTurnCount)
                 .map(record -> new SessionTurn(record.getId(), record.getTraceId(), record.getQuestion(), record.getAnswer()))
                 .toList();
     }
 
     private SessionContextPlan planSessionContext(QaSession session, String question) {
         return sessionContextPlanner.plan(
-                session.getSummary(), question, loadSessionTurns(session.getSessionId(), session.getUserId()),
+                session.getSummary(), question, loadUncompressedSessionTurns(session),
                 new SessionContextPlanner.ContextCapacity(maxPromptTokens, answerReserveTokens,
                         historyBudgetTokens, evidenceBudgetTokens)
         );
@@ -545,14 +553,22 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 .eq(QaRecord::getUserId, userId)
                 .eq(QaRecord::getStatus, "ANSWERED"));
 
-        session.setTurnCount((int) answeredTurns);
+        String title = session.getTitle();
         if (!StringUtils.hasText(session.getTitle())) {
-            session.setTitle(defaultSessionTitle(question));
+            title = defaultSessionTitle(question);
         }
-        session.setLastMessageAt(LocalDateTime.now());
-        session.setLastTraceId(traceId);
-        session.setUpdatedAt(LocalDateTime.now());
-        qaSessionMapper.updateById(session);
+        LocalDateTime now = LocalDateTime.now();
+        QaSession update = new QaSession();
+        update.setTurnCount((int) answeredTurns);
+        update.setTitle(title);
+        update.setLastMessageAt(now);
+        update.setLastTraceId(traceId);
+        update.setUpdatedAt(now);
+        // Do not write the summary fields here: an asynchronous compaction may
+        // finish at the same time as a new answer.
+        qaSessionMapper.update(update, new LambdaUpdateWrapper<QaSession>()
+                .eq(QaSession::getSessionId, sessionId)
+                .eq(QaSession::getUserId, userId));
     }
 
     private void saveContextTrace(QaRecord record, String originalQuestion, QaAnswerVO answer) {
@@ -610,36 +626,40 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             if (session == null) {
                 return;
             }
-            List<QaRecord> records = baseMapper.selectList(new LambdaQueryWrapper<QaRecord>()
-                    .eq(QaRecord::getSessionId, sessionId)
-                    .eq(QaRecord::getUserId, userId)
-                    .eq(QaRecord::getStatus, "ANSWERED")
-                    .orderByAsc(QaRecord::getCreatedAt));
-            int skipTurns = Math.max(0, session.getSummaryTurnCount() == null ? 0 : session.getSummaryTurnCount());
-            List<AiServiceClient.ChatMessage> newTurns = records.stream()
-                    .skip(skipTurns)
-                    .flatMap(record -> {
-                        List<AiServiceClient.ChatMessage> messages = new ArrayList<>();
-                        messages.add(new AiServiceClient.ChatMessage("user", record.getQuestion()));
-                        if (StringUtils.hasText(record.getAnswer())) {
-                            messages.add(new AiServiceClient.ChatMessage("assistant", record.getAnswer()));
-                        }
-                        return messages.stream();
-                    })
-                    .collect(Collectors.toList());
-            if (newTurns.isEmpty()) {
+            List<QaRecord> records = loadAnsweredSessionRecords(sessionId, userId);
+            int coveredTurnCount = Math.min(records.size(), Math.max(0,
+                    session.getSummaryTurnCount() == null ? 0 : session.getSummaryTurnCount()));
+            List<SessionTurn> uncompressedTurns = records.stream().skip(coveredTurnCount)
+                    .map(record -> new SessionTurn(record.getId(), record.getTraceId(), record.getQuestion(), record.getAnswer()))
+                    .toList();
+            SessionContextPlan plan = sessionContextPlanner.plan(session.getSummary(), "", uncompressedTurns,
+                    new SessionContextPlanner.ContextCapacity(maxPromptTokens, answerReserveTokens,
+                            historyBudgetTokens, evidenceBudgetTokens));
+            if (!plan.compactionRecommended() || plan.deferredTurns().isEmpty()) {
                 return;
             }
+            List<AiServiceClient.ChatMessage> newTurns = plan.deferredTurns().stream()
+                    .flatMap(turn -> turn.messages().stream())
+                    .toList();
 
             AiServiceClient.SummaryResult result = aiServiceClient.summarizeSession(
                     session.getSummary(),
                     newTurns,
                     summaryBudgetTokens
             );
-            session.setSummary(result.summary());
-            session.setSummaryTurnCount(records.size());
-            session.setUpdatedAt(LocalDateTime.now());
-            qaSessionMapper.updateById(session);
+            QaSession update = new QaSession();
+            update.setSummary(result.summary());
+            update.setSummaryTurnCount(coveredTurnCount + plan.deferredTurns().size());
+            update.setUpdatedAt(LocalDateTime.now());
+            // The compare-and-set guard prevents a slow older summary from
+            // overwriting a newer compaction result.
+            int updated = qaSessionMapper.update(update, new LambdaUpdateWrapper<QaSession>()
+                    .eq(QaSession::getSessionId, sessionId)
+                    .eq(QaSession::getUserId, userId)
+                    .eq(QaSession::getSummaryTurnCount, coveredTurnCount));
+            if (updated == 0) {
+                log.info("Skipped stale summary refresh for session {}", sessionId);
+            }
         } catch (Exception e) {
             log.warn("Session summary refresh failed for session {}: {}", sessionId, e.getMessage());
         }

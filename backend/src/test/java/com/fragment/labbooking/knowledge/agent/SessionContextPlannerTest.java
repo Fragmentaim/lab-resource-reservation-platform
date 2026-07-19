@@ -25,8 +25,10 @@ class SessionContextPlannerTest {
         assertThat(plan.historyMessages()).extracting(message -> message.role())
                 .containsExactly("user", "assistant", "user", "assistant");
         assertThat(plan.deferredTurnCount()).isEqualTo(1);
+        assertThat(plan.deferredTurns()).extracting(SessionTurn::recordId).containsExactly(1L);
         assertThat(plan.compactionRecommended()).isTrue();
         assertThat(plan.safeDetail()).containsEntry("selection_unit", "COMPLETE_TURN");
+        assertThat(plan.safeDetail()).containsEntry("history_shape", "CONTIGUOUS_RECENT_SUFFIX");
     }
 
     @Test
@@ -39,5 +41,20 @@ class SessionContextPlannerTest {
         assertThat(plan.historyMessages()).isEmpty();
         assertThat(plan.deferredTurnCount()).isEqualTo(1);
         assertThat(plan.compactionRecommended()).isTrue();
+    }
+
+    @Test
+    void shouldNotSkipAnOversizedMiddleTurnToIncludeOlderHistory() {
+        List<SessionTurn> turns = List.of(
+                new SessionTurn(1L, "trace-1", "第一轮问题", "第一轮回答"),
+                new SessionTurn(2L, "trace-2", "第二轮问题".repeat(180), "第二轮回答".repeat(180)),
+                new SessionTurn(3L, "trace-3", "第三轮问题", "第三轮回答")
+        );
+
+        SessionContextPlan plan = planner.plan("", "继续说第三轮", turns,
+                new SessionContextPlanner.ContextCapacity(800, 100, 220, 0));
+
+        assertThat(plan.includedTurns()).extracting(SessionTurn::recordId).containsExactly(3L);
+        assertThat(plan.deferredTurns()).extracting(SessionTurn::recordId).containsExactly(1L, 2L);
     }
 }

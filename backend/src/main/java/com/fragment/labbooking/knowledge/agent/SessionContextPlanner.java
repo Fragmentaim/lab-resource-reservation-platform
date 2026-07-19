@@ -32,7 +32,6 @@ public class SessionContextPlanner {
 
         List<SessionTurn> includedReversed = new ArrayList<>();
         int historyTokens = 0;
-        int deferred = 0;
         List<SessionTurn> turns = chronologicalTurns == null ? List.of() : chronologicalTurns;
         for (int index = turns.size() - 1; index >= 0; index--) {
             SessionTurn turn = turns.get(index);
@@ -41,14 +40,18 @@ public class SessionContextPlanner {
                 includedReversed.add(turn);
                 historyTokens += turnTokens;
             } else {
-                deferred++;
+                // History must remain a contiguous recent suffix. Skipping an oversized
+                // middle turn but including an older one breaks conversational causality.
+                break;
             }
         }
         Collections.reverse(includedReversed);
+        int deferred = turns.size() - includedReversed.size();
+        List<SessionTurn> deferredTurns = deferred == 0 ? List.of() : List.copyOf(turns.subList(0, deferred));
         return new SessionContextPlan(
                 capacity.maxPromptTokens(), capacity.answerReserveTokens(), promptBudget,
                 questionTokens, summaryTokens, historyTokens, evidenceReservation,
-                List.copyOf(includedReversed), deferred, deferred > 0
+                List.copyOf(includedReversed), deferredTurns, deferred, deferred > 0
         );
     }
 

@@ -119,3 +119,8 @@ app:
       history-budget-tokens: 2000
       evidence-budget-tokens: 7000
       summary-trigger-turns: 6
+    native-tool-calling:
+      enabled: true
+      # Per-result guard only. Small tool results pass through unchanged; this
+      # protects the next tool-planning round from a single oversized payload.
+      max-tool-result-tokens: 1600

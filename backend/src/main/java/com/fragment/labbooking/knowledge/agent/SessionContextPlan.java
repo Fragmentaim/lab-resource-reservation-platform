@@ -16,6 +16,7 @@ public record SessionContextPlan(
         int historyTokens,
         int evidenceReservationTokens,
         List<SessionTurn> includedTurns,
+        List<SessionTurn> deferredTurns,
         int deferredTurnCount,
         boolean compactionRecommended
 ) {
@@ -34,9 +35,11 @@ public record SessionContextPlan(
         detail.put("evidence_reservation_tokens", evidenceReservationTokens);
         detail.put("included_turn_count", includedTurns.size());
         detail.put("included_record_ids", includedTurns.stream().map(SessionTurn::recordId).toList());
+        detail.put("deferred_record_ids", deferredTurns.stream().map(SessionTurn::recordId).toList());
         detail.put("deferred_turn_count", deferredTurnCount);
         detail.put("compaction_recommended", compactionRecommended);
         detail.put("selection_unit", "COMPLETE_TURN");
+        detail.put("history_shape", "CONTIGUOUS_RECENT_SUFFIX");
         return detail;
     }
 }

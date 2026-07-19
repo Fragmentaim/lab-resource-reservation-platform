@@ -1,6 +1,8 @@
 package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
+import com.fragment.labbooking.knowledge.agent.ContextTokenCounter;
+import com.fragment.labbooking.knowledge.agent.ToolResultContextPacker;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
@@ -51,6 +53,7 @@ class NativeToolCallingServiceImplTest {
         ReflectionTestUtils.setField(service, "aiToolCallAuditService", auditService);
         ReflectionTestUtils.setField(service, "kbDocumentService", kbDocumentService);
         ReflectionTestUtils.setField(service, "aiServiceClient", aiServiceClient);
+        ReflectionTestUtils.setField(service, "toolResultContextPacker", new ToolResultContextPacker(new ContextTokenCounter()));
         ReflectionTestUtils.setField(service, "enabled", true);
     }
 
