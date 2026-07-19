@@ -48,3 +48,11 @@ export function submitKnowledgeFeedback(payload) {
 export function fetchMyReservationAssistantContext() {
   return api.get('/knowledge/tools/reservation-context/me')
 }
+
+export function findAvailableResourceSlots(params) {
+  return api.get('/knowledge/tools/resource-availability', { params })
+}
+
+export function previewReservationCancellation(reservationId) {
+  return api.get(`/knowledge/tools/cancellation-preview/${reservationId}`)
+}

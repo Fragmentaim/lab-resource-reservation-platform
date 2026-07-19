@@ -19,7 +19,7 @@
 - **可靠预约链路**：热门预约异步确认、Outbox、延迟消息、缓存失效与幂等保护。
 - **可解释 RAG 工作台**：文档处理状态、会话恢复、回答引用、分块片段和检索 trace 可视化。
 - **本地 GPU 检索基线**：Qwen 0.6B Embedding 与 Reranker 在 RTX 4060 Laptop 上完成真实加载与推理验收；模型与缓存均放在 D 盘。
-- **安全业务工具**：`reservation_context` 只读工具复用当前身份，普通用户只能读自己数据，管理员访问仍由服务层二次校验，且响应不包含手机号。
+- **安全业务工具**：`reservation_context`、`resource_availability`、`reservation_cancellation_preview` 三类工具复用当前身份；查询实时业务数据、返回最小字段并记录调用审计。取消工具只做预检，用户仍需在业务页面确认写操作。
 - **可重复评测**：30 条中文业务题（含隐私/拒答题）、自动化脚本和首轮端到端基线报告。
 
 ## 2. 技术栈
@@ -528,6 +528,8 @@ Authorization: Bearer <token>
 | `GET` | `/knowledge/tools/reservation-context/me` | `/api/knowledge/tools/reservation-context/me` | 登录 | 只读返回当前用户预约摘要和最多 3 条待使用预约。 |
 | `GET` | `/knowledge/tools/reservation-context/users/{userId}` | `/api/knowledge/tools/reservation-context/users/{userId}` | 管理员 | 管理员读取指定用户上下文；服务层再次做权限校验。 |
 | `GET` | `/knowledge/tools/reservation-context/audit/page` | `/api/knowledge/tools/reservation-context/audit/page` | 管理员 | 分页查询工具调用 trace、作用域、耗时和结果，参数只保留最小摘要。 |
+| `GET` | `/knowledge/tools/resource-availability` | `/api/knowledge/tools/resource-availability` | 登录 | 按资源名称查找未来、开放且仍有名额的时段；只读，最多返回 10 条。 |
+| `GET` | `/knowledge/tools/cancellation-preview/{reservationId}` | `/api/knowledge/tools/cancellation-preview/{reservationId}` | 登录 | 仅预检本人预约能否取消，明确不执行写操作，仍要求用户在“我的预约”确认。 |
 
 ## 11. 业务流程说明
 
