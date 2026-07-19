@@ -264,6 +264,46 @@ public class AiServiceClientImpl implements AiServiceClient {
     }
 
     @Override
+    public KnowledgeSearchResult retrieveKnowledge(String question, List<Long> documentIds) {
+        try {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("question", question);
+            request.put("document_ids", documentIds == null ? Collections.emptyList() : documentIds);
+            String response = restClient.post()
+                    .uri("/api/v1/ai/qa/retrieve")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(objectMapper.writeValueAsString(request))
+                    .retrieve()
+                    .body(String.class);
+            JsonNode data = objectMapper.readTree(response);
+            return new KnowledgeSearchResult(data.path("query").asText(question),
+                    parseKnowledgeCandidates(data.path("candidates")));
+        } catch (Exception e) {
+            log.error("Failed to retrieve knowledge candidates via AI service: {}", e.getMessage());
+            throw new BusinessException("知识库候选检索失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, List<Long> documentIds) {
+        try {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("chunk_uids", chunkUids == null ? Collections.emptyList() : chunkUids);
+            request.put("document_ids", documentIds == null ? Collections.emptyList() : documentIds);
+            String response = restClient.post()
+                    .uri("/api/v1/ai/qa/chunks/open")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(objectMapper.writeValueAsString(request))
+                    .retrieve()
+                    .body(String.class);
+            return parseKnowledgeChunks(objectMapper.readTree(response).path("chunks"));
+        } catch (Exception e) {
+            log.error("Failed to open knowledge chunks via AI service: {}", e.getMessage());
+            throw new BusinessException("知识库正文读取失败: " + e.getMessage());
+        }
+    }
+
+    @Override
     public void askQuestionStream(String question, String sessionId, List<Long> documentIds,
                                   StreamEventConsumer eventConsumer) {
         askQuestionStream(question, sessionId, documentIds, null, Collections.emptyList(), null, null, eventConsumer);
@@ -421,6 +461,41 @@ public class AiServiceClientImpl implements AiServiceClient {
             sources.add(parseQaSource(sourceNode));
         }
         return sources;
+    }
+
+    private List<KnowledgeCandidate> parseKnowledgeCandidates(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return Collections.emptyList();
+        }
+        List<KnowledgeCandidate> candidates = new ArrayList<>();
+        for (JsonNode item : node) {
+            candidates.add(new KnowledgeCandidate(
+                    textOrNull(item, "chunk_uid"), item.path("document_id").asLong(),
+                    textOrNull(item, "doc_version"), nullableInt(item, "chunk_index"), nullableInt(item, "page_no"),
+                    textOrNull(item, "section_title"), parseStringArray(item.path("title_path")),
+                    textOrNull(item, "content_hash"), nullableInt(item, "token_count"),
+                    nullableDouble(item, "score"), nullableDouble(item, "retrieval_score"),
+                    nullableDouble(item, "rerank_score"), textOrNull(item, "rerank_provider"),
+                    textOrNull(item, "retrieval_source"), item.path("locator").asText("")
+            ));
+        }
+        return candidates;
+    }
+
+    private List<KnowledgeChunk> parseKnowledgeChunks(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return Collections.emptyList();
+        }
+        List<KnowledgeChunk> chunks = new ArrayList<>();
+        for (JsonNode item : node) {
+            chunks.add(new KnowledgeChunk(
+                    textOrNull(item, "chunk_uid"), item.path("document_id").asLong(),
+                    textOrNull(item, "doc_version"), nullableInt(item, "chunk_index"), nullableInt(item, "page_no"),
+                    textOrNull(item, "section_title"), parseStringArray(item.path("title_path")),
+                    textOrNull(item, "content_hash"), nullableInt(item, "token_count"), item.path("content").asText("")
+            ));
+        }
+        return chunks;
     }
 
     private QaSourceVO parseQaSource(JsonNode node) {

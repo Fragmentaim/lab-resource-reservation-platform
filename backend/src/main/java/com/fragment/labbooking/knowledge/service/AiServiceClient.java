@@ -30,6 +30,10 @@ public interface AiServiceClient {
                            String sessionSummary, List<ChatMessage> chatHistory,
                            ContextOptions contextOptions, String traceId);
 
+    KnowledgeSearchResult retrieveKnowledge(String question, List<Long> documentIds);
+
+    List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, List<Long> documentIds);
+
     void askQuestionStream(String question, String sessionId, List<Long> documentIds,
                            StreamEventConsumer eventConsumer);
 
@@ -78,6 +82,20 @@ public interface AiServiceClient {
     ) {}
 
     record SummaryResult(String summary, Integer summaryTokens) {}
+
+    record KnowledgeSearchResult(String query, List<KnowledgeCandidate> candidates) {}
+
+    record KnowledgeCandidate(
+            String chunkUid, Long documentId, String docVersion, Integer chunkIndex, Integer pageNo,
+            String sectionTitle, List<String> titlePath, String contentHash, Integer tokenCount,
+            Double score, Double retrievalScore, Double rerankScore, String rerankProvider,
+            String retrievalSource, String locator
+    ) {}
+
+    record KnowledgeChunk(
+            String chunkUid, Long documentId, String docVersion, Integer chunkIndex, Integer pageNo,
+            String sectionTitle, List<String> titlePath, String contentHash, Integer tokenCount, String content
+    ) {}
 
     record StreamEvent(String type, String content, List<QaSourceVO> sources,
                        Integer latencyMs, String model, String message,

@@ -1,40 +1,29 @@
 package com.fragment.labbooking.knowledge.agent;
 
-import com.fragment.labbooking.knowledge.vo.QaSourceVO;
+import com.fragment.labbooking.knowledge.service.AiServiceClient;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** A bounded, source-attributed piece of knowledge exposed to the model. */
-public record EvidenceCard(String documentTitle, String sectionTitle, String excerpt,
-                           Double score, String retrievalSource) {
+/** Complete, source-attributed evidence explicitly opened by the model. */
+public record EvidenceCard(String chunkUid, String sectionTitle, Integer pageNo,
+                           java.util.List<String> titlePath, Integer tokenCount, String content) {
 
-    private static final int MAX_EXCERPT_CHARS = 700;
-
-    public static EvidenceCard from(QaSourceVO source) {
+    public static EvidenceCard from(AiServiceClient.KnowledgeChunk source) {
         return new EvidenceCard(
-                text(source.getDocumentTitle(), 160),
-                text(source.getSectionTitle(), 160),
-                text(source.getExcerpt(), MAX_EXCERPT_CHARS),
-                source.getScore(),
-                text(source.getRetrievalSource(), 32)
+                source.chunkUid(), source.sectionTitle(), source.pageNo(), source.titlePath(),
+                source.tokenCount(), source.content()
         );
     }
 
     public Map<String, Object> toToolPayload() {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("document_title", documentTitle);
+        payload.put("chunk_uid", chunkUid);
         payload.put("section_title", sectionTitle);
-        payload.put("excerpt", excerpt);
-        payload.put("score", score);
-        payload.put("retrieval_source", retrievalSource);
+        payload.put("page_no", pageNo);
+        payload.put("title_path", titlePath == null ? java.util.List.of() : titlePath);
+        payload.put("token_count", tokenCount);
+        payload.put("content", content == null ? "" : content);
         return payload;
-    }
-
-    private static String text(String value, int maxLength) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 }

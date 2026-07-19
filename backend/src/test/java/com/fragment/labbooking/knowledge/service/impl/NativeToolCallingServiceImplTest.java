@@ -10,8 +10,6 @@ import com.fragment.labbooking.knowledge.service.ReservationContextToolService;
 import com.fragment.labbooking.knowledge.service.ResourceAvailabilityToolService;
 import com.fragment.labbooking.knowledge.service.ToolRouteResult;
 import com.fragment.labbooking.knowledge.vo.ReservationAssistantContextVO;
-import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
-import com.fragment.labbooking.knowledge.vo.QaSourceVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,6 +25,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -81,30 +80,39 @@ class NativeToolCallingServiceImplTest {
 
     @Test
     void shouldExposeAclFilteredKnowledgeAsAnOptionalNativeTool() {
-        NativeToolCallingClient.PlannedToolCall toolCall = new NativeToolCallingClient.PlannedToolCall(
+        NativeToolCallingClient.PlannedToolCall searchCall = new NativeToolCallingClient.PlannedToolCall(
                 "call_knowledge_1", "knowledge_search", Map.of("query", "取消预约的规则"));
+        NativeToolCallingClient.PlannedToolCall openCall = new NativeToolCallingClient.PlannedToolCall(
+                "call_knowledge_2", "knowledge_open_chunks", Map.of("chunkUids", List.of("chunk-12-3")));
         when(nativeClient.nextRound(any(), any(), any())).thenReturn(
-                new NativeToolCallingClient.ToolRound(List.of(toolCall), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(searchCall), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(openCall), null, "glm-5.1"),
                 new NativeToolCallingClient.ToolRound(List.of(), "取消需要提前操作。", "glm-5.1")
         );
         when(kbDocumentService.listAccessibleReadyDocumentIds(any())).thenReturn(List.of(12L));
-        QaSourceVO source = new QaSourceVO();
-        source.setDocumentTitle("预约管理制度");
-        source.setSectionTitle("取消规则");
-        source.setExcerpt("取消预约需要在开始前完成。");
-        source.setScore(0.96D);
-        QaAnswerVO ragAnswer = new QaAnswerVO();
-        ragAnswer.setAnswer("预约开始前可以取消，具体以制度为准。");
-        ragAnswer.setSources(List.of(source));
-        when(aiServiceClient.askQuestion(eq("取消预约的规则"), eq(""), eq(List.of(12L)))).thenReturn(ragAnswer);
+        AiServiceClient.KnowledgeCandidate candidate = new AiServiceClient.KnowledgeCandidate(
+                "chunk-12-3", 12L, "v1", 3, 2, "取消规则", List.of("预约管理制度"),
+                "hash", 120, 0.96D, 0.90D, 0.95D, "local", "hybrid", "提前取消的要求");
+        when(aiServiceClient.retrieveKnowledge("取消预约的规则", List.of(12L)))
+                .thenReturn(new AiServiceClient.KnowledgeSearchResult("取消预约的规则", List.of(candidate)));
+        AiServiceClient.KnowledgeChunk chunk = new AiServiceClient.KnowledgeChunk(
+                "chunk-12-3", 12L, "v1", 3, 2, "取消规则", List.of("预约管理制度"),
+                "hash", 120, "取消预约需要在开始前完成。");
+        when(aiServiceClient.openKnowledgeChunks(List.of("chunk-12-3"), List.of(12L))).thenReturn(List.of(chunk));
 
         ToolRouteResult result = service.tryAnswer("取消预约有什么规则？", user()).orElseThrow();
 
         assertThat(result.answer()).isEqualTo("取消需要提前操作。");
         assertThat(result.sourceCount()).isEqualTo(1);
-        assertThat(result.toolCalls()).singleElement().satisfies(trace ->
-                assertThat(trace.get("tool_name")).isEqualTo("knowledge_search"));
-        verify(aiServiceClient).askQuestion("取消预约的规则", "", List.of(12L));
+        assertThat(result.sources()).singleElement().satisfies(source -> {
+            assertThat(source.getChunkUid()).isEqualTo("chunk-12-3");
+            assertThat(source.getDocumentId()).isEqualTo(12L);
+        });
+        assertThat(result.toolCalls()).extracting(trace -> trace.get("tool_name"))
+                .containsExactly("knowledge_search", "knowledge_open_chunks");
+        verify(aiServiceClient).retrieveKnowledge("取消预约的规则", List.of(12L));
+        verify(aiServiceClient).openKnowledgeChunks(List.of("chunk-12-3"), List.of(12L));
+        verify(aiServiceClient, never()).askQuestion(eq("取消预约的规则"), eq(""), eq(List.of(12L)));
         verify(auditService).recordSuccess(any(), eq("knowledge_search"), any(), any(),
                 eq("ACL_FILTERED_KNOWLEDGE"), anyLong(), any());
         verify(nativeClient, atLeastOnce()).nextRound(any(), any(), any());

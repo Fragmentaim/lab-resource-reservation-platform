@@ -144,7 +144,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 answer.setLatencyMs(0);
                 answer.setModelName(toolRouteModel(routed.get()));
                 answer.setQuestionType("TOOL");
-                answer.setSources(Collections.emptyList());
+                answer.setSources(routed.get().sources());
                 Map<String, Object> toolStats = new LinkedHashMap<>();
                 toolStats.put("route", "permission_scoped_tool");
                 toolStats.put("tool_calls", routed.get().toolCalls());
@@ -262,7 +262,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 toolAnswer.setLatencyMs(0);
                 toolAnswer.setModelName(toolRouteModel(routed.get()));
                 toolAnswer.setQuestionType("TOOL");
-                toolAnswer.setSources(Collections.emptyList());
+                toolAnswer.setSources(routed.get().sources());
                 Map<String, Object> toolStats = new LinkedHashMap<>();
                 toolStats.put("route", "permission_scoped_tool");
                 toolStats.put("tool_calls", routed.get().toolCalls());

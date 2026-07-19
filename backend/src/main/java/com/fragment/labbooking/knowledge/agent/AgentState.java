@@ -1,6 +1,7 @@
 package com.fragment.labbooking.knowledge.agent;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -18,6 +19,8 @@ public final class AgentState {
     private final String sessionId;
     private final PolicyContext policy;
     private final List<String> completedTools = new ArrayList<>();
+    private final Map<String, Long> searchableChunkDocumentIds = new LinkedHashMap<>();
+    private final List<String> openedChunkUids = new ArrayList<>();
     private Phase phase = Phase.PLANNING;
     private int round;
 
@@ -42,6 +45,35 @@ public final class AgentState {
         }
     }
 
+    /** Registers opaque candidate IDs issued by this run's ACL-filtered search. */
+    public void registerKnowledgeCandidates(List<? extends Map.Entry<String, Long>> candidates) {
+        if (candidates == null) {
+            return;
+        }
+        for (Map.Entry<String, Long> candidate : candidates) {
+            if (candidate.getKey() != null && !candidate.getKey().isBlank() && candidate.getValue() != null) {
+                searchableChunkDocumentIds.put(candidate.getKey(), candidate.getValue());
+            }
+        }
+    }
+
+    /** Rejects guessed IDs and preserves the model's requested order for known candidates. */
+    public List<String> authorizeKnowledgeChunkOpen(List<String> requestedChunkUids) {
+        if (requestedChunkUids == null) {
+            return List.of();
+        }
+        return requestedChunkUids.stream()
+                .filter(searchableChunkDocumentIds::containsKey)
+                .distinct()
+                .toList();
+    }
+
+    public void registerOpenedKnowledgeChunks(List<String> chunkUids) {
+        if (chunkUids != null) {
+            openedChunkUids.addAll(chunkUids);
+        }
+    }
+
     public void answering() {
         this.phase = Phase.ANSWERING;
     }
@@ -60,6 +92,8 @@ public final class AgentState {
                 "round", round,
                 "completed_tool_count", completedTools.size(),
                 "completed_tools", List.copyOf(completedTools),
+                "knowledge_candidate_count", searchableChunkDocumentIds.size(),
+                "opened_knowledge_chunk_count", openedChunkUids.size(),
                 "actor_type", policy.admin() ? "ADMIN" : "USER"
         );
     }
