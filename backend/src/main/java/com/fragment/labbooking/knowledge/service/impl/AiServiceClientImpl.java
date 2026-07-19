@@ -176,7 +176,15 @@ public class AiServiceClientImpl implements AiServiceClient {
         List<String> chunkIds = parseStringArray(node.path("chunk_ids"));
         List<String> vectorIds = parseStringArray(node.path("vector_ids"));
         List<ChunkResult> chunks = parseChunks(node.path("chunks"));
-        return new ProcessResult(chunkCount, status, resolvedDocVersion, chunkIds, vectorIds, chunks);
+        return new ProcessResult(
+                chunkCount,
+                status,
+                resolvedDocVersion,
+                chunkIds,
+                vectorIds,
+                chunks,
+                parseQuality(node.path("parse_quality"))
+        );
     }
 
     private List<String> parseStringArray(JsonNode node) {
@@ -237,6 +245,27 @@ public class AiServiceClientImpl implements AiServiceClient {
             log.error("Failed to retrieve knowledge candidates via AI service: {}", e.getMessage());
             throw new BusinessException("知识库候选检索失败: " + e.getMessage());
         }
+    }
+
+    private ParseQuality parseQuality(JsonNode node) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        return new ParseQuality(
+                textOrNull(node, "provider"),
+                textOrNull(node, "provider_version"),
+                textOrNull(node, "parse_mode"),
+                nullableInt(node, "unit_count"),
+                nullableInt(node, "non_empty_unit_count"),
+                nullableInt(node, "character_count"),
+                nullableInt(node, "heading_count"),
+                nullableInt(node, "table_count"),
+                nullableInt(node, "image_count"),
+                nullableInt(node, "scanned_unit_count"),
+                nullableInt(node, "empty_unit_count"),
+                nullableDouble(node, "quality_score"),
+                parseStringArray(node.path("warnings"))
+        );
     }
 
     @Override

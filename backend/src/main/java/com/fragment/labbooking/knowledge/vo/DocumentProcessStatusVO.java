@@ -11,6 +11,9 @@ public class DocumentProcessStatusVO {
     private String status;
     private String docVersion;
     private Integer chunkCount;
+    private String parserProvider;
+    private String parserVersion;
+    private String parseQuality;
     private Integer retryCount;
     private String errorMessage;
     private String processTraceId;

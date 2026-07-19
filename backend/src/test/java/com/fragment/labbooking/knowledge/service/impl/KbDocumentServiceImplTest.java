@@ -3,6 +3,7 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.outbox.MessageOutboxProperties;
@@ -56,7 +57,7 @@ class KbDocumentServiceImplTest {
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
         TableInfoHelper.initTableInfo(assistant, KbDocument.class);
         TableInfoHelper.initTableInfo(assistant, KbDocumentAccess.class);
-        service = new KbDocumentServiceImpl(aiServiceClient, minioService, sysUserMapper, kbChunkMapper,
+        service = new KbDocumentServiceImpl(aiServiceClient, new ObjectMapper(), minioService, sysUserMapper, kbChunkMapper,
                 accessMapper, outboxService, outboxProperties, documentProcessProperties);
         ReflectionTestUtils.setField(service, "baseMapper", documentMapper);
     }

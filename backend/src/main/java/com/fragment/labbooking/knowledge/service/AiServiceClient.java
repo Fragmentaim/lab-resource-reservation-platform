@@ -36,7 +36,24 @@ public interface AiServiceClient {
             String docVersion,
             List<String> chunkIds,
             List<String> vectorIds,
-            List<ChunkResult> chunks
+            List<ChunkResult> chunks,
+            ParseQuality parseQuality
+    ) {}
+
+    record ParseQuality(
+            String provider,
+            String providerVersion,
+            String parseMode,
+            Integer unitCount,
+            Integer nonEmptyUnitCount,
+            Integer characterCount,
+            Integer headingCount,
+            Integer tableCount,
+            Integer imageCount,
+            Integer scannedUnitCount,
+            Integer emptyUnitCount,
+            Double qualityScore,
+            List<String> warnings
     ) {}
 
     record ChunkResult(

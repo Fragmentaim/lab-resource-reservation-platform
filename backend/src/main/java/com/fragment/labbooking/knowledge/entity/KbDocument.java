@@ -45,6 +45,15 @@ public class KbDocument {
     @TableField(value = "chunk_count")
     private Integer chunkCount;
 
+    @TableField(value = "parser_provider")
+    private String parserProvider;
+
+    @TableField(value = "parser_version")
+    private String parserVersion;
+
+    @TableField(value = "parse_quality")
+    private String parseQuality;
+
     @TableField(value = "error_message")
     private String errorMessage;
 

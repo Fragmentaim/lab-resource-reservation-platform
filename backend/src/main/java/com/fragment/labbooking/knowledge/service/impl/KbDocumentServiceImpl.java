@@ -3,6 +3,7 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.auth.LoginUser;
@@ -70,6 +71,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     private int presignExpirySeconds;
 
     private final AiServiceClient aiServiceClient;
+    private final ObjectMapper objectMapper;
     private final MinioService minioService;
     private final SysUserMapper sysUserMapper;
     private final KbChunkMapper kbChunkMapper;
@@ -79,6 +81,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     private final DocumentProcessProperties documentProcessProperties;
 
     public KbDocumentServiceImpl(AiServiceClient aiServiceClient,
+                                 ObjectMapper objectMapper,
                                  MinioService minioService,
                                  SysUserMapper sysUserMapper,
                                  KbChunkMapper kbChunkMapper,
@@ -87,6 +90,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                                  MessageOutboxProperties outboxProperties,
                                  DocumentProcessProperties documentProcessProperties) {
         this.aiServiceClient = aiServiceClient;
+        this.objectMapper = objectMapper;
         this.minioService = minioService;
         this.sysUserMapper = sysUserMapper;
         this.kbChunkMapper = kbChunkMapper;
@@ -103,6 +107,9 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         validateFile(file);
         String fileName = normalizeFileName(file.getOriginalFilename());
         String fileType = extractFileType(fileName);
+        if (!StringUtils.hasText(fileType)) {
+            throw new BusinessException("暂不支持该文件类型；请上传 PDF、DOCX、XLSX、TXT、Markdown 或常见图片");
+        }
         String objectName = buildObjectName(fileName);
         String traceId = UUID.randomUUID().toString();
         boolean stored = false;
@@ -249,6 +256,9 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         String traceId = UUID.randomUUID().toString();
         doc.setStatus(DocumentStatusConstants.PENDING);
         doc.setDocVersion(nextDocVersion(doc.getDocVersion()));
+        doc.setParserProvider(null);
+        doc.setParserVersion(null);
+        doc.setParseQuality(null);
         doc.setErrorMessage(null);
         doc.setProcessTraceId(traceId);
         doc.setRetryCount(0);
@@ -311,6 +321,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             latest.setChunkCount(result.chunkCount());
             latest.setStatus(StringUtils.hasText(result.status()) ? result.status() : DocumentStatusConstants.READY);
             latest.setDocVersion(StringUtils.hasText(result.docVersion()) ? result.docVersion() : docVersion);
+            applyParseQuality(latest, result.parseQuality());
             latest.setErrorMessage(null);
             latest.setProcessFinishedAt(LocalDateTime.now());
             latest.setUpdatedAt(LocalDateTime.now());
@@ -423,6 +434,21 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             }
         }
         return vo;
+    }
+
+    private void applyParseQuality(KbDocument document, AiServiceClient.ParseQuality quality) {
+        if (quality == null) {
+            return;
+        }
+        document.setParserProvider(quality.provider());
+        document.setParserVersion(quality.providerVersion());
+        try {
+            document.setParseQuality(objectMapper.writeValueAsString(quality));
+        } catch (Exception exception) {
+            log.warn("Failed to serialize parse quality for document {}: {}",
+                    document.getId(), exception.getMessage());
+            document.setParseQuality(null);
+        }
     }
 
     private void applyAccessFilter(LambdaQueryWrapper<KbDocument> wrapper, LoginUser actor) {
@@ -660,18 +686,36 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
 
     private String extractFileType(String fileName) {
         if (fileName == null) {
-            return "TXT";
+            return null;
         }
         String lower = fileName.toLowerCase();
         if (lower.endsWith(".pdf")) {
             return "PDF";
         }
-        if (lower.endsWith(".docx") || lower.endsWith(".doc")) {
+        if (lower.endsWith(".docx")) {
             return "DOCX";
+        }
+        if (lower.endsWith(".xlsx")) {
+            return "XLSX";
+        }
+        if (lower.endsWith(".png")) {
+            return "PNG";
+        }
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+            return "JPG";
+        }
+        if (lower.endsWith(".bmp")) {
+            return "BMP";
+        }
+        if (lower.endsWith(".tif") || lower.endsWith(".tiff")) {
+            return "TIFF";
         }
         if (lower.endsWith(".md") || lower.endsWith(".markdown")) {
             return "MD";
         }
-        return "TXT";
+        if (lower.endsWith(".txt")) {
+            return "TXT";
+        }
+        return null;
     }
 }

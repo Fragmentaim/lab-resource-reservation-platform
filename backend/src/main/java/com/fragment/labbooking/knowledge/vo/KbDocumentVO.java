@@ -18,6 +18,9 @@ public class KbDocumentVO {
     private String status;
     private String docVersion;
     private Integer chunkCount;
+    private String parserProvider;
+    private String parserVersion;
+    private String parseQuality;
     private String errorMessage;
     private String processTraceId;
     private Integer retryCount;
