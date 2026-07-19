@@ -51,6 +51,14 @@ export function fetchMyReservationAssistantContext() {
   return api.get('/knowledge/tools/reservation-context/me')
 }
 
+export function fetchAgentRuns(params) {
+  return api.get('/knowledge/agent-runs', { params })
+}
+
+export function fetchAgentRunSteps(traceId) {
+  return api.get(`/knowledge/agent-runs/${traceId}/steps`)
+}
+
 export function findAvailableResourceSlots(params) {
   return api.get('/knowledge/tools/resource-availability', { params })
 }

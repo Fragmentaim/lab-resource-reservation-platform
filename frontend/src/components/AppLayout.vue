@@ -29,7 +29,8 @@ import {
   StatsChartOutline,
   NotificationsOutline,
   ChatbubblesOutline,
-  FolderOpenOutline
+  FolderOpenOutline,
+  GitNetworkOutline
 } from '@vicons/ionicons5'
 import { useUserStore } from '@/store/user'
 import { changePassword } from '@/api/auth'
@@ -54,6 +55,7 @@ const adminMenus = [
   { key: '/admin/resources', label: '资源与时段', icon: BusinessOutline },
   { key: '/admin/reservations', label: '预约管理', icon: BookOutline },
   { key: '/admin/dict', label: '字典管理', icon: SettingsOutline },
+  { key: '/admin/agent-runs', label: 'AI 执行轨迹', icon: GitNetworkOutline },
   { key: '/knowledge/documents', label: '知识库管理', icon: FolderOpenOutline }
 ]
 

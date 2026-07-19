@@ -87,6 +87,12 @@ const routes = [
     name: 'AdminDict',
     component: () => import('@/views/admin/Dict.vue'),
     meta: { title: '字典管理', admin: true }
+  },
+  {
+    path: '/admin/agent-runs',
+    name: 'AgentRuns',
+    component: () => import('@/views/admin/AgentRuns.vue'),
+    meta: { title: 'AI 执行轨迹', admin: true }
   }
 ]
 

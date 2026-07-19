@@ -19,6 +19,7 @@ import com.fragment.labbooking.knowledge.mapper.QaRecordMapper;
 import com.fragment.labbooking.knowledge.mapper.QaSessionMapper;
 import com.fragment.labbooking.knowledge.mapper.QaSourceMapper;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
+import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.AssistantToolRouter;
 import com.fragment.labbooking.knowledge.service.NativeToolCallingService;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
@@ -59,6 +60,9 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
 
     @Autowired
     private KbDocumentService kbDocumentService;
+
+    @Autowired
+    private AgentRunService agentRunService;
 
     @Autowired
     private KbDocumentMapper kbDocumentMapper;
@@ -126,6 +130,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         record.setTraceId(UUID.randomUUID().toString());
         record.setCreatedAt(LocalDateTime.now());
         save(record);
+        agentRunService.start(record);
 
         try {
             java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(dto.getQuestion(), actor);
@@ -169,6 +174,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
 
             saveSources(record.getId(), answer.getSources());
             saveContextTrace(record, dto.getQuestion(), answer);
+            agentRunService.finishRag(record, answer);
             updateSessionAfterAnswer(sessionId, userId, dto.getQuestion(), record.getTraceId());
             triggerSummaryRefresh(sessionId, userId);
 
@@ -181,6 +187,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             record.setStatus("FAILED");
             record.setAnswer("抱歉，问答服务暂时不可用: " + e.getMessage());
             updateById(record);
+            agentRunService.fail(record, e);
             throw e;
         }
     }
@@ -193,6 +200,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         record.setQuestionType(answer.getQuestionType());
         updateById(record);
         saveContextTrace(record, question, answer);
+        agentRunService.finishTool(record, answer);
         updateSessionAfterAnswer(sessionId, userId, question, record.getTraceId());
         triggerSummaryRefresh(sessionId, userId);
         answer.setRecordId(record.getId());
@@ -224,6 +232,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         record.setTraceId(UUID.randomUUID().toString());
         record.setCreatedAt(LocalDateTime.now());
         save(record);
+        agentRunService.start(record);
 
         StringBuilder answerBuilder = new StringBuilder();
         List<QaSourceVO> streamedSources = new ArrayList<>();
@@ -332,6 +341,12 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
 
             saveSources(record.getId(), streamedSources);
             saveContextTrace(record, dto.getQuestion(), rewrittenQuestion.get(), rewriteApplied.get(), contextStats.get());
+            QaAnswerVO streamedAnswer = new QaAnswerVO();
+            streamedAnswer.setLatencyMs(latencyMs[0]);
+            streamedAnswer.setModelName(modelName[0]);
+            streamedAnswer.setSources(streamedSources);
+            streamedAnswer.setContextStats(contextStats.get());
+            agentRunService.finishRag(record, streamedAnswer);
             updateSessionAfterAnswer(streamSessionId, userId, dto.getQuestion(), record.getTraceId());
             triggerSummaryRefresh(streamSessionId, userId);
 
@@ -350,6 +365,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             record.setStatus("FAILED");
             record.setAnswer("抱歉，问答服务暂时不可用: " + e.getMessage());
             updateById(record);
+            agentRunService.fail(record, e);
             log.error("Streaming QA failed for record {}: {}", record.getId(), e.getMessage());
             try {
                 sendEvent(emitter, event("error",
