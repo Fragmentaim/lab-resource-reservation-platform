@@ -23,6 +23,7 @@ import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 import com.fragment.labbooking.knowledge.vo.QaRecordVO;
+import com.fragment.labbooking.knowledge.vo.QaSessionVO;
 import com.fragment.labbooking.knowledge.vo.QaSourceVO;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -311,6 +312,36 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         Page<QaRecordVO> voPage = new Page<>(recordPage.getCurrent(), recordPage.getSize(), recordPage.getTotal());
         voPage.setRecords(records);
         return voPage;
+    }
+
+    @Override
+    public List<QaSessionVO> listSessions(Long userId) {
+        return qaSessionMapper.selectList(new LambdaQueryWrapper<QaSession>()
+                        .eq(QaSession::getUserId, userId)
+                        .eq(QaSession::getDeleted, false)
+                        .orderByDesc(QaSession::getLastMessageAt)
+                        .last("LIMIT 30"))
+                .stream()
+                .map(session -> {
+                    QaSessionVO vo = new QaSessionVO();
+                    vo.setSessionId(session.getSessionId());
+                    vo.setTitle(firstText(session.getTitle(), "新对话"));
+                    vo.setTurnCount(session.getTurnCount());
+                    vo.setLastMessageAt(session.getLastMessageAt());
+                    return vo;
+                })
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public void deleteSession(String sessionId, Long userId) {
+        QaSession session = qaSessionMapper.selectById(sessionId);
+        if (session == null || Boolean.TRUE.equals(session.getDeleted()) || !userId.equals(session.getUserId())) {
+            throw new BusinessException("会话不存在或无权访问");
+        }
+        session.setDeleted(true);
+        session.setUpdatedAt(LocalDateTime.now());
+        qaSessionMapper.updateById(session);
     }
 
     @Override

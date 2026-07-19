@@ -33,6 +33,14 @@ export function fetchKnowledgeRecords(params) {
   return api.get('/knowledge/qa/records', { params })
 }
 
+export function fetchKnowledgeSessions() {
+  return api.get('/knowledge/qa/sessions')
+}
+
+export function deleteKnowledgeSession(sessionId) {
+  return api.delete(`/knowledge/qa/sessions/${sessionId}`)
+}
+
 export function submitKnowledgeFeedback(payload) {
   return api.post('/knowledge/qa/feedback', payload)
 }

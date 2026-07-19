@@ -8,11 +8,14 @@ import com.fragment.labbooking.knowledge.dto.QaFeedbackDTO;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 import com.fragment.labbooking.knowledge.vo.QaRecordVO;
+import com.fragment.labbooking.knowledge.vo.QaSessionVO;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -21,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.List;
 
 @RestController
 @RequestMapping("/knowledge/qa")
@@ -52,6 +56,17 @@ public class QaController {
             @RequestParam(required = false) String sessionId) {
         Long userId = UserContext.requireUser().getId();
         return Result.success(qaRecordService.pageRecords(pageNum, pageSize, sessionId, userId));
+    }
+
+    @GetMapping("/sessions")
+    public Result<List<QaSessionVO>> sessions() {
+        return Result.success(qaRecordService.listSessions(UserContext.requireUser().getId()));
+    }
+
+    @DeleteMapping("/sessions/{sessionId}")
+    public Result<Void> deleteSession(@PathVariable String sessionId) {
+        qaRecordService.deleteSession(sessionId, UserContext.requireUser().getId());
+        return Result.success();
     }
 
     @PostMapping("/feedback")
