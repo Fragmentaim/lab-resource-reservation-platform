@@ -9,6 +9,7 @@ import com.fragment.labbooking.knowledge.dto.DocumentUpdateDTO;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.vo.DocumentProcessStatusVO;
+import com.fragment.labbooking.knowledge.vo.DocumentProcessEventVO;
 import com.fragment.labbooking.knowledge.vo.KbDocumentVO;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -59,6 +60,12 @@ public class KbDocumentController {
     @GetMapping("/{id}/status")
     public Result<DocumentProcessStatusVO> status(@PathVariable Long id) {
         return Result.success(kbDocumentService.getDocumentStatus(id, UserContext.requireUser()));
+    }
+
+    @GetMapping("/{id}/process-events")
+    @AdminOnly
+    public Result<List<DocumentProcessEventVO>> processEvents(@PathVariable Long id) {
+        return Result.success(kbDocumentService.listProcessEvents(id, UserContext.requireUser()));
     }
 
     @PutMapping("/{id}")

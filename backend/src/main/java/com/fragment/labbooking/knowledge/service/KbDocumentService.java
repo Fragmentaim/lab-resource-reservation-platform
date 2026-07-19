@@ -6,6 +6,7 @@ import com.fragment.labbooking.knowledge.dto.DocumentPageQueryDTO;
 import com.fragment.labbooking.knowledge.dto.DocumentUpdateDTO;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
 import com.fragment.labbooking.knowledge.vo.DocumentProcessStatusVO;
+import com.fragment.labbooking.knowledge.vo.DocumentProcessEventVO;
 import com.fragment.labbooking.knowledge.vo.KbDocumentVO;
 import com.fragment.labbooking.common.auth.LoginUser;
 import org.springframework.web.multipart.MultipartFile;
@@ -22,6 +23,8 @@ public interface KbDocumentService extends IService<KbDocument> {
     KbDocumentVO getDocumentDetail(Long id, LoginUser actor);
 
     DocumentProcessStatusVO getDocumentStatus(Long id, LoginUser actor);
+
+    List<DocumentProcessEventVO> listProcessEvents(Long id, LoginUser actor);
 
     void updateDocument(DocumentUpdateDTO dto);
 

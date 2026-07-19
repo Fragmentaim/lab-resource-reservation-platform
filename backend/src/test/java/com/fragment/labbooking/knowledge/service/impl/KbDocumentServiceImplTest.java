@@ -12,13 +12,16 @@ import com.fragment.labbooking.knowledge.common.constants.DocumentStatusConstant
 import com.fragment.labbooking.knowledge.common.constants.DocumentVisibilityConstants;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
 import com.fragment.labbooking.knowledge.entity.KbDocumentAccess;
+import com.fragment.labbooking.knowledge.entity.KbDocumentProcessEvent;
 import com.fragment.labbooking.knowledge.mapper.KbChunkMapper;
 import com.fragment.labbooking.knowledge.mapper.KbDocumentAccessMapper;
 import com.fragment.labbooking.knowledge.mapper.KbDocumentMapper;
+import com.fragment.labbooking.knowledge.mapper.KbDocumentProcessEventMapper;
 import com.fragment.labbooking.knowledge.mq.DocumentProcessProperties;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.MinioService;
 import com.fragment.labbooking.mapper.SysUserMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -48,6 +51,7 @@ class KbDocumentServiceImplTest {
     @Mock private MessageOutboxProperties outboxProperties;
     @Mock private DocumentProcessProperties documentProcessProperties;
     @Mock private KbDocumentMapper documentMapper;
+    @Mock private KbDocumentProcessEventMapper processEventMapper;
 
     private KbDocumentServiceImpl service;
 
@@ -56,8 +60,10 @@ class KbDocumentServiceImplTest {
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
         TableInfoHelper.initTableInfo(assistant, KbDocument.class);
         TableInfoHelper.initTableInfo(assistant, KbDocumentAccess.class);
+        TableInfoHelper.initTableInfo(assistant, KbDocumentProcessEvent.class);
         service = new KbDocumentServiceImpl(aiServiceClient, minioService, sysUserMapper, kbChunkMapper,
-                accessMapper, outboxService, outboxProperties, documentProcessProperties);
+                accessMapper, processEventMapper, outboxService, outboxProperties, documentProcessProperties,
+                new ObjectMapper());
         ReflectionTestUtils.setField(service, "baseMapper", documentMapper);
     }
 
@@ -104,6 +110,24 @@ class KbDocumentServiceImplTest {
         when(sysUserMapper.selectById(100L)).thenReturn(uploader);
 
         assertThat(service.getDocumentDetail(11L, user(7L)).getTitle()).isEqualTo("实验室规程");
+    }
+
+    @Test
+    void shouldExposeOnlyMetadataWhenListingProcessEvents() {
+        KbDocument document = document(11L, DocumentVisibilityConstants.PUBLIC, 100L);
+        when(documentMapper.selectById(11L)).thenReturn(document);
+        KbDocumentProcessEvent event = new KbDocumentProcessEvent();
+        event.setStage("COMPLETED");
+        event.setStatus("SUCCEEDED");
+        event.setMessage("文档已完成处理，可以参与问答");
+        event.setDetailJson("{\"chunk_count\":3}");
+        when(processEventMapper.selectList(any())).thenReturn(List.of(event));
+
+        var events = service.listProcessEvents(11L, user(7L));
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getDetail()).containsEntry("chunk_count", 3);
+        assertThat(events.get(0).getMessage()).doesNotContain("实验室规程");
     }
 
     private KbDocument document(Long id, String visibility, Long uploaderId) {

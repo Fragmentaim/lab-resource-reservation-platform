@@ -16,16 +16,21 @@ import com.fragment.labbooking.knowledge.dto.DocumentUpdateDTO;
 import com.fragment.labbooking.knowledge.entity.KbChunk;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
 import com.fragment.labbooking.knowledge.entity.KbDocumentAccess;
+import com.fragment.labbooking.knowledge.entity.KbDocumentProcessEvent;
 import com.fragment.labbooking.knowledge.mapper.KbChunkMapper;
 import com.fragment.labbooking.knowledge.mapper.KbDocumentAccessMapper;
 import com.fragment.labbooking.knowledge.mapper.KbDocumentMapper;
+import com.fragment.labbooking.knowledge.mapper.KbDocumentProcessEventMapper;
 import com.fragment.labbooking.knowledge.mq.DocumentProcessProperties;
 import com.fragment.labbooking.knowledge.mq.DocumentProcessMessage;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.service.MinioService;
 import com.fragment.labbooking.knowledge.vo.DocumentProcessStatusVO;
+import com.fragment.labbooking.knowledge.vo.DocumentProcessEventVO;
 import com.fragment.labbooking.knowledge.vo.KbDocumentVO;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.mapper.SysUserMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
@@ -45,8 +50,11 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -74,26 +82,32 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     private final SysUserMapper sysUserMapper;
     private final KbChunkMapper kbChunkMapper;
     private final KbDocumentAccessMapper kbDocumentAccessMapper;
+    private final KbDocumentProcessEventMapper processEventMapper;
     private final MessageOutboxService outboxService;
     private final MessageOutboxProperties outboxProperties;
     private final DocumentProcessProperties documentProcessProperties;
+    private final ObjectMapper objectMapper;
 
     public KbDocumentServiceImpl(AiServiceClient aiServiceClient,
                                  MinioService minioService,
                                  SysUserMapper sysUserMapper,
                                  KbChunkMapper kbChunkMapper,
                                  KbDocumentAccessMapper kbDocumentAccessMapper,
+                                 KbDocumentProcessEventMapper processEventMapper,
                                  MessageOutboxService outboxService,
                                  MessageOutboxProperties outboxProperties,
-                                 DocumentProcessProperties documentProcessProperties) {
+                                 DocumentProcessProperties documentProcessProperties,
+                                 ObjectMapper objectMapper) {
         this.aiServiceClient = aiServiceClient;
         this.minioService = minioService;
         this.sysUserMapper = sysUserMapper;
         this.kbChunkMapper = kbChunkMapper;
         this.kbDocumentAccessMapper = kbDocumentAccessMapper;
+        this.processEventMapper = processEventMapper;
         this.outboxService = outboxService;
         this.outboxProperties = outboxProperties;
         this.documentProcessProperties = documentProcessProperties;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -134,6 +148,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             doc.setUpdatedAt(now);
             save(doc);
             replaceAccessRules(doc, allowedUserIds);
+            recordProcessEvent(doc, 0, "QUEUED", "PENDING", "文档已上传，等待异步处理", Map.of());
 
             enqueueDocumentProcess(doc.getId(), traceId);
             return toVO(doc);
@@ -262,6 +277,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         doc.setProcessFinishedAt(null);
         doc.setUpdatedAt(LocalDateTime.now());
         updateById(doc);
+        recordProcessEvent(doc, 0, "QUEUED", "PENDING", "管理员请求重新处理，等待异步 worker", Map.of());
         enqueueDocumentProcess(id, traceId);
     }
 
@@ -302,12 +318,18 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             }
             String docVersion = StringUtils.hasText(claimed.getDocVersion()) ? claimed.getDocVersion() : "v1";
 
+            recordProcessEvent(claimed, attempt, "CLAIMED", "RUNNING", "处理任务已被 worker 获取", Map.of());
+            recordProcessEvent(claimed, attempt, "VECTOR_CLEANUP", "RUNNING", "清理当前文档的旧向量与旧分块", Map.of());
             aiServiceClient.deleteDocumentVectors(documentId);
             deleteChunks(documentId);
+            recordProcessEvent(claimed, attempt, "PARSING", "RUNNING", "调用 AI 服务解析、分块、向量化",
+                    Map.of("file_type", claimed.getFileType()));
             AiServiceClient.ProcessResult result = processStoredFile(claimed, docVersion);
             if (result == null) {
                 throw new BusinessException("AI-service 返回空处理结果");
             }
+            recordProcessEvent(claimed, attempt, "PERSISTING_CHUNKS", "RUNNING", "持久化文档分块和来源元数据",
+                    Map.of("chunk_count", result.chunkCount()));
             saveChunks(documentId, result);
 
             KbDocument latest = getById(documentId);
@@ -322,11 +344,20 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             latest.setProcessFinishedAt(LocalDateTime.now());
             latest.setUpdatedAt(LocalDateTime.now());
             updateById(latest);
+            recordProcessEvent(latest, attempt, "COMPLETED", "SUCCEEDED", "文档已完成处理，可以参与问答",
+                    completionDetail(latest, result));
             log.info("Document processing completed: id={}, docVersion={}, chunks={}",
                     documentId, latest.getDocVersion(), result.chunkCount());
         } catch (Exception e) {
             boolean finalAttempt = attempt >= Math.max(1, documentProcessProperties.getMaxRetryAttempts());
             markProcessingFailed(documentId, finalAttempt, e.getMessage());
+            KbDocument failed = getById(documentId);
+            if (failed != null) {
+                recordProcessEvent(failed, attempt, finalAttempt ? "FAILED" : "RETRY_PENDING",
+                        finalAttempt ? "FAILED" : "PENDING",
+                        finalAttempt ? "处理失败，已达到最大重试次数" : "本次处理失败，等待消息队列重试",
+                        Map.of("error", StringUtils.hasText(e.getMessage()) ? truncateError(e.getMessage()) : "未知错误"));
+            }
             log.error("Document processing failed: id={}, attempt={}, finalAttempt={}, error={}",
                     documentId, attempt, finalAttempt, e.getMessage());
             if (!finalAttempt) {
@@ -432,6 +463,22 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         return vo;
     }
 
+    @Override
+    public List<DocumentProcessEventVO> listProcessEvents(Long id, LoginUser actor) {
+        KbDocument doc = getById(id);
+        if (doc == null) {
+            throw new BusinessException("文档不存在");
+        }
+        assertCanRead(doc, actor);
+        return processEventMapper.selectList(new LambdaQueryWrapper<KbDocumentProcessEvent>()
+                        .eq(KbDocumentProcessEvent::getDocumentId, id)
+                        .orderByAsc(KbDocumentProcessEvent::getCreatedAt)
+                        .orderByAsc(KbDocumentProcessEvent::getId))
+                .stream()
+                .map(this::toProcessEventVO)
+                .toList();
+    }
+
     private void applyParseQuality(KbDocument document, AiServiceClient.ParseQuality quality) {
         if (quality == null) {
             return;
@@ -439,6 +486,64 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         document.setParserProvider(quality.provider());
         document.setParserVersion(quality.providerVersion());
         document.setParseQuality(quality.reportJson());
+    }
+
+    private Map<String, Object> completionDetail(KbDocument document, AiServiceClient.ProcessResult result) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("chunk_count", result.chunkCount());
+        detail.put("parser_provider", document.getParserProvider());
+        detail.put("parser_version", document.getParserVersion());
+        detail.put("document_status", document.getStatus());
+        return detail;
+    }
+
+    private void recordProcessEvent(KbDocument document, int attempt, String stage, String status,
+                                    String message, Map<String, Object> detail) {
+        if (document == null || document.getId() == null || !StringUtils.hasText(document.getProcessTraceId())) {
+            return;
+        }
+        try {
+            KbDocumentProcessEvent event = new KbDocumentProcessEvent();
+            event.setDocumentId(document.getId());
+            event.setDocVersion(StringUtils.hasText(document.getDocVersion()) ? document.getDocVersion() : "v1");
+            event.setTraceId(document.getProcessTraceId());
+            event.setAttempt(Math.max(0, attempt));
+            event.setStage(truncateAudit(stage, 32));
+            event.setStatus(truncateAudit(status, 16));
+            event.setMessage(truncateAudit(message, 512));
+            event.setDetailJson(detail == null || detail.isEmpty() ? null : objectMapper.writeValueAsString(detail));
+            event.setCreatedAt(LocalDateTime.now());
+            processEventMapper.insert(event);
+        } catch (Exception exception) {
+            // An unavailable audit table must not prevent the document from becoming searchable.
+            log.warn("Unable to persist document process audit. documentId={}, stage={}, error={}",
+                    document.getId(), stage, exception.getMessage());
+        }
+    }
+
+    private DocumentProcessEventVO toProcessEventVO(KbDocumentProcessEvent event) {
+        DocumentProcessEventVO vo = new DocumentProcessEventVO();
+        BeanUtils.copyProperties(event, vo);
+        vo.setDetail(parseAuditDetail(event.getDetailJson()));
+        return vo;
+    }
+
+    private Map<String, Object> parseAuditDetail(String json) {
+        if (!StringUtils.hasText(json)) {
+            return Collections.emptyMap();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() { });
+        } catch (Exception exception) {
+            return Map.of("unparsed_detail", json);
+        }
+    }
+
+    private String truncateAudit(String value, int maxLength) {
+        if (!StringUtils.hasText(value)) {
+            return "-";
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 
     private void applyAccessFilter(LambdaQueryWrapper<KbDocument> wrapper, LoginUser actor) {
