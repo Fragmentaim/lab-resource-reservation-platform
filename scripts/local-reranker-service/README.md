@@ -26,6 +26,10 @@ The launcher uses the existing D: package/cache/model locations and requires an
 NVIDIA CUDA-capable PyTorch installation. The service refuses CPU fallback so a
 "local GPU reranker" never silently becomes a slow CPU dependency.
 
+It also runs Python with `-s` / `PYTHONNOUSERSITE=1`, preventing accidental C:
+user-site packages from mixing with the portable D: dependency directory. Use
+the same isolation when starting a local embedding worker.
+
 To let the external knowledge service use it, set its ignored local environment
 file to the following non-secret values, then restart that service:
 
