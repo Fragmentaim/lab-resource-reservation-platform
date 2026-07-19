@@ -413,7 +413,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             trace.setTotalPromptTokens(intValue(stats, "total_prompt_tokens"));
             trace.setSelectedSourceCount(intValue(stats, "selected_source_count"));
             trace.setDroppedSourceCount(intValue(stats, "dropped_source_count"));
-            trace.setContextJson(truncateJson(objectMapper.writeValueAsString(stats), 12000));
+            trace.setContextJson(com.fragment.labbooking.common.util.TruncateUtil.truncate(objectMapper.writeValueAsString(stats), 12000));
             trace.setCreatedAt(LocalDateTime.now());
             qaContextTraceMapper.insert(trace);
         } catch (Exception e) {
@@ -612,13 +612,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             }
         }
         return 0;
-    }
-
-    private String truncateJson(String json, int maxLength) {
-        if (json == null || json.length() <= maxLength) {
-            return json;
-        }
-        return json.substring(0, maxLength);
     }
 
     private Map<String, Object> event(String type, Object... kvPairs) {

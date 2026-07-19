@@ -13,6 +13,7 @@ import com.fragment.labbooking.knowledge.entity.AgentRun;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
 import com.fragment.labbooking.knowledge.entity.QaContextTrace;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
+import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.knowledge.mapper.AgentRunMapper;
 import com.fragment.labbooking.knowledge.mapper.AgentStepMapper;
 import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
@@ -315,11 +316,11 @@ public class AgentRunServiceImpl implements AgentRunService {
         AgentStep step = new AgentStep();
         step.setAgentRunId(runId);
         step.setStepNo(stepNo);
-        step.setStepType(truncate(type, 32));
-        step.setName(truncate(name, 64));
-        step.setStatus(truncate(status, 16));
+        step.setStepType(TruncateUtil.truncate(type, 32));
+        step.setName(TruncateUtil.truncate(name, 64));
+        step.setStatus(TruncateUtil.truncate(status, 16));
         step.setLatencyMs(Math.max(0, latencyMs));
-        step.setToolTraceId(truncate(toolTraceId, 64));
+        step.setToolTraceId(TruncateUtil.truncate(toolTraceId, 64));
         step.setDetailJson(detailJson(detail));
         step.setCreatedAt(LocalDateTime.now());
         agentStepMapper.insert(step);
@@ -358,7 +359,7 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     private String detailJson(Map<String, Object> detail) {
         try {
-            return truncate(objectMapper.writeValueAsString(detail == null ? Collections.emptyMap() : detail), 2000);
+            return TruncateUtil.truncate(objectMapper.writeValueAsString(detail == null ? Collections.emptyMap() : detail), 2000);
         } catch (Exception exception) {
             return "{}";
         }
@@ -401,14 +402,7 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     private String safeText(Object value) {
-        return value == null ? "" : truncate(String.valueOf(value), 256);
-    }
-
-    private String truncate(String text, int maxLength) {
-        if (text == null || text.length() <= maxLength) {
-            return text;
-        }
-        return text.substring(0, maxLength);
+        return value == null ? "" : TruncateUtil.truncate(String.valueOf(value), 256);
     }
 
     private record StepData(String type, String name, String status, int latencyMs,

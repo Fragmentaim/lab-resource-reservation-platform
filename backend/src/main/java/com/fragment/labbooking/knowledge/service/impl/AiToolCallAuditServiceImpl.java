@@ -3,6 +3,7 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fragment.labbooking.common.auth.LoginUser;
+import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.knowledge.entity.AiToolCallLog;
 import com.fragment.labbooking.knowledge.mapper.AiToolCallLogMapper;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
@@ -66,16 +67,16 @@ public class AiToolCallAuditServiceImpl implements AiToolCallAuditService {
                                    String accessScope, String result, long latencyMs,
                                    String parameterSummary, String errorMessage) {
         AiToolCallLog logEntry = new AiToolCallLog();
-        logEntry.setTraceId(truncate(traceId, 64));
-        logEntry.setToolName(truncate(toolName, 64));
+        logEntry.setTraceId(TruncateUtil.truncate(traceId, 64));
+        logEntry.setToolName(TruncateUtil.truncate(toolName, 64));
         logEntry.setActorUserId(actor == null ? null : actor.getId());
-        logEntry.setActorRole(actor == null ? null : truncate(actor.getRole(), 32));
+        logEntry.setActorRole(actor == null ? null : TruncateUtil.truncate(actor.getRole(), 32));
         logEntry.setSubjectUserId(subjectUserId);
-        logEntry.setAccessScope(truncate(accessScope, 32));
+        logEntry.setAccessScope(TruncateUtil.truncate(accessScope, 32));
         logEntry.setResult(result);
         logEntry.setLatencyMs(Math.max(latencyMs, 0));
-        logEntry.setParameterSummary(truncate(parameterSummary, 512));
-        logEntry.setErrorMessage(truncate(errorMessage, 512));
+        logEntry.setParameterSummary(TruncateUtil.truncate(parameterSummary, 512));
+        logEntry.setErrorMessage(TruncateUtil.truncate(errorMessage, 512));
         logEntry.setCreatedAt(LocalDateTime.now());
         return logEntry;
     }
@@ -84,12 +85,5 @@ public class AiToolCallAuditServiceImpl implements AiToolCallAuditService {
         AiToolCallLogVO vo = new AiToolCallLogVO();
         BeanUtils.copyProperties(logEntry, vo);
         return vo;
-    }
-
-    private String truncate(String value, int maxLength) {
-        if (value == null || value.length() <= maxLength) {
-            return value;
-        }
-        return value.substring(0, maxLength);
     }
 }

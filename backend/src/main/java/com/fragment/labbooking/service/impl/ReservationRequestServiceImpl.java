@@ -18,6 +18,7 @@ import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationCreateEvent;
 import com.fragment.labbooking.common.reservation.ReservationMqPublisher;
 import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
+import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationRequest;
 import com.fragment.labbooking.entity.Resource;
@@ -138,7 +139,7 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                 .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.FAILED)
                 .set(ReservationRequest::getActiveKey, null)
-                .set(ReservationRequest::getFailReason, truncate(failReason, 255))
+                .set(ReservationRequest::getFailReason, TruncateUtil.truncate(failReason, 255))
                 .set(ReservationRequest::getCompletedAt, now)
                 .set(ReservationRequest::getUpdatedAt, now));
         if (updatedRows > 0) {
@@ -282,19 +283,12 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                 .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PROCESSING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.FAILED)
                 .set(ReservationRequest::getActiveKey, null)
-                .set(ReservationRequest::getFailReason, truncate(reason, 255))
+                .set(ReservationRequest::getFailReason, TruncateUtil.truncate(reason, 255))
                 .set(ReservationRequest::getCompletedAt, now)
                 .set(ReservationRequest::getUpdatedAt, now));
         if (updatedRows > 0) {
             hotReservationRedisService.releaseAfterCommit(request.getSourceType(), request.getSlotId(), request.getUserId());
         }
-    }
-
-    private String truncate(String text, int maxLength) {
-        if (text == null) {
-            return null;
-        }
-        return text.length() <= maxLength ? text : text.substring(0, maxLength);
     }
 
     private ReservationRequest tryStartProcessing(String requestNo) {

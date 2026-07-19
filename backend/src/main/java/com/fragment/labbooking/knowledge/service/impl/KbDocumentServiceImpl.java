@@ -8,6 +8,7 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.outbox.MessageOutboxProperties;
+import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.entity.SysUser;
 import com.fragment.labbooking.knowledge.common.constants.DocumentStatusConstants;
 import com.fragment.labbooking.knowledge.common.constants.DocumentVisibilityConstants;
@@ -356,7 +357,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                 recordProcessEvent(failed, attempt, finalAttempt ? "FAILED" : "RETRY_PENDING",
                         finalAttempt ? "FAILED" : "PENDING",
                         finalAttempt ? "处理失败，已达到最大重试次数" : "本次处理失败，等待消息队列重试",
-                        Map.of("error", StringUtils.hasText(e.getMessage()) ? truncateError(e.getMessage()) : "未知错误"));
+                        Map.of("error", org.springframework.util.StringUtils.hasText(e.getMessage()) ? TruncateUtil.truncate(e.getMessage(), 512) : "未知错误"));
             }
             log.error("Document processing failed: id={}, attempt={}, finalAttempt={}, error={}",
                     documentId, attempt, finalAttempt, e.getMessage());
@@ -419,7 +420,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             return;
         }
         failed.setStatus(finalAttempt ? DocumentStatusConstants.FAILED : DocumentStatusConstants.PENDING);
-        failed.setErrorMessage(truncateError("文档异步处理失败: " + errorMessage));
+        failed.setErrorMessage(TruncateUtil.truncate("文档异步处理失败: " + errorMessage, 512));
         failed.setProcessFinishedAt(finalAttempt ? now : null);
         failed.setUpdatedAt(now);
         updateById(failed);
@@ -508,9 +509,9 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             event.setDocVersion(StringUtils.hasText(document.getDocVersion()) ? document.getDocVersion() : "v1");
             event.setTraceId(document.getProcessTraceId());
             event.setAttempt(Math.max(0, attempt));
-            event.setStage(truncateAudit(stage, 32));
-            event.setStatus(truncateAudit(status, 16));
-            event.setMessage(truncateAudit(message, 512));
+            event.setStage(org.springframework.util.StringUtils.hasText(stage) ? TruncateUtil.truncate(stage, 32) : "-");
+            event.setStatus(org.springframework.util.StringUtils.hasText(status) ? TruncateUtil.truncate(status, 16) : "-");
+            event.setMessage(org.springframework.util.StringUtils.hasText(message) ? TruncateUtil.truncate(message, 512) : "-");
             event.setDetailJson(detail == null || detail.isEmpty() ? null : objectMapper.writeValueAsString(detail));
             event.setCreatedAt(LocalDateTime.now());
             processEventMapper.insert(event);
@@ -537,13 +538,6 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         } catch (Exception exception) {
             return Map.of("unparsed_detail", json);
         }
-    }
-
-    private String truncateAudit(String value, int maxLength) {
-        if (!StringUtils.hasText(value)) {
-            return "-";
-        }
-        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 
     private void applyAccessFilter(LambdaQueryWrapper<KbDocument> wrapper, LoginUser actor) {
@@ -705,13 +699,6 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             return "v" + (current + 1);
         }
         return "v" + System.currentTimeMillis();
-    }
-
-    private String truncateError(String message) {
-        if (message == null) {
-            return null;
-        }
-        return message.length() <= 512 ? message : message.substring(0, 512);
     }
 
     private void validateFile(MultipartFile file) {

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.entity.MessageOutbox;
 import com.fragment.labbooking.mapper.MessageOutboxMapper;
+import com.fragment.labbooking.common.util.TruncateUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -120,7 +121,7 @@ public class MessageOutboxService {
                 .set(MessageOutbox::getStatus, STATUS_PENDING)
                 .set(MessageOutbox::getRetryCount, outbox.getRetryCount() == null ? 1 : outbox.getRetryCount() + 1)
                 .set(MessageOutbox::getLockedUntil, null)
-                .set(MessageOutbox::getLastErrorMessage, truncate(errorMessage))
+                .set(MessageOutbox::getLastErrorMessage, TruncateUtil.truncate(errorMessage, 512))
                 .set(MessageOutbox::getUpdatedAt, now));
     }
 
@@ -157,10 +158,4 @@ public class MessageOutboxService {
         return outbox;
     }
 
-    private String truncate(String text) {
-        if (text == null) {
-            return null;
-        }
-        return text.length() <= 512 ? text : text.substring(0, 512);
-    }
 }

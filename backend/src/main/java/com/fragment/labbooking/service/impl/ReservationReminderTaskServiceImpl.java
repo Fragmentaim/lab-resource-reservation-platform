@@ -8,6 +8,7 @@ import com.fragment.labbooking.common.delay.DelayMessageTags;
 import com.fragment.labbooking.common.delay.ReservationReminderDelayPayload;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.outbox.MessageOutboxService;
+import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationReminderTask;
 import com.fragment.labbooking.mapper.ReservationReminderTaskMapper;
@@ -142,7 +143,7 @@ public class ReservationReminderTaskServiceImpl extends ServiceImpl<ReservationR
                 .eq(ReservationReminderTask::getId, task.getId())
                 .eq(ReservationReminderTask::getStatus, STATUS_PENDING)
                 .set(ReservationReminderTask::getRetryCount, task.getRetryCount() == null ? 1 : task.getRetryCount() + 1)
-                .set(ReservationReminderTask::getLastErrorMessage, truncate(errorMessage))
+                .set(ReservationReminderTask::getLastErrorMessage, TruncateUtil.truncate(errorMessage, 512))
                 .set(ReservationReminderTask::getUpdatedAt, now);
         this.update(updateWrapper);
     }
@@ -160,10 +161,4 @@ public class ReservationReminderTaskServiceImpl extends ServiceImpl<ReservationR
                 + " 开始，请按时到场。";
     }
 
-    private String truncate(String text) {
-        if (text == null) {
-            return null;
-        }
-        return text.length() <= 512 ? text : text.substring(0, 512);
-    }
 }
