@@ -6,10 +6,13 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
+import com.fragment.labbooking.knowledge.entity.QaContextTrace;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.knowledge.mapper.AgentRunMapper;
 import com.fragment.labbooking.knowledge.mapper.AgentStepMapper;
+import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
+import com.fragment.labbooking.knowledge.vo.ContextTraceVO;
 import com.fragment.labbooking.knowledge.vo.AgentRunVO;
 import com.fragment.labbooking.knowledge.vo.AgentStepVO;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
@@ -39,12 +42,15 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     private final AgentRunMapper agentRunMapper;
     private final AgentStepMapper agentStepMapper;
+    private final QaContextTraceMapper qaContextTraceMapper;
     private final ObjectMapper objectMapper;
 
     public AgentRunServiceImpl(AgentRunMapper agentRunMapper, AgentStepMapper agentStepMapper,
+                               QaContextTraceMapper qaContextTraceMapper,
                                ObjectMapper objectMapper) {
         this.agentRunMapper = agentRunMapper;
         this.agentStepMapper = agentStepMapper;
+        this.qaContextTraceMapper = qaContextTraceMapper;
         this.objectMapper = objectMapper;
     }
 
@@ -128,6 +134,30 @@ public class AgentRunServiceImpl implements AgentRunService {
                 .stream()
                 .map(this::toStepVO)
                 .toList();
+    }
+
+    @Override
+    public ContextTraceVO getContextTrace(String traceId) {
+        if (!StringUtils.hasText(traceId)) {
+            return null;
+        }
+        QaContextTrace trace = qaContextTraceMapper.selectOne(new LambdaQueryWrapper<QaContextTrace>()
+                .eq(QaContextTrace::getTraceId, traceId)
+                .last("LIMIT 1"));
+        if (trace == null) {
+            return null;
+        }
+        ContextTraceVO vo = new ContextTraceVO();
+        vo.setTraceId(trace.getTraceId());
+        vo.setRewriteApplied(Boolean.TRUE.equals(trace.getRewriteApplied()));
+        vo.setSummaryTokens(safeMetric(trace.getSummaryTokens()));
+        vo.setHistoryTokens(safeMetric(trace.getHistoryTokens()));
+        vo.setEvidenceTokens(safeMetric(trace.getEvidenceTokens()));
+        vo.setTotalPromptTokens(safeMetric(trace.getTotalPromptTokens()));
+        vo.setSelectedSourceCount(safeMetric(trace.getSelectedSourceCount()));
+        vo.setDroppedSourceCount(safeMetric(trace.getDroppedSourceCount()));
+        vo.setCreatedAt(trace.getCreatedAt());
+        return vo;
     }
 
     private void finish(QaRecord record, QaAnswerVO answer, String route, List<StepData> steps, int sourceCount) {
@@ -273,6 +303,10 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     private int safeLatency(Integer latencyMs) {
         return latencyMs == null ? 0 : Math.max(0, latencyMs);
+    }
+
+    private int safeMetric(Integer value) {
+        return value == null ? 0 : Math.max(0, value);
     }
 
     private int intValue(Object value) {

@@ -59,6 +59,10 @@ export function fetchAgentRunSteps(traceId) {
   return api.get(`/knowledge/agent-runs/${traceId}/steps`)
 }
 
+export function fetchAgentRunContext(traceId) {
+  return api.get(`/knowledge/agent-runs/${traceId}/context`)
+}
+
 export function findAvailableResourceSlots(params) {
   return api.get('/knowledge/tools/resource-availability', { params })
 }

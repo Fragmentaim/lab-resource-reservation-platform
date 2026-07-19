@@ -6,6 +6,7 @@ import com.fragment.labbooking.common.result.Result;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.vo.AgentRunVO;
 import com.fragment.labbooking.knowledge.vo.AgentStepVO;
+import com.fragment.labbooking.knowledge.vo.ContextTraceVO;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -38,5 +39,10 @@ public class AgentRunController {
     @GetMapping("/{traceId}/steps")
     public Result<List<AgentStepVO>> steps(@PathVariable String traceId) {
         return Result.success(agentRunService.listSteps(traceId));
+    }
+
+    @GetMapping("/{traceId}/context")
+    public Result<ContextTraceVO> context(@PathVariable String traceId) {
+        return Result.success(agentRunService.getContextTrace(traceId));
     }
 }

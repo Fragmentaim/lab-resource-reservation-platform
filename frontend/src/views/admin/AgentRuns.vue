@@ -5,7 +5,7 @@ import {
   NSpace, NTag, useMessage
 } from 'naive-ui'
 import { FlashOutline, GitNetworkOutline, PulseOutline, ReloadOutline } from '@vicons/ionicons5'
-import { fetchAgentRunSteps, fetchAgentRuns } from '@/api/knowledge'
+import { fetchAgentRunContext, fetchAgentRunSteps, fetchAgentRuns } from '@/api/knowledge'
 
 const message = useMessage()
 const loading = ref(false)
@@ -19,6 +19,7 @@ const showDetail = ref(false)
 const selectedRun = ref(null)
 const steps = ref([])
 const stepsLoading = ref(false)
+const contextTrace = ref(null)
 
 const routeOptions = [
   { label: '全部路径', value: null },
@@ -81,10 +82,16 @@ async function loadRuns() {
 async function inspectRun(run) {
   selectedRun.value = run
   steps.value = []
+  contextTrace.value = null
   showDetail.value = true
   try {
     stepsLoading.value = true
-    steps.value = await fetchAgentRunSteps(run.traceId)
+    const [runSteps, trace] = await Promise.all([
+      fetchAgentRunSteps(run.traceId),
+      fetchAgentRunContext(run.traceId)
+    ])
+    steps.value = runSteps
+    contextTrace.value = trace || null
   } catch (error) {
     message.error(error.message || '加载执行步骤失败')
   } finally {
@@ -149,6 +156,18 @@ onMounted(loadRuns)
           <div><span>总耗时</span><b>{{ formatLatency(selectedRun.totalLatencyMs) }}</b></div>
           <div><span>Trace ID</span><code>{{ selectedRun.traceId }}</code></div>
         </div>
+        <section v-if="contextTrace" class="context-card">
+          <div class="context-card-head"><span>CONTEXT GOVERNANCE</span><n-tag :type="contextTrace.rewriteApplied ? 'info' : 'default'" size="small" :bordered="false">{{ contextTrace.rewriteApplied ? '问题已改写' : '原问题直通' }}</n-tag></div>
+          <p>只展示上下文预算与证据决策，不展示会话正文、回答或知识片段。</p>
+          <div class="context-metrics">
+            <div><small>摘要</small><strong>{{ contextTrace.summaryTokens }}</strong><span>tokens</span></div>
+            <div><small>历史</small><strong>{{ contextTrace.historyTokens }}</strong><span>tokens</span></div>
+            <div><small>证据</small><strong>{{ contextTrace.evidenceTokens }}</strong><span>tokens</span></div>
+            <div><small>总提示词</small><strong>{{ contextTrace.totalPromptTokens }}</strong><span>tokens</span></div>
+            <div><small>采用证据</small><strong>{{ contextTrace.selectedSourceCount }}</strong><span>条</span></div>
+            <div><small>裁剪候选</small><strong>{{ contextTrace.droppedSourceCount }}</strong><span>条</span></div>
+          </div>
+        </section>
         <div v-if="stepsLoading" class="drawer-loading"><n-icon :component="PulseOutline" /> 正在读取步骤</div>
         <div v-else-if="steps.length" class="step-rail">
           <article v-for="step in steps" :key="`${step.stepNo}-${step.name}`" class="step-card" :class="step.status.toLowerCase()">
@@ -177,6 +196,7 @@ h1 { margin: 0; font-size: clamp(27px, 3.2vw, 45px); letter-spacing: -.06em; lin
 .signal-board { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid rgba(196, 227, 230, .18); background: rgba(6, 24, 34, .28); }.signal-board div { position: relative; padding: 17px 14px; border-right: 1px solid rgba(196, 227, 230, .15); }.signal-board div:last-child { border-right: 0; }.signal-board small { display: block; color: #9ebbc5; font: 700 9px ui-monospace, monospace; letter-spacing: .08em; }.signal-board strong { display: block; margin-top: 4px; color: #fff; font: 700 25px/1 ui-monospace, monospace; }.signal-board .failure strong { color: #ffbcab; }
 .ledger-card { overflow: hidden; background: #fff; border-radius: 16px; box-shadow: 0 8px 30px rgba(28, 57, 72, .07); }.ledger-toolbar { display: flex; justify-content: space-between; gap: 15px; padding: 17px 20px; border-bottom: 1px solid #edf1f4; }.mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }.muted { color: var(--muted); }.model-name { color: #355160; font-weight: 600; }.empty { padding: 72px 0; }
 .drawer-title { display: grid; gap: 4px; }.drawer-title .eyebrow { margin: 0; color: #64828e; }.drawer-title strong { font-size: 20px; letter-spacing: -.035em; }.run-meta { display: grid; gap: 0; margin: 4px 0 26px; border-top: 1px solid var(--line); }.run-meta > div { display: flex; justify-content: space-between; gap: 20px; align-items: center; min-height: 41px; border-bottom: 1px solid var(--line); color: #71818c; font-size: 12px; }.run-meta b { color: #294251; font-weight: 650; }.run-meta code { max-width: 250px; overflow: hidden; color: #496b79; text-overflow: ellipsis; white-space: nowrap; }.drawer-loading { display: grid; gap: 10px; place-items: center; padding: 80px 0; color: var(--muted); }.drawer-loading :deep(.n-icon) { color: var(--signal); font-size: 27px; }
+.context-card { margin: 0 0 25px; padding: 14px; border: 1px solid #d9e8ed; border-radius: 11px; background: linear-gradient(135deg, #f5fafb, #f9fbfc); }.context-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #3f6978; font: 700 10px ui-monospace, monospace; letter-spacing: .1em; }.context-card > p { margin: 8px 0 13px; color: #718792; font-size: 11px; line-height: 1.55; }.context-metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid #ddebed; border-left: 1px solid #ddebed; }.context-metrics > div { min-width: 0; padding: 9px 8px; border-right: 1px solid #ddebed; border-bottom: 1px solid #ddebed; }.context-metrics small { display: block; color: #7f969f; font: 700 9px ui-monospace, monospace; letter-spacing: .04em; }.context-metrics strong { margin-right: 3px; color: #294f60; font: 700 16px/1.3 ui-monospace, monospace; }.context-metrics span { color: #80939b; font: 10px ui-monospace, monospace; }
 .step-rail { position: relative; display: grid; gap: 0; }.step-rail::before { position: absolute; top: 24px; bottom: 24px; left: 16px; width: 1px; content: ''; background: #d7e4e8; }.step-card { position: relative; display: grid; grid-template-columns: 34px 1fr; gap: 12px; padding: 0 0 19px; }.step-marker { position: relative; z-index: 1; display: grid; place-items: center; width: 33px; height: 33px; border: 1px solid #a8bec7; border-radius: 50%; color: #4f6977; background: #fff; font: 700 9px ui-monospace, monospace; }.step-card.success .step-marker, .step-card.succeeded .step-marker { border-color: #71c2a4; color: #0e795d; background: #f2fbf7; }.step-card.failed .step-marker { border-color: #ec9b9b; color: #bb4b4b; background: #fff5f5; }.step-body { padding: 11px 13px 12px; border: 1px solid #e4ecef; border-radius: 10px; background: #fff; }.step-top { display: flex; justify-content: space-between; gap: 12px; color: #81919a; font: 700 10px ui-monospace, monospace; }.step-body h3 { display: flex; gap: 6px; align-items: center; margin: 8px 0 6px; color: #233b48; font-size: 14px; }.step-body h3 :deep(.n-icon) { color: #d9922b; }.step-body p { margin: 0; color: #7b8d97; font-size: 11px; }.step-body p code { color: #487384; } dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 10px 0 0; padding-top: 9px; border-top: 1px dashed #e1e8ec; font-size: 11px; } dt { color: #8a9aa2; } dd { margin: 0; overflow-wrap: anywhere; color: #49606d; }
 @media (max-width: 780px) { .ledger-head { grid-template-columns: 1fr; padding: 27px 25px; }.signal-board { width: 100%; }.signal-board div { padding: 13px 9px; }.signal-board strong { font-size: 20px; }.run-ledger { margin: -8px; }.ledger-toolbar { align-items: flex-start; flex-direction: column; } }
 </style>
