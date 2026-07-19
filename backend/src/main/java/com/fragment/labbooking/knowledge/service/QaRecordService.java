@@ -17,7 +17,7 @@ public interface QaRecordService extends IService<QaRecord> {
 
     QaAnswerVO ask(QaAskDTO dto, LoginUser actor);
 
-    void askStream(QaAskDTO dto, Long userId, ResponseBodyEmitter emitter);
+    void askStream(QaAskDTO dto, LoginUser actor, ResponseBodyEmitter emitter);
 
     Page<QaRecordVO> pageRecords(int pageNum, int pageSize, String sessionId, Long userId);
 

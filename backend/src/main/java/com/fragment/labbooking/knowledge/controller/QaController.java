@@ -40,9 +40,9 @@ public class QaController {
 
     @PostMapping(value = "/ask/stream", produces = "application/x-ndjson")
     public ResponseEntity<ResponseBodyEmitter> askStream(@Valid @RequestBody QaAskDTO dto) {
-        Long userId = UserContext.requireUser().getId();
+        com.fragment.labbooking.common.auth.LoginUser actor = UserContext.requireUser();
         ResponseBodyEmitter emitter = new ResponseBodyEmitter(180000L);
-        CompletableFuture.runAsync(() -> qaRecordService.askStream(dto, userId, emitter));
+        CompletableFuture.runAsync(() -> qaRecordService.askStream(dto, actor, emitter));
         return ResponseEntity.ok()
                 .contentType(MediaType.valueOf("application/x-ndjson; charset=UTF-8"))
                 .body(emitter);

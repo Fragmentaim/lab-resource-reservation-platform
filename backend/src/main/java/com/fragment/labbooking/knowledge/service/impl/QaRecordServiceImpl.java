@@ -197,7 +197,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     }
 
     @Override
-    public void askStream(QaAskDTO dto, Long userId, ResponseBodyEmitter emitter) {
+    public void askStream(QaAskDTO dto, LoginUser actor, ResponseBodyEmitter emitter) {
+        Long userId = actor.getId();
         QaSession session = resolveSession(dto.getSessionId(), userId, dto.getQuestion());
         String sessionId = session.getSessionId();
         final String streamSessionId = sessionId;
@@ -227,6 +228,31 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                     "recordId", record.getId(),
                     "sessionId", streamSessionId,
                     "traceId", record.getTraceId()));
+
+            java.util.Optional<ToolRouteResult> routed = assistantToolRouter.route(dto.getQuestion(), actor);
+            if (routed.isPresent()) {
+                QaAnswerVO toolAnswer = new QaAnswerVO();
+                toolAnswer.setAnswer(routed.get().answer());
+                toolAnswer.setLatencyMs(0);
+                toolAnswer.setModelName("java-tool-router");
+                toolAnswer.setQuestionType("TOOL");
+                toolAnswer.setSources(Collections.emptyList());
+                Map<String, Object> toolStats = new LinkedHashMap<>();
+                toolStats.put("route", "permission_scoped_tool");
+                toolStats.put("tool_calls", routed.get().toolCalls());
+                toolAnswer.setContextStats(toolStats);
+                finishToolAnswer(record, toolAnswer, streamSessionId, userId, dto.getQuestion());
+                sendEvent(emitter, event("meta",
+                        "recordId", record.getId(), "sessionId", streamSessionId, "traceId", record.getTraceId(),
+                        "contextStats", toolStats, "sources", Collections.emptyList(), "modelName", toolAnswer.getModelName()));
+                sendEvent(emitter, event("delta", "content", toolAnswer.getAnswer()));
+                sendEvent(emitter, event("done",
+                        "recordId", record.getId(), "sessionId", streamSessionId, "traceId", record.getTraceId(),
+                        "contextStats", toolStats, "sources", Collections.emptyList(), "latencyMs", 0,
+                        "modelName", toolAnswer.getModelName()));
+                emitter.complete();
+                return;
+            }
 
             List<Long> readyDocumentIds = kbDocumentMapper.selectList(
                             new LambdaQueryWrapper<KbDocument>()
