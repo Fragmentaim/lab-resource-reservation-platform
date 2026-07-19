@@ -35,8 +35,7 @@ public class QaController {
 
     @PostMapping("/ask")
     public Result<QaAnswerVO> ask(@Valid @RequestBody QaAskDTO dto) {
-        Long userId = UserContext.requireUser().getId();
-        return Result.success(qaRecordService.ask(dto, userId));
+        return Result.success(qaRecordService.ask(dto, UserContext.requireUser()));
     }
 
     @PostMapping(value = "/ask/stream", produces = "application/x-ndjson")

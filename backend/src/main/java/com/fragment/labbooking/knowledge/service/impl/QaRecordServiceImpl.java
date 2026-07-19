@@ -20,7 +20,10 @@ import com.fragment.labbooking.knowledge.mapper.QaRecordMapper;
 import com.fragment.labbooking.knowledge.mapper.QaSessionMapper;
 import com.fragment.labbooking.knowledge.mapper.QaSourceMapper;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
+import com.fragment.labbooking.knowledge.service.AssistantToolRouter;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
+import com.fragment.labbooking.knowledge.service.ToolRouteResult;
+import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 import com.fragment.labbooking.knowledge.vo.QaRecordVO;
 import com.fragment.labbooking.knowledge.vo.QaSessionVO;
@@ -60,6 +63,9 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     private AiServiceClient aiServiceClient;
 
     @Autowired
+    private AssistantToolRouter assistantToolRouter;
+
+    @Autowired
     private QaSourceMapper qaSourceMapper;
 
     @Autowired
@@ -96,7 +102,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     private int summaryTriggerTurns;
 
     @Override
-    public QaAnswerVO ask(QaAskDTO dto, Long userId) {
+    public QaAnswerVO ask(QaAskDTO dto, LoginUser actor) {
+        Long userId = actor.getId();
         QaSession session = resolveSession(dto.getSessionId(), userId, dto.getQuestion());
         String sessionId = session.getSessionId();
         List<AiServiceClient.ChatMessage> chatHistory = loadRecentChatHistory(sessionId, userId);
@@ -114,6 +121,21 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         save(record);
 
         try {
+            java.util.Optional<ToolRouteResult> routed = assistantToolRouter.route(dto.getQuestion(), actor);
+            if (routed.isPresent()) {
+                QaAnswerVO answer = new QaAnswerVO();
+                answer.setAnswer(routed.get().answer());
+                answer.setLatencyMs(0);
+                answer.setModelName("java-tool-router");
+                answer.setQuestionType("TOOL");
+                answer.setSources(Collections.emptyList());
+                Map<String, Object> toolStats = new LinkedHashMap<>();
+                toolStats.put("route", "permission_scoped_tool");
+                toolStats.put("tool_calls", routed.get().toolCalls());
+                answer.setContextStats(toolStats);
+                finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion());
+                return answer;
+            }
             List<Long> readyDocumentIds = kbDocumentMapper.selectList(
                             new LambdaQueryWrapper<KbDocument>()
                                     .select(KbDocument::getId)
@@ -157,6 +179,21 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             updateById(record);
             throw e;
         }
+    }
+
+    private void finishToolAnswer(QaRecord record, QaAnswerVO answer, String sessionId, Long userId, String question) {
+        record.setAnswer(answer.getAnswer());
+        record.setLatencyMs(answer.getLatencyMs());
+        record.setStatus("ANSWERED");
+        record.setModelName(answer.getModelName());
+        record.setQuestionType(answer.getQuestionType());
+        updateById(record);
+        saveContextTrace(record, question, answer);
+        updateSessionAfterAnswer(sessionId, userId, question, record.getTraceId());
+        triggerSummaryRefresh(sessionId, userId);
+        answer.setRecordId(record.getId());
+        answer.setSessionId(sessionId);
+        answer.setTraceId(record.getTraceId());
     }
 
     @Override

@@ -8,13 +8,14 @@ import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 import com.fragment.labbooking.knowledge.vo.QaRecordVO;
 import com.fragment.labbooking.knowledge.vo.QaSessionVO;
+import com.fragment.labbooking.common.auth.LoginUser;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 
 import java.util.List;
 
 public interface QaRecordService extends IService<QaRecord> {
 
-    QaAnswerVO ask(QaAskDTO dto, Long userId);
+    QaAnswerVO ask(QaAskDTO dto, LoginUser actor);
 
     void askStream(QaAskDTO dto, Long userId, ResponseBodyEmitter emitter);
 
