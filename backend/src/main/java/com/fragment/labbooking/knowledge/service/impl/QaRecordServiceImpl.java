@@ -21,6 +21,7 @@ import com.fragment.labbooking.knowledge.mapper.QaSessionMapper;
 import com.fragment.labbooking.knowledge.mapper.QaSourceMapper;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AssistantToolRouter;
+import com.fragment.labbooking.knowledge.service.NativeToolCallingService;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
 import com.fragment.labbooking.knowledge.service.ToolRouteResult;
 import com.fragment.labbooking.common.auth.LoginUser;
@@ -64,6 +65,9 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
 
     @Autowired
     private AssistantToolRouter assistantToolRouter;
+
+    @Autowired
+    private NativeToolCallingService nativeToolCallingService;
 
     @Autowired
     private QaSourceMapper qaSourceMapper;
@@ -121,12 +125,15 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         save(record);
 
         try {
-            java.util.Optional<ToolRouteResult> routed = assistantToolRouter.route(dto.getQuestion(), actor);
+            java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(dto.getQuestion(), actor);
+            if (routed.isEmpty()) {
+                routed = assistantToolRouter.route(dto.getQuestion(), actor);
+            }
             if (routed.isPresent()) {
                 QaAnswerVO answer = new QaAnswerVO();
                 answer.setAnswer(routed.get().answer());
                 answer.setLatencyMs(0);
-                answer.setModelName("java-tool-router");
+                answer.setModelName(toolRouteModel(routed.get()));
                 answer.setQuestionType("TOOL");
                 answer.setSources(Collections.emptyList());
                 Map<String, Object> toolStats = new LinkedHashMap<>();
@@ -196,6 +203,12 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         answer.setTraceId(record.getTraceId());
     }
 
+    private String toolRouteModel(ToolRouteResult result) {
+        boolean nativeFunctionCalling = result.toolCalls().stream()
+                .anyMatch(call -> "native_function_calling".equals(call.get("protocol")));
+        return nativeFunctionCalling ? "native-function-calling" : "java-tool-router";
+    }
+
     @Override
     public void askStream(QaAskDTO dto, LoginUser actor, ResponseBodyEmitter emitter) {
         Long userId = actor.getId();
@@ -229,12 +242,15 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                     "sessionId", streamSessionId,
                     "traceId", record.getTraceId()));
 
-            java.util.Optional<ToolRouteResult> routed = assistantToolRouter.route(dto.getQuestion(), actor);
+            java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(dto.getQuestion(), actor);
+            if (routed.isEmpty()) {
+                routed = assistantToolRouter.route(dto.getQuestion(), actor);
+            }
             if (routed.isPresent()) {
                 QaAnswerVO toolAnswer = new QaAnswerVO();
                 toolAnswer.setAnswer(routed.get().answer());
                 toolAnswer.setLatencyMs(0);
-                toolAnswer.setModelName("java-tool-router");
+                toolAnswer.setModelName(toolRouteModel(routed.get()));
                 toolAnswer.setQuestionType("TOOL");
                 toolAnswer.setSources(Collections.emptyList());
                 Map<String, Object> toolStats = new LinkedHashMap<>();
