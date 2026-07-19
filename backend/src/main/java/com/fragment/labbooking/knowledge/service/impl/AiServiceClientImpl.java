@@ -441,11 +441,10 @@ public class AiServiceClientImpl implements AiServiceClient {
         }
         if (contextOptions != null) {
             Map<String, Object> options = new LinkedHashMap<>();
-            options.put("max_prompt_tokens", contextOptions.maxPromptTokens());
-            options.put("answer_reserve_tokens", contextOptions.answerReserveTokens());
-            options.put("summary_budget_tokens", contextOptions.summaryBudgetTokens());
-            options.put("history_budget_tokens", contextOptions.historyBudgetTokens());
-            options.put("evidence_budget_tokens", contextOptions.evidenceBudgetTokens());
+            options.put("context_window_tokens", contextOptions.contextWindowTokens());
+            options.put("max_output_tokens", contextOptions.maxOutputTokens());
+            options.put("safety_margin_tokens", contextOptions.safetyMarginTokens());
+            options.put("summary_max_tokens", contextOptions.summaryMaxTokens());
             request.put("context_options", options);
         }
         return request;

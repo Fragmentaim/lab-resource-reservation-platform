@@ -9,7 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ToolResultContextPackerTest {
 
-    private final ToolResultContextPacker packer = new ToolResultContextPacker(new ContextTokenCounter());
+    private final ToolResultContextPacker packer = new ToolResultContextPacker(
+            new ContextTokenCounter(), new ModelContextProfileProperties());
 
     @Test
     void shouldPassSmallResultsThroughWithoutAnExtraModelCall() {

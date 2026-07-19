@@ -22,17 +22,21 @@ public class SessionContextPlanner {
 
     public SessionContextPlan plan(String summary, String question, List<SessionTurn> chronologicalTurns,
                                    ContextCapacity capacity) {
-        int promptBudget = Math.max(0, capacity.maxPromptTokens() - capacity.answerReserveTokens());
+        int promptBudget = Math.max(0, capacity.contextWindowTokens()
+                - capacity.maxOutputTokens() - capacity.safetyMarginTokens());
         int questionTokens = tokenCounter.estimate(question);
         int summaryTokens = tokenCounter.estimate(summary);
         int roomAfterQuestionAndSummary = Math.max(0, promptBudget - questionTokens - summaryTokens);
-        int evidenceReservation = Math.min(capacity.evidenceBudgetTokens(), roomAfterQuestionAndSummary);
-        int historyAllowance = Math.min(capacity.historyBudgetTokens(),
-                Math.max(0, roomAfterQuestionAndSummary - evidenceReservation));
+        List<SessionTurn> turns = chronologicalTurns == null ? List.of() : chronologicalTurns;
+        int allHistoryTokens = turns.stream().mapToInt(turn -> turn.tokenCount(tokenCounter)).sum();
+        boolean needsCompaction = allHistoryTokens > roomAfterQuestionAndSummary;
+        int historyAllowance = needsCompaction
+                ? Math.min(roomAfterQuestionAndSummary,
+                (int) Math.floor(roomAfterQuestionAndSummary * capacity.compactionTargetRatio()))
+                : roomAfterQuestionAndSummary;
 
         List<SessionTurn> includedReversed = new ArrayList<>();
         int historyTokens = 0;
-        List<SessionTurn> turns = chronologicalTurns == null ? List.of() : chronologicalTurns;
         for (int index = turns.size() - 1; index >= 0; index--) {
             SessionTurn turn = turns.get(index);
             int turnTokens = turn.tokenCount(tokenCounter);
@@ -49,13 +53,13 @@ public class SessionContextPlanner {
         int deferred = turns.size() - includedReversed.size();
         List<SessionTurn> deferredTurns = deferred == 0 ? List.of() : List.copyOf(turns.subList(0, deferred));
         return new SessionContextPlan(
-                capacity.maxPromptTokens(), capacity.answerReserveTokens(), promptBudget,
-                questionTokens, summaryTokens, historyTokens, evidenceReservation,
+                capacity.contextWindowTokens(), capacity.maxOutputTokens(), capacity.safetyMarginTokens(), promptBudget,
+                questionTokens, summaryTokens, historyTokens,
                 List.copyOf(includedReversed), deferredTurns, deferred, deferred > 0
         );
     }
 
-    public record ContextCapacity(int maxPromptTokens, int answerReserveTokens,
-                                  int historyBudgetTokens, int evidenceBudgetTokens) {
+    public record ContextCapacity(int contextWindowTokens, int maxOutputTokens,
+                                  int safetyMarginTokens, double compactionTargetRatio) {
     }
 }

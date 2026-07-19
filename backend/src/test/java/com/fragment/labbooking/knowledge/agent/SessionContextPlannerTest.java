@@ -19,7 +19,7 @@ class SessionContextPlannerTest {
         );
 
         SessionContextPlan plan = planner.plan("已有摘要", "继续解释第三轮", turns,
-                new SessionContextPlanner.ContextCapacity(400, 100, 180, 120));
+                new SessionContextPlanner.ContextCapacity(400, 100, 20, 0.70D));
 
         assertThat(plan.includedTurns()).extracting(SessionTurn::recordId).containsExactly(2L, 3L);
         assertThat(plan.historyMessages()).extracting(message -> message.role())
@@ -36,7 +36,7 @@ class SessionContextPlannerTest {
         SessionTurn oversized = new SessionTurn(1L, "trace-1", "问题".repeat(300), "回答".repeat(300));
 
         SessionContextPlan plan = planner.plan("", "新问题", List.of(oversized),
-                new SessionContextPlanner.ContextCapacity(180, 100, 80, 0));
+                new SessionContextPlanner.ContextCapacity(180, 100, 10, 0.70D));
 
         assertThat(plan.historyMessages()).isEmpty();
         assertThat(plan.deferredTurnCount()).isEqualTo(1);
@@ -52,9 +52,24 @@ class SessionContextPlannerTest {
         );
 
         SessionContextPlan plan = planner.plan("", "继续说第三轮", turns,
-                new SessionContextPlanner.ContextCapacity(800, 100, 220, 0));
+                new SessionContextPlanner.ContextCapacity(800, 100, 10, 0.70D));
 
         assertThat(plan.includedTurns()).extracting(SessionTurn::recordId).containsExactly(3L);
         assertThat(plan.deferredTurns()).extracting(SessionTurn::recordId).containsExactly(1L, 2L);
+    }
+
+    @Test
+    void shouldKeepAllRawHistoryUntilTheConfiguredLargeWindowIsActuallyFull() {
+        List<SessionTurn> turns = List.of(
+                new SessionTurn(1L, "trace-1", "问题一".repeat(4000), "回答一".repeat(4000)),
+                new SessionTurn(2L, "trace-2", "问题二".repeat(4000), "回答二".repeat(4000))
+        );
+
+        SessionContextPlan plan = planner.plan("", "继续", turns,
+                new SessionContextPlanner.ContextCapacity(256_000, 8_000, 4_096, 0.70D));
+
+        assertThat(plan.includedTurns()).extracting(SessionTurn::recordId).containsExactly(1L, 2L);
+        assertThat(plan.deferredTurns()).isEmpty();
+        assertThat(plan.compactionRecommended()).isFalse();
     }
 }

@@ -111,16 +111,20 @@ app:
       consumer-group: lab-booking-knowledge-document-consumer-group
       max-reconsume-times: -1
       max-retry-attempts: 3
-    chat:
-      context-max-turns: 8
-      max-prompt-tokens: 12000
-      answer-reserve-tokens: 2000
-      summary-budget-tokens: 1000
-      history-budget-tokens: 2000
-      evidence-budget-tokens: 7000
-      summary-trigger-turns: 6
+    # Operator-owned model capabilities. End users never configure per-bucket
+    # history/RAG limits; change active-profile when changing the LLM.
+    model-context:
+      active-profile: safe-default
+      profiles:
+        safe-default:
+          context-window-tokens: 12000
+          max-output-tokens: 2000
+          safety-margin-tokens: 512
+          compaction-target-ratio: 0.70
+        long-context-256k:
+          context-window-tokens: 256000
+          max-output-tokens: 8000
+          safety-margin-tokens: 4096
+          compaction-target-ratio: 0.70
     native-tool-calling:
       enabled: true
-      # Per-result guard only. Small tool results pass through unchanged; this
-      # protects the next tool-planning round from a single oversized payload.
-      max-tool-result-tokens: 1600

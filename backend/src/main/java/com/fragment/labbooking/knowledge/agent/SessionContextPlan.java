@@ -9,12 +9,12 @@ import java.util.Map;
 /** A backend-owned, explainable decision about the history supplied to a model call. */
 public record SessionContextPlan(
         int modelContextWindowTokens,
-        int answerReserveTokens,
+        int maxOutputTokens,
+        int safetyMarginTokens,
         int promptBudgetTokens,
         int questionTokens,
         int summaryTokens,
         int historyTokens,
-        int evidenceReservationTokens,
         List<SessionTurn> includedTurns,
         List<SessionTurn> deferredTurns,
         int deferredTurnCount,
@@ -27,12 +27,12 @@ public record SessionContextPlan(
     public Map<String, Object> safeDetail() {
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("model_context_window_tokens", modelContextWindowTokens);
-        detail.put("answer_reserve_tokens", answerReserveTokens);
+        detail.put("max_output_tokens", maxOutputTokens);
+        detail.put("safety_margin_tokens", safetyMarginTokens);
         detail.put("prompt_budget_tokens", promptBudgetTokens);
         detail.put("question_tokens", questionTokens);
         detail.put("summary_tokens", summaryTokens);
         detail.put("history_tokens", historyTokens);
-        detail.put("evidence_reservation_tokens", evidenceReservationTokens);
         detail.put("included_turn_count", includedTurns.size());
         detail.put("included_record_ids", includedTurns.stream().map(SessionTurn::recordId).toList());
         detail.put("deferred_record_ids", deferredTurns.stream().map(SessionTurn::recordId).toList());

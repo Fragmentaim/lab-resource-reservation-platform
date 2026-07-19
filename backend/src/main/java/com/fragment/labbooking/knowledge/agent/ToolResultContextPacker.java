@@ -1,6 +1,5 @@
 package com.fragment.labbooking.knowledge.agent;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -21,17 +20,17 @@ public class ToolResultContextPacker {
     private static final int MIN_VALUE_BUDGET = 48;
 
     private final ContextTokenCounter tokenCounter;
+    private final ModelContextProfileProperties modelContextProfiles;
 
-    @Value("${app.knowledge.native-tool-calling.max-tool-result-tokens:1600}")
-    private int maxToolResultTokens = 1600;
-
-    public ToolResultContextPacker(ContextTokenCounter tokenCounter) {
+    public ToolResultContextPacker(ContextTokenCounter tokenCounter, ModelContextProfileProperties modelContextProfiles) {
         this.tokenCounter = tokenCounter;
+        this.modelContextProfiles = modelContextProfiles;
     }
 
     public PackedToolResult pack(String toolName, Map<String, Object> rawOutput) {
         Map<String, Object> safeRaw = rawOutput == null ? Map.of() : rawOutput;
         int originalTokens = estimate(safeRaw);
+        int maxToolResultTokens = modelContextProfiles.active().effectiveMaxSingleToolResultTokens();
         if (originalTokens <= maxToolResultTokens) {
             return new PackedToolResult(safeRaw, detail("DIRECT", originalTokens, originalTokens, 0));
         }

@@ -74,11 +74,10 @@ public interface AiServiceClient {
     record ChatMessage(String role, String content) {}
 
     record ContextOptions(
-            int maxPromptTokens,
-            int answerReserveTokens,
-            int summaryBudgetTokens,
-            int historyBudgetTokens,
-            int evidenceBudgetTokens
+            int contextWindowTokens,
+            int maxOutputTokens,
+            int safetyMarginTokens,
+            int summaryMaxTokens
     ) {}
 
     record SummaryResult(String summary, Integer summaryTokens) {}

@@ -9,6 +9,7 @@ import com.fragment.labbooking.knowledge.agent.SessionContextPlan;
 import com.fragment.labbooking.knowledge.agent.SessionContextPlanner;
 import com.fragment.labbooking.knowledge.agent.SessionTurn;
 import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
+import com.fragment.labbooking.knowledge.agent.ModelContextProfileProperties;
 import com.fragment.labbooking.knowledge.dto.QaAskDTO;
 import com.fragment.labbooking.knowledge.dto.QaFeedbackDTO;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
@@ -40,7 +41,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -94,24 +94,10 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     @Autowired private QaFeedbackMapper qaFeedbackMapper;
     @Autowired private SessionContextPlanner sessionContextPlanner;
     @Autowired private SessionEventService sessionEventService;
+    @Autowired private ModelContextProfileProperties modelContextProfiles;
 
     @Autowired
     private ObjectMapper objectMapper;
-
-    @Value("${app.knowledge.chat.max-prompt-tokens:12000}")
-    private int maxPromptTokens;
-
-    @Value("${app.knowledge.chat.answer-reserve-tokens:2000}")
-    private int answerReserveTokens;
-
-    @Value("${app.knowledge.chat.summary-budget-tokens:1000}")
-    private int summaryBudgetTokens;
-
-    @Value("${app.knowledge.chat.history-budget-tokens:2000}")
-    private int historyBudgetTokens;
-
-    @Value("${app.knowledge.chat.evidence-budget-tokens:7000}")
-    private int evidenceBudgetTokens;
 
     @Override
     public QaAnswerVO ask(QaAskDTO dto, LoginUser actor) {
@@ -524,19 +510,25 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     private SessionContextPlan planSessionContext(QaSession session, String question) {
         return sessionContextPlanner.plan(
                 session.getSummary(), question, loadUncompressedSessionTurns(session),
-                new SessionContextPlanner.ContextCapacity(maxPromptTokens, answerReserveTokens,
-                        historyBudgetTokens, evidenceBudgetTokens)
+                contextCapacity()
         );
     }
 
     private AiServiceClient.ContextOptions contextOptions(SessionContextPlan plan) {
+        ModelContextProfileProperties.Profile profile = modelContextProfiles.active();
         return new AiServiceClient.ContextOptions(
-                maxPromptTokens,
-                answerReserveTokens,
-                summaryBudgetTokens,
-                plan.historyTokens(),
-                plan.evidenceReservationTokens()
+                profile.getContextWindowTokens(),
+                profile.getMaxOutputTokens(),
+                profile.getSafetyMarginTokens(),
+                profile.effectiveSummaryMaxTokens()
         );
+    }
+
+    private SessionContextPlanner.ContextCapacity contextCapacity() {
+        ModelContextProfileProperties.Profile profile = modelContextProfiles.active();
+        return new SessionContextPlanner.ContextCapacity(
+                profile.getContextWindowTokens(), profile.getMaxOutputTokens(),
+                profile.getSafetyMarginTokens(), profile.getCompactionTargetRatio());
     }
 
     private int nextTurnNo(QaSession session) {
@@ -633,8 +625,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                     .map(record -> new SessionTurn(record.getId(), record.getTraceId(), record.getQuestion(), record.getAnswer()))
                     .toList();
             SessionContextPlan plan = sessionContextPlanner.plan(session.getSummary(), "", uncompressedTurns,
-                    new SessionContextPlanner.ContextCapacity(maxPromptTokens, answerReserveTokens,
-                            historyBudgetTokens, evidenceBudgetTokens));
+                    contextCapacity());
             if (!plan.compactionRecommended() || plan.deferredTurns().isEmpty()) {
                 return;
             }
@@ -645,7 +636,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             AiServiceClient.SummaryResult result = aiServiceClient.summarizeSession(
                     session.getSummary(),
                     newTurns,
-                    summaryBudgetTokens
+                    modelContextProfiles.active().effectiveSummaryMaxTokens()
             );
             QaSession update = new QaSession();
             update.setSummary(result.summary());
