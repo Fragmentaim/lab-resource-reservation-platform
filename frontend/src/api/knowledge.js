@@ -44,3 +44,7 @@ export function deleteKnowledgeSession(sessionId) {
 export function submitKnowledgeFeedback(payload) {
   return api.post('/knowledge/qa/feedback', payload)
 }
+
+export function fetchMyReservationAssistantContext() {
+  return api.get('/knowledge/tools/reservation-context/me')
+}
