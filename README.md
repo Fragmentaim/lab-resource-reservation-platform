@@ -12,10 +12,21 @@
 
 课堂展示建议围绕数据库业务讲：用户、资源、时段、预约、通知、字典这些数据如何设计，预约时如何扣减名额，取消预约时如何释放名额，后台如何分页筛选和统计。
 
+当前 `feature/gpu-rag-evaluation` 分支把课程业务升级为后端求职项目：在预约主链路、缓存与异步可靠投递之外，增加了可追溯 RAG、GPU 本地检索模型验收、可重复评测和受权限控制的业务工具。
+
+### 求职版可展示亮点
+
+- **可靠预约链路**：热门预约异步确认、Outbox、延迟消息、缓存失效与幂等保护。
+- **可解释 RAG 工作台**：文档处理状态、会话恢复、回答引用、分块片段和检索 trace 可视化。
+- **本地 GPU 检索基线**：Qwen 0.6B Embedding 与 Reranker 在 RTX 4060 Laptop 上完成真实加载与推理验收；模型与缓存均放在 D 盘。
+- **安全业务工具**：`reservation_context` 只读工具复用当前身份，普通用户只能读自己数据，管理员访问仍由服务层二次校验，且响应不包含手机号。
+- **可重复评测**：30 条中文业务题（含隐私/拒答题）、自动化脚本和首轮端到端基线报告。
+
 ## 2. 技术栈
 
 - 后端：Java 17、Spring Boot 4、MyBatis-Plus、MySQL
 - 前端：Vue 3、Vite、Naive UI、Pinia、Vue Router、Axios
+- AI 工程：可追溯 RAG、文档处理异步化、Qwen3 Embedding / Reranker 本地 GPU 验收、评测集与引用追踪
 - 项目里保留但默认关闭的扩展能力：Redis、RocketMQ、异步预约、MQ4 延迟消息、审计日志、缓存、限流
 
 为了方便课程演示，当前默认配置只要求 MySQL。Redis / RocketMQ 相关开关已经在 `backend/src/main/resources/application.yml` 里关闭。
@@ -29,7 +40,8 @@ lab-booking-course/
   backend/              Spring Boot 后端
   frontend/             Vue 3 + Vite 完整前端
   sql/                  数据库初始化和升级脚本
-  scripts/              本地启动脚本
+  scripts/              本地启动、模型下载、GPU 验证和 RAG 评测脚本
+  docs/rag-evaluation/  受控知识源、30 题基准和结果说明
   README.md             项目交接说明
 ```
 
@@ -506,6 +518,15 @@ Authorization: Bearer <token>
 | 方法 | 后端路径 | 前端代理路径 | 权限 | 参数 / 请求体 | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | `GET` | `/admin/dashboard/overview` | `/api/admin/dashboard/overview` | 管理员 | 无 | 管理端系统概览 |
+
+### 10.9 知识助手与受控工具接口
+
+| 方法 | 后端路径 | 前端路径 | 权限 | 说明 |
+| --- | --- | --- | --- | --- |
+| `POST` | `/knowledge/qa/ask` | `/api/knowledge/qa/ask` | 登录 | 基于已处理资料提问，返回回答、引用和检索上下文。 |
+| `GET` | `/knowledge/qa/sessions` | `/api/knowledge/qa/sessions` | 登录 | 查询当前用户自己的问答会话。 |
+| `GET` | `/knowledge/tools/reservation-context/me` | `/api/knowledge/tools/reservation-context/me` | 登录 | 只读返回当前用户预约摘要和最多 3 条待使用预约。 |
+| `GET` | `/knowledge/tools/reservation-context/users/{userId}` | `/api/knowledge/tools/reservation-context/users/{userId}` | 管理员 | 管理员读取指定用户上下文；服务层再次做权限校验。 |
 
 ## 11. 业务流程说明
 
