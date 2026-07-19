@@ -6,5 +6,9 @@ import java.util.Optional;
 
 public interface NativeToolCallingService {
 
-    Optional<ToolRouteResult> tryAnswer(String question, LoginUser actor);
+    default Optional<ToolRouteResult> tryAnswer(String question, LoginUser actor) {
+        return tryAnswer(question, actor, null, null);
+    }
+
+    Optional<ToolRouteResult> tryAnswer(String question, LoginUser actor, String sessionId, String traceId);
 }

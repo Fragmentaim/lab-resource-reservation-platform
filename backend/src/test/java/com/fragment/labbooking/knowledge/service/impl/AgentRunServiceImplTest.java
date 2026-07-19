@@ -3,6 +3,10 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fragment.labbooking.knowledge.agent.AgentState;
+import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
+import com.fragment.labbooking.knowledge.agent.ContextPlan;
+import com.fragment.labbooking.knowledge.agent.PolicyContext;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
 import com.fragment.labbooking.knowledge.entity.QaContextTrace;
@@ -111,6 +115,34 @@ class AgentRunServiceImplTest {
         assertThat(result.getEvidenceTokens()).isEqualTo(1280);
         assertThat(result.getSelectedSourceCount()).isEqualTo(3);
         assertThat(result).hasNoNullFieldsOrPropertiesExcept("createdAt");
+    }
+
+    @Test
+    void shouldPersistRuntimeStatePlanAndToolWithoutRawToolOutput() {
+        stubPersistedRun();
+        service.start(record());
+        PolicyContext policy = new PolicyContext(7L, "USER", false);
+        AgentState state = new AgentState("qa-trace-1", "session-1", policy);
+        state.planning(1);
+
+        service.beginRuntime("qa-trace-1", policy);
+        service.recordRuntimeState("qa-trace-1", state);
+        service.recordContextPlan("qa-trace-1", new ContextPlan(1, "glm-5.1", List.of("knowledge_search")));
+        service.recordToolExecution("qa-trace-1", new AgentToolExecution(
+                "knowledge_search", "SUCCESS", 18, "tool-trace-2", "native_function_calling",
+                Map.of("evidence_count", 1)));
+
+        ArgumentCaptor<AgentStep> stepCaptor = ArgumentCaptor.forClass(AgentStep.class);
+        verify(stepMapper, org.mockito.Mockito.times(5)).insert(stepCaptor.capture());
+        assertThat(stepCaptor.getAllValues()).anySatisfy(step -> {
+            assertThat(step.getStepType()).isEqualTo("PLAN");
+            assertThat(step.getDetailJson()).contains("knowledge_search");
+        });
+        assertThat(stepCaptor.getAllValues()).anySatisfy(step -> {
+            assertThat(step.getStepType()).isEqualTo("TOOL_CALL");
+            assertThat(step.getDetailJson()).contains("evidence_count");
+            assertThat(step.getDetailJson()).doesNotContain("grounded_answer");
+        });
     }
 
     private QaRecord record() {

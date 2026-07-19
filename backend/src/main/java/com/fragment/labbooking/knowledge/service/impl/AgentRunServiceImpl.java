@@ -4,6 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fragment.labbooking.knowledge.agent.AgentState;
+import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
+import com.fragment.labbooking.knowledge.agent.ContextPlan;
+import com.fragment.labbooking.knowledge.agent.PolicyContext;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
 import com.fragment.labbooking.knowledge.entity.QaContextTrace;
@@ -73,8 +77,56 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     @Override
+    public void beginRuntime(String traceId, PolicyContext policy) {
+        safely(traceId, () -> {
+            AgentRun run = findRun(traceId);
+            if (run == null) {
+                return;
+            }
+            run.setRoute("AGENT_RUNTIME");
+            agentRunMapper.updateById(run);
+            insertStep(run.getId(), nextStepNo(run.getId()), "STATE", "agent_runtime_started", SUCCEEDED, 0, null,
+                    policy.safeAttributes());
+        });
+    }
+
+    @Override
+    public void recordRuntimeState(String traceId, AgentState state) {
+        safely(traceId, () -> {
+            AgentRun run = findRun(traceId);
+            if (run != null) {
+                insertStep(run.getId(), nextStepNo(run.getId()), "STATE", "agent_state", SUCCEEDED, 0, null,
+                        state.safeSnapshot());
+            }
+        });
+    }
+
+    @Override
+    public void recordContextPlan(String traceId, ContextPlan plan) {
+        safely(traceId, () -> {
+            AgentRun run = findRun(traceId);
+            if (run != null) {
+                insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "model_tool_plan", SUCCEEDED, 0, null,
+                        plan.safeDetail());
+            }
+        });
+    }
+
+    @Override
+    public void recordToolExecution(String traceId, AgentToolExecution execution) {
+        safely(traceId, () -> {
+            AgentRun run = findRun(traceId);
+            if (run != null) {
+                insertStep(run.getId(), nextStepNo(run.getId()), "TOOL_CALL", execution.toolName(), execution.status(),
+                        execution.latencyMs(), execution.toolTraceId(), execution.safeDetail());
+            }
+        });
+    }
+
+    @Override
     public void finishTool(QaRecord record, QaAnswerVO answer) {
-        safely(record, () -> finish(record, answer, "TOOL", toolSteps(answer), 0));
+        safely(record, () -> finish(record, answer, runtimeManaged(answer) ? "AGENT_RUNTIME" : "TOOL", toolSteps(answer),
+                intValue(safeStats(answer.getContextStats()).get("selected_source_count"))));
     }
 
     @Override
@@ -182,6 +234,10 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     private List<StepData> toolSteps(QaAnswerVO answer) {
         Map<String, Object> stats = safeStats(answer.getContextStats());
+        if (runtimeManaged(answer)) {
+            return List.of(new StepData("ANSWER", "agent_answer", SUCCEEDED, safeLatency(answer.getLatencyMs()), null,
+                    Map.of("model", safeText(answer.getModelName()), "runtime", "native_function_calling")));
+        }
         Object rawCalls = stats.get("tool_calls");
         List<?> calls = rawCalls instanceof List<?> value ? value : Collections.emptyList();
         List<StepData> steps = new java.util.ArrayList<>();
@@ -203,6 +259,10 @@ public class AgentRunServiceImpl implements AgentRunService {
         steps.add(new StepData("ANSWER", "tool_answer", SUCCEEDED, safeLatency(answer.getLatencyMs()), null,
                 Map.of("model", safeText(answer.getModelName()), "tool_call_count", steps.size())));
         return steps;
+    }
+
+    private boolean runtimeManaged(QaAnswerVO answer) {
+        return Boolean.TRUE.equals(safeStats(answer.getContextStats()).get("runtime_managed"));
     }
 
     private Map<String, Object> retrievalDetail(Map<String, Object> stats, int sourceCount) {
@@ -298,6 +358,14 @@ public class AgentRunServiceImpl implements AgentRunService {
         } catch (Exception exception) {
             log.warn("Failed to persist agent run trace. qaRecordId={}, traceId={}, reason={}",
                     record == null ? null : record.getId(), record == null ? null : record.getTraceId(), exception.getMessage());
+        }
+    }
+
+    private void safely(String traceId, Runnable task) {
+        try {
+            task.run();
+        } catch (Exception exception) {
+            log.warn("Failed to persist agent runtime event. traceId={}, reason={}", traceId, exception.getMessage());
         }
     }
 

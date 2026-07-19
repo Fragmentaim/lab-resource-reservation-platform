@@ -1,6 +1,10 @@
 package com.fragment.labbooking.knowledge.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fragment.labbooking.knowledge.agent.AgentState;
+import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
+import com.fragment.labbooking.knowledge.agent.ContextPlan;
+import com.fragment.labbooking.knowledge.agent.PolicyContext;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.knowledge.vo.AgentRunVO;
 import com.fragment.labbooking.knowledge.vo.AgentStepVO;
@@ -12,6 +16,14 @@ import java.util.List;
 public interface AgentRunService {
 
     void start(QaRecord record);
+
+    void beginRuntime(String traceId, PolicyContext policy);
+
+    void recordRuntimeState(String traceId, AgentState state);
+
+    void recordContextPlan(String traceId, ContextPlan plan);
+
+    void recordToolExecution(String traceId, AgentToolExecution execution);
 
     void finishTool(QaRecord record, QaAnswerVO answer);
 

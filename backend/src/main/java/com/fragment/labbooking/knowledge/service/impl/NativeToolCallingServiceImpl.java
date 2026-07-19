@@ -2,7 +2,15 @@ package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
+import com.fragment.labbooking.knowledge.agent.AgentState;
+import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
+import com.fragment.labbooking.knowledge.agent.ContextPack;
+import com.fragment.labbooking.knowledge.agent.ContextPlan;
+import com.fragment.labbooking.knowledge.agent.PolicyContext;
+import com.fragment.labbooking.knowledge.service.AgentRunService;
+import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
+import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.service.NativeToolCallingClient;
 import com.fragment.labbooking.knowledge.service.NativeToolCallingService;
 import com.fragment.labbooking.knowledge.service.ReservationCancellationPreviewToolService;
@@ -34,42 +42,71 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
     @Autowired private ResourceAvailabilityToolService resourceAvailabilityToolService;
     @Autowired private ReservationCancellationPreviewToolService cancellationPreviewToolService;
     @Autowired private AiToolCallAuditService aiToolCallAuditService;
+    @Autowired private KbDocumentService kbDocumentService;
+    @Autowired private AiServiceClient aiServiceClient;
+    @Autowired private AgentRunService agentRunService;
 
     @Value("${app.knowledge.native-tool-calling.enabled:true}")
     private boolean enabled;
 
     @Override
-    public Optional<ToolRouteResult> tryAnswer(String question, LoginUser actor) {
+    public Optional<ToolRouteResult> tryAnswer(String question, LoginUser actor, String sessionId, String traceId) {
         if (!enabled || !isToolEligible(question) || actor == null || actor.getId() == null) {
             return Optional.empty();
         }
         try {
             List<Map<String, Object>> trace = new ArrayList<>();
             List<NativeToolCallingClient.ExecutedToolCall> executed = new ArrayList<>();
+            int sourceCount = 0;
+            PolicyContext policy = PolicyContext.from(actor);
+            AgentState state = new AgentState(traceId, sessionId, policy);
+            boolean runtimeManaged = traceId != null && !traceId.isBlank();
+            if (runtimeManaged) {
+                agentRunService.beginRuntime(traceId, policy);
+            }
             for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+                state.planning(round + 1);
+                observeState(runtimeManaged, traceId, state);
                 NativeToolCallingClient.ToolRound plan = nativeToolCallingClient.nextRound(question, toolDefinitions(), executed);
+                observePlan(runtimeManaged, traceId, ContextPlan.from(round + 1, plan));
                 if (plan.toolCalls() == null || plan.toolCalls().isEmpty()) {
-                    if (executed.isEmpty() || plan.answer() == null || plan.answer().isBlank()) {
+                    if (plan.answer() == null || plan.answer().isBlank()) {
+                        state.fallingBackToRag();
+                        observeState(runtimeManaged, traceId, state);
                         return Optional.empty();
                     }
-                    return Optional.of(new ToolRouteResult(plan.answer(), trace));
+                    state.answering();
+                    observeState(runtimeManaged, traceId, state);
+                    state.succeed();
+                    observeState(runtimeManaged, traceId, state);
+                    return Optional.of(new ToolRouteResult(plan.answer(), trace, runtimeManaged, sourceCount));
                 }
                 for (NativeToolCallingClient.PlannedToolCall call : plan.toolCalls()) {
-                    ExecutedCall result = execute(call, actor);
+                    state.executingTool();
+                    observeState(runtimeManaged, traceId, state);
+                    ExecutedCall result = execute(call, actor, question);
                     executed.add(new NativeToolCallingClient.ExecutedToolCall(
                             safeCallId(call.callId()), result.toolName(), result.arguments(), result.output()));
                     trace.add(result.trace());
+                    sourceCount += result.sourceCount();
+                    observeTool(runtimeManaged, traceId, result.execution());
+                    state.completeTool(result.toolName());
+                    observeState(runtimeManaged, traceId, state);
                 }
             }
+            state.answering();
+            observeState(runtimeManaged, traceId, state);
+            state.succeed();
+            observeState(runtimeManaged, traceId, state);
             return Optional.of(new ToolRouteResult(
-                    "已完成业务数据查询，但工具调用轮次达到安全上限，请换一种更具体的问法。", trace));
+                    "已完成所需数据查询，但工具调用轮次达到安全上限，请换一种更具体的问法。", trace, runtimeManaged, sourceCount));
         } catch (BusinessException exception) {
             // The rule router remains a safe fallback when the model gateway is temporarily unavailable.
             return Optional.empty();
         }
     }
 
-    private ExecutedCall execute(NativeToolCallingClient.PlannedToolCall call, LoginUser actor) {
+    private ExecutedCall execute(NativeToolCallingClient.PlannedToolCall call, LoginUser actor, String originalQuestion) {
         String toolName = call.name() == null ? "" : call.name();
         Map<String, Object> arguments = call.arguments() == null ? Collections.emptyMap() : call.arguments();
         String traceId = UUID.randomUUID().toString();
@@ -81,18 +118,22 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                         optionalKeyword(arguments.get("keyword")), 5));
                 case "reservation_cancellation_preview" -> cancellationOutput(cancellationPreviewToolService.preview(
                         actor, requiredPositiveLong(arguments.get("reservationId"), "reservationId")));
+                case "knowledge_search" -> knowledgeOutput(
+                        optionalKeyword(arguments.get("query")) == null ? originalQuestion : optionalKeyword(arguments.get("query")), actor);
                 default -> throw new BusinessException("不允许调用的 AI 工具: " + toolName);
             };
             long latencyMs = elapsedMs(startedAt);
-            aiToolCallAuditService.recordSuccess(traceId, toolName, actor, actor.getId(), "SELF_READ", latencyMs,
+            aiToolCallAuditService.recordSuccess(traceId, toolName, actor, actor.getId(), targetType(toolName), latencyMs,
                     summarizeArguments(arguments));
-            return new ExecutedCall(toolName, arguments, output, trace(toolName, traceId, latencyMs, "SUCCESS"));
+            return new ExecutedCall(toolName, arguments, output, trace(toolName, traceId, latencyMs, "SUCCESS"),
+                    execution(toolName, traceId, latencyMs, "SUCCESS", output), listSize(output.get("evidence")));
         } catch (RuntimeException exception) {
             long latencyMs = elapsedMs(startedAt);
             aiToolCallAuditService.recordFailure(traceId, toolName, actor, actor.getId(), latencyMs,
                     summarizeArguments(arguments), exception.getMessage());
             Map<String, Object> output = Map.of("error", "TOOL_EXECUTION_REJECTED", "message", exception.getMessage());
-            return new ExecutedCall(toolName, arguments, output, trace(toolName, traceId, latencyMs, "REJECTED"));
+            return new ExecutedCall(toolName, arguments, output, trace(toolName, traceId, latencyMs, "REJECTED"),
+                    execution(toolName, traceId, latencyMs, "REJECTED", output), 0);
         }
     }
 
@@ -106,7 +147,10 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                         "parameters", Map.of("type", "object", "properties", Map.of("keyword", Map.of("type", "string", "description", "可选资源名称关键词")), "additionalProperties", false))),
                 Map.of("type", "function", "function", Map.of("name", "reservation_cancellation_preview",
                         "description", "仅预检当前登录用户自己的指定预约能否取消；不会执行取消。必须先有预约 ID。",
-                        "parameters", Map.of("type", "object", "properties", Map.of("reservationId", Map.of("type", "integer", "description", "预约 ID")), "required", List.of("reservationId"), "additionalProperties", false)))
+                        "parameters", Map.of("type", "object", "properties", Map.of("reservationId", Map.of("type", "integer", "description", "预约 ID")), "required", List.of("reservationId"), "additionalProperties", false))),
+                Map.of("type", "function", "function", Map.of("name", "knowledge_search",
+                        "description", "检索当前用户有权限访问的实验室制度、预约规则、设备使用说明和流程。遇到规则、政策、流程、费用、处罚或无法由预约工具直接回答的问题时必须调用；返回受权限过滤的证据卡和依据摘要。",
+                        "parameters", Map.of("type", "object", "properties", Map.of("query", Map.of("type", "string", "description", "用于知识库检索的简短具体问题")), "required", List.of("query"), "additionalProperties", false)))
         );
     }
 
@@ -129,12 +173,18 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                 "nextAction", value.getNextAction());
     }
 
+    private Map<String, Object> knowledgeOutput(String query, LoginUser actor) {
+        List<Long> documentIds = kbDocumentService.listAccessibleReadyDocumentIds(actor);
+        if (documentIds.isEmpty()) {
+            return Map.of("status", "NO_ACCESSIBLE_DOCUMENTS", "accessible_document_count", 0, "evidence", List.of());
+        }
+        ContextPack pack = ContextPack.from(query, documentIds.size(),
+                aiServiceClient.askQuestion(query, "", documentIds));
+        return pack.toToolPayload();
+    }
+
     private boolean isToolEligible(String question) {
-        if (question == null) return false;
-        return (question.contains("预约") || question.contains("预订") || question.contains("时段")
-                || question.contains("名额") || question.contains("可用") || question.contains("取消"))
-                && (question.contains("我") || question.contains("资源") || question.contains("实验室")
-                || question.contains("设备") || question.contains("预约"));
+        return question != null && !question.isBlank();
     }
 
     private String optionalKeyword(Object value) {
@@ -158,10 +208,48 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                 "result", result, "protocol", "native_function_calling");
     }
 
+    private AgentToolExecution execution(String toolName, String traceId, long latencyMs, String status,
+                                         Map<String, Object> output) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("result", status);
+        if ("knowledge_search".equals(toolName)) {
+            detail.put("evidence_count", listSize(output.get("evidence")));
+            detail.put("knowledge_status", String.valueOf(output.getOrDefault("status", "")));
+        }
+        return new AgentToolExecution(toolName, status, (int) Math.min(Integer.MAX_VALUE, latencyMs), traceId,
+                "native_function_calling", detail);
+    }
+
+    private String targetType(String toolName) {
+        return "knowledge_search".equals(toolName) ? "ACL_FILTERED_KNOWLEDGE" : "SELF_READ";
+    }
+
+    private int listSize(Object value) {
+        return value instanceof List<?> list ? list.size() : 0;
+    }
+
+    private void observeState(boolean runtimeManaged, String traceId, AgentState state) {
+        if (runtimeManaged) {
+            agentRunService.recordRuntimeState(traceId, state);
+        }
+    }
+
+    private void observePlan(boolean runtimeManaged, String traceId, ContextPlan plan) {
+        if (runtimeManaged) {
+            agentRunService.recordContextPlan(traceId, plan);
+        }
+    }
+
+    private void observeTool(boolean runtimeManaged, String traceId, AgentToolExecution execution) {
+        if (runtimeManaged) {
+            agentRunService.recordToolExecution(traceId, execution);
+        }
+    }
+
     private String summarizeArguments(Map<String, Object> arguments) { return arguments.toString().substring(0, Math.min(arguments.toString().length(), 512)); }
     private String safeCallId(String callId) { return callId == null || callId.isBlank() ? UUID.randomUUID().toString() : callId; }
     private long elapsedMs(long startedAt) { return (System.nanoTime() - startedAt) / 1_000_000; }
 
     private record ExecutedCall(String toolName, Map<String, Object> arguments, Map<String, Object> output,
-                                Map<String, Object> trace) {}
+                                Map<String, Object> trace, AgentToolExecution execution, int sourceCount) {}
 }

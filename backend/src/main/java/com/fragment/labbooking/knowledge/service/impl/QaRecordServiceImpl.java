@@ -133,7 +133,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         agentRunService.start(record);
 
         try {
-            java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(dto.getQuestion(), actor);
+            java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
+                    dto.getQuestion(), actor, sessionId, record.getTraceId());
             if (routed.isEmpty()) {
                 routed = assistantToolRouter.route(dto.getQuestion(), actor);
             }
@@ -147,6 +148,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 Map<String, Object> toolStats = new LinkedHashMap<>();
                 toolStats.put("route", "permission_scoped_tool");
                 toolStats.put("tool_calls", routed.get().toolCalls());
+                toolStats.put("runtime_managed", routed.get().runtimeManaged());
+                toolStats.put("selected_source_count", routed.get().sourceCount());
                 answer.setContextStats(toolStats);
                 finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion());
                 return answer;
@@ -248,7 +251,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                     "sessionId", streamSessionId,
                     "traceId", record.getTraceId()));
 
-            java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(dto.getQuestion(), actor);
+            java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
+                    dto.getQuestion(), actor, streamSessionId, record.getTraceId());
             if (routed.isEmpty()) {
                 routed = assistantToolRouter.route(dto.getQuestion(), actor);
             }
@@ -262,6 +266,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 Map<String, Object> toolStats = new LinkedHashMap<>();
                 toolStats.put("route", "permission_scoped_tool");
                 toolStats.put("tool_calls", routed.get().toolCalls());
+                toolStats.put("runtime_managed", routed.get().runtimeManaged());
+                toolStats.put("selected_source_count", routed.get().sourceCount());
                 toolAnswer.setContextStats(toolStats);
                 finishToolAnswer(record, toolAnswer, streamSessionId, userId, dto.getQuestion());
                 sendEvent(emitter, event("meta",
