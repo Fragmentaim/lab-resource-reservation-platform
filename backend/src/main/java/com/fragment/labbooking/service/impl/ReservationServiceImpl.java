@@ -11,7 +11,6 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ReservationRateLimiter;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
-import com.fragment.labbooking.common.redis.ReservationSubmitGuard;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
@@ -67,9 +66,6 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
     private SysUserService sysUserService;
 
     @Autowired
-    private ReservationSubmitGuard reservationSubmitGuard;
-
-    @Autowired
     private HotReservationRedisService hotReservationRedisService;
 
     @Autowired
@@ -108,61 +104,46 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ReservationSubmitVO createReservation(Long userId, ReservationCreateDTO dto) {
-        String submitGuardKey = null;
-        boolean completed = false;
-
-        try {
-            Resource resource = resourceService.getById(dto.getResourceId());
-            if (resource == null) {
-                throw new BusinessException("资源不存在");
-            }
-
-            ResourceSlot slot = resourceSlotService.getById(dto.getSlotId());
-            if (slot == null) {
-                throw new BusinessException("时段不存在");
-            }
-
-            if (!dto.getResourceId().equals(slot.getResourceId())) {
-                throw new BusinessException("时段不属于当前资源");
-            }
-
-            validateSlotBookable(slot);
-            reservationRateLimiter.checkCreateReservationLimit(userId, slot.getSlotType());
-
-            submitGuardKey = reservationSubmitGuard.acquire(userId, dto.getSlotId());
-
-            hotReservationRedisService.reserveAndRegisterRollback(slot, userId);
-            checkDuplicateReservation(userId, dto.getSlotId());
-
-            if (shouldUseAsyncHotReservation(slot)) {
-                ReservationRequest request = reservationRequestService.createPendingHotRequest(
-                        userId,
-                        dto.getResourceId(),
-                        dto.getSlotId(),
-                        slot.getSlotType()
-                );
-                reservationSubmitGuard.completeAfterTransaction(submitGuardKey);
-                completed = true;
-                return buildAsyncSubmitVO(request);
-            }
-
-            resourceSlotService.deductQuotaIfAvailable(dto.getSlotId());
-
-            Reservation reservation = reservationPersistenceHelper.buildReservation(
-                    userId, dto.getResourceId(), dto.getSlotId(), resource, slot);
-
-            reservationPersistenceHelper.saveWithRetry(reservation);
-            reservationReminderTaskService.createBeforeStartReminder(reservation);
-            reservationAutoCancelService.schedule(reservation);
-            resourceRedisCacheService.invalidateResourceSlotList(dto.getResourceId());
-            reservationSubmitGuard.completeAfterTransaction(submitGuardKey);
-            completed = true;
-            return buildSyncSubmitVO(reservation);
-        } finally {
-            if (!completed && submitGuardKey != null) {
-                reservationSubmitGuard.release(submitGuardKey);
-            }
+        Resource resource = resourceService.getById(dto.getResourceId());
+        if (resource == null) {
+            throw new BusinessException("资源不存在");
         }
+
+        ResourceSlot slot = resourceSlotService.getById(dto.getSlotId());
+        if (slot == null) {
+            throw new BusinessException("时段不存在");
+        }
+
+        if (!dto.getResourceId().equals(slot.getResourceId())) {
+            throw new BusinessException("时段不属于当前资源");
+        }
+
+        validateSlotBookable(slot);
+        reservationRateLimiter.checkCreateReservationLimit(userId, slot.getSlotType());
+
+        hotReservationRedisService.reserveAndRegisterRollback(slot, userId);
+        checkDuplicateReservation(userId, dto.getSlotId());
+
+        if (shouldUseAsyncHotReservation(slot)) {
+            ReservationRequest request = reservationRequestService.createPendingHotRequest(
+                    userId,
+                    dto.getResourceId(),
+                    dto.getSlotId(),
+                    slot.getSlotType()
+            );
+            return buildAsyncSubmitVO(request);
+        }
+
+        resourceSlotService.deductQuotaIfAvailable(dto.getSlotId());
+
+        Reservation reservation = reservationPersistenceHelper.buildReservation(
+                userId, dto.getResourceId(), dto.getSlotId(), resource, slot);
+
+        reservationPersistenceHelper.saveWithRetry(reservation);
+        reservationReminderTaskService.createBeforeStartReminder(reservation);
+        reservationAutoCancelService.schedule(reservation);
+        resourceRedisCacheService.invalidateResourceSlotList(dto.getResourceId());
+        return buildSyncSubmitVO(reservation);
     }
 
     @Override

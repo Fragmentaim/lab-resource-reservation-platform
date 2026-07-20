@@ -21,8 +21,6 @@ mybatis-plus:
 
 app:
   reservation:
-    submit-guard-enabled: true
-    submit-guard-ttl-seconds: ${LOADTEST_SUBMIT_GUARD_TTL_SECONDS:5}
     hot-redis-enabled: true
     hot-init-wait-millis: 1000
     async:

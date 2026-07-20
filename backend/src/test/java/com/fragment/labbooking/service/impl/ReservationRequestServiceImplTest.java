@@ -426,6 +426,8 @@ class ReservationRequestServiceImplTest {
                                                        MessageOutboxService messageOutboxService,
                                                        ReservationAutoCancelService reservationAutoCancelService,
                                                        boolean delayMessageEnabled) {
+        ReservationPersistenceHelper reservationPersistenceHelper =
+                new ReservationPersistenceHelper(reservationNoGenerator, reservationMapper, reservationAutoCancelService);
         return new ReservationRequestServiceImpl(
                 reservationRequestMapper,
                 reservationMapper,
@@ -434,13 +436,13 @@ class ReservationRequestServiceImplTest {
                 reminderTaskService,
                 hotReservationRedisService,
                 resourceRedisCacheService,
-                new ReservationPersistenceHelper(reservationNoGenerator, reservationMapper, reservationAutoCancelService),
+                reservationPersistenceHelper,
                 reservationNoGenerator,
                 reservationAutoCancelService,
                 messageOutboxService,
                 "reservation-create",
                 "reservation-delay",
-                30
+                30L
         );
     }
 
