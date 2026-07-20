@@ -11,6 +11,7 @@ import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
+import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationRequest;
 import com.fragment.labbooking.entity.Resource;
@@ -433,9 +434,10 @@ class ReservationRequestServiceImplTest {
                 reminderTaskService,
                 hotReservationRedisService,
                 resourceRedisCacheService,
+                new ReservationPersistenceHelper(reservationNoGenerator, reservationMapper, reservationAutoCancelService),
                 reservationNoGenerator,
-                messageOutboxService,
                 reservationAutoCancelService,
+                messageOutboxService,
                 "reservation-create",
                 "reservation-delay",
                 30
