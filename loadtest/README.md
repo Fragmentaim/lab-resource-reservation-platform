@@ -54,6 +54,8 @@ $slot = .\scripts\loadtest\New-HotReservationSlot.ps1 -Quota 50
   -SlotId $slot.SlotId -ExpectedQuota 50
 ```
 
+抢占数超过库存时，JMeter 会把业务预期的 HTTP `400`（库存不足）计入错误率；不要把它当作系统异常。结论以校验脚本为准：成功预约数必须等于库存、余量不能为负、不能有重复预约、异步请求最终收敛。HTTP `5xx`、登录失败或校验脚本失败才需要排查。
+
 默认是 Redis 同步热门预约模式。RocketMQ 服务准备好后，启动后端前设置 `$env:LOADTEST_MQ_ENABLED = 'true'`，即可验证 Outbox + MQ 异步确认链路。压测结束后再运行校验脚本，等待 `PENDING` 请求收敛。
 
 ## 服务器迁移
