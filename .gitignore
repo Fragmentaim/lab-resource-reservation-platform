@@ -25,6 +25,10 @@ pnpm-debug.log*
 uploads/
 .codex-run/
 
+# Load-test runtime fixtures and generated reports
+loadtest/runtime/
+loadtest/results/
+
 # IDE / OS
 .idea/
 .vscode/
