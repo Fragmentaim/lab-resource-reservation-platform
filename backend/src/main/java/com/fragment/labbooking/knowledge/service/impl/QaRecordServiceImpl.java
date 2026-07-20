@@ -26,7 +26,6 @@ import com.fragment.labbooking.knowledge.mapper.QaSessionMapper;
 import com.fragment.labbooking.knowledge.mapper.QaSourceMapper;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
-import com.fragment.labbooking.knowledge.service.AssistantToolRouter;
 import com.fragment.labbooking.knowledge.service.NativeToolCallingService;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
 import com.fragment.labbooking.knowledge.service.SessionEventService;
@@ -69,9 +68,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
 
     @Autowired
     private AiServiceClient aiServiceClient;
-
-    @Autowired
-    private AssistantToolRouter assistantToolRouter;
 
     @Autowired
     private NativeToolCallingService nativeToolCallingService;
@@ -167,9 +163,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
                     dto.getQuestion(), actor, sessionId, record.getTraceId(),
                     new AgentConversationContext(session.getSummary(), chatHistory));
-            if (routed.isEmpty()) {
-                routed = assistantToolRouter.route(dto.getQuestion(), actor);
-            }
             if (routed.isPresent()) {
                 QaAnswerVO answer = new QaAnswerVO();
                 answer.setAnswer(routed.get().answer());
