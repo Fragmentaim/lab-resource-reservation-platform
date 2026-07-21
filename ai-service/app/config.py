@@ -35,7 +35,8 @@ class Settings(BaseSettings):
     hybrid_vector_weight: float = 1.0
     hybrid_keyword_weight: float = 1.0
 
-    # Rerank configuration. Prefer cloud rerank APIs to avoid local model loading.
+    # Rerank configuration. An API is preferred when configured; the local
+    # CrossEncoder is opt-in so a normal service process does not load a GPU model.
     enable_rerank: bool = False
     rerank_base_url: str = ""
     rerank_api_key: str = ""
@@ -44,6 +45,10 @@ class Settings(BaseSettings):
     rerank_candidate_multiplier: int = 4
     rerank_max_candidates: int = 20
     rerank_document_max_chars: int = 2000
+    use_local_reranker: bool = False
+    local_reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
+    local_reranker_device: str = "cuda"
+    local_reranker_batch_size: int = 8
 
     # Safe fallback when the Java caller does not provide a model capability profile.
     context_window_tokens: int = 12000

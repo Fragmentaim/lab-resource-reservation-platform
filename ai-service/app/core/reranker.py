@@ -1,6 +1,7 @@
 import math
 import re
-from typing import List, Sequence
+import threading
+from typing import List, Optional, Sequence
 
 import httpx
 
@@ -8,6 +9,8 @@ from app.config import settings
 
 
 _CHINESE_RE = re.compile(r"[\u4e00-\u9fff]+|[a-zA-Z0-9]+")
+_local_cross_encoder = None
+_local_cross_encoder_lock = threading.Lock()
 
 
 def rerank(question: str, results: List[dict], keywords: Sequence[str], top_k: int) -> List[dict]:
@@ -19,6 +22,10 @@ def rerank(question: str, results: List[dict], keywords: Sequence[str], top_k: i
     candidates = results[:max(limit, len(results))]
     if settings.enable_rerank:
         reranked = _rerank_by_api(question, candidates, limit)
+        if reranked:
+            return reranked
+
+        reranked = _rerank_by_local_cross_encoder(question, candidates, limit)
         if reranked:
             return reranked
 
@@ -42,7 +49,11 @@ def is_configured() -> bool:
 def status() -> str:
     if not settings.enable_rerank:
         return "disabled"
-    return "api_configured" if is_configured() else "fallback_local"
+    if is_configured():
+        return "api_configured"
+    if settings.use_local_reranker:
+        return "local_cross_encoder"
+    return "fallback_local"
 
 
 def _rerank_by_api(question: str, results: List[dict], top_k: int) -> List[dict]:
@@ -115,6 +126,52 @@ def _rerank_locally(question: str, results: List[dict], keywords: Sequence[str])
 
     ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return [item[2] for item in ranked]
+
+
+def _rerank_by_local_cross_encoder(question: str, results: List[dict], top_k: int) -> List[dict]:
+    """Use an opt-in local CrossEncoder, falling back without breaking retrieval."""
+    if not settings.use_local_reranker:
+        return []
+
+    try:
+        model = _get_local_cross_encoder()
+        documents = [_document_for_rerank(result) for result in results]
+        scores = model.predict(
+            [(question, document) for document in documents],
+            batch_size=max(1, settings.local_reranker_batch_size),
+            show_progress_bar=False,
+        )
+    except Exception as exc:
+        print(f"[Rerank] Local CrossEncoder failed, fallback to local scoring: {exc}")
+        return []
+
+    ranked = []
+    for index, (result, score) in enumerate(zip(results, scores)):
+        reranked = dict(result)
+        reranked["retrieval_score"] = reranked.get("score")
+        reranked["rerank_score"] = float(score)
+        reranked["score"] = reranked["rerank_score"]
+        reranked["rerank_provider"] = "local_cross_encoder"
+        ranked.append((reranked["rerank_score"], -index, reranked))
+
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in ranked[:top_k]]
+
+
+def _get_local_cross_encoder():
+    global _local_cross_encoder
+    if _local_cross_encoder is not None:
+        return _local_cross_encoder
+
+    with _local_cross_encoder_lock:
+        if _local_cross_encoder is None:
+            from sentence_transformers import CrossEncoder
+
+            _local_cross_encoder = CrossEncoder(
+                settings.local_reranker_model,
+                device=settings.local_reranker_device,
+            )
+    return _local_cross_encoder
 
 
 def _document_for_rerank(result: dict) -> str:

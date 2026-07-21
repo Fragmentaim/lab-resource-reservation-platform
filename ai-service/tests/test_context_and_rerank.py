@@ -62,6 +62,24 @@ def test_rerank_falls_back_to_local_scoring_when_api_returns_nothing(monkeypatch
     assert all(item["retrieval_score"] is not None for item in ranked)
 
 
+def test_rerank_uses_local_cross_encoder_when_enabled(monkeypatch):
+    class FakeCrossEncoder:
+        def predict(self, pairs, **_kwargs):
+            assert pairs[0][0] == "取消预约规则"
+            return [0.2, 0.9]
+
+    monkeypatch.setattr(reranker.settings, "enable_rerank", True)
+    monkeypatch.setattr(reranker.settings, "use_local_reranker", True)
+    monkeypatch.setattr(reranker, "_rerank_by_api", lambda *_: [])
+    monkeypatch.setattr(reranker, "_get_local_cross_encoder", lambda: FakeCrossEncoder())
+    results = [_result("general", "实验室开放时间", 0.9), _result("policy", "预约取消规则", 0.4)]
+
+    ranked = reranker.rerank("取消预约规则", results, ["取消", "预约"], top_k=2)
+
+    assert [item["chunk_id"] for item in ranked] == ["policy", "general"]
+    assert [item["rerank_provider"] for item in ranked] == ["local_cross_encoder", "local_cross_encoder"]
+
+
 def test_hybrid_retrieval_uses_rrf_to_fuse_duplicate_candidates_and_preserves_acl(monkeypatch):
     monkeypatch.setattr(rag_pipeline.settings, "retrieval_mode", "vector")
     monkeypatch.setattr(rag_pipeline.settings, "enable_embedding", True)

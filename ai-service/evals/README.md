@@ -44,3 +44,5 @@ python evals\run_rag_benchmark.py `
 ```
 
 不要把“模型交叉答对”直接当作 Golden 标注。若证据审计显示原文不完整、解析遗漏或题目来自缺失附件，应从量化集排除并单独维护为语料缺口样例。
+
+重排也必须做同集对照：保留 `first_stage` 与 `reranked` 两组结果，只有 `reranked` 在 Recall/MRR 上稳定增益时才作为线上默认；否则保留首阶段排序，避免为了“接入 Rerank”牺牲检索质量和延迟。
