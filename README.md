@@ -81,17 +81,31 @@ RAG 不是固定前置步骤，而是 Agent 可按需调用的工具。当前工
 
 ## 快速启动
 
-### 1. 基础设施
+### 1. Docker Compose（推荐）
 
-准备 MySQL 8、Redis、RocketMQ 4.9.x、MinIO 和 Qdrant，并执行：
+仓库提供 MySQL、Redis、RocketMQ 4.9、MinIO、Qdrant、Spring Boot 与 FastAPI 的本地运行编排。复制环境变量模板后启动：
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+首次启动会初始化演示数据库。默认端口为：后端 `8081`、AI 服务 `8000`、MinIO Console `9001`、Qdrant `6333`；可在根目录 `.env` 覆盖。后端健康检查为 `GET /system/health`，AI 服务健康检查为 `GET /api/v1/ai/health`。
+
+`.env.example` 中是仅供本地演示的默认值，部署前必须替换数据库密码、MinIO 密码和 JWT 密钥。LLM/Embedding 可填写任意 OpenAI-compatible 服务；未配置模型时，文档及基础设施服务仍可启动，但模型相关接口会处于降级状态。
+
+### 2. 手动启动基础设施
+
+准备 MySQL 8、Redis、RocketMQ 4.9.x、MinIO 和 Qdrant。首次初始化时按顺序执行：
 
 ```sql
-source sql/lab-booking-rebuild-init.sql;
+source backend/src/main/resources/sql/lab-booking-rebuild-init.sql;
+source backend/src/main/resources/sql/knowledge-rag-module-init.sql;
 ```
 
 如从旧版本升级，请按 `sql/` 中升级脚本的日期和说明依次执行。
 
-### 2. 启动 Java 服务
+### 3. 启动 Java 服务
 
 ```bash
 cd backend
@@ -112,7 +126,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=mq
 
 Java API 默认监听 `http://127.0.0.1:8081`。
 
-### 3. 启动 AI 服务
+### 4. 启动 AI 服务
 
 ```bash
 cd ai-service

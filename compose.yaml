@@ -1,0 +1,158 @@
+name: lab-booking
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-lab_booking}
+      MYSQL_USER: ${MYSQL_USER:-lab_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-lab_password_change_me}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password_change_me}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./backend/src/main/resources/sql/lab-booking-rebuild-init.sql:/docker-entrypoint-initdb.d/00-lab-booking-rebuild-init.sql:ro
+      - ./backend/src/main/resources/sql/knowledge-rag-module-init.sql:/docker-entrypoint-initdb.d/10-knowledge-rag-module-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:6333/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-29T16-01-48Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_change_me}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:4.9.8
+    command: sh mqnamesrv
+    ports:
+      - "${ROCKETMQ_NAMESRV_PORT:-9876}:9876"
+
+  rocketmq-broker:
+    image: apache/rocketmq:4.9.8
+    command: sh mqbroker -n rocketmq-namesrv:9876 -c /home/rocketmq/rocketmq-4.9.8/conf/broker.conf
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_started
+    ports:
+      - "${ROCKETMQ_BROKER_PORT:-10911}:10911"
+    volumes:
+      - ./docker/rocketmq/broker.conf:/home/rocketmq/rocketmq-4.9.8/conf/broker.conf:ro
+
+  ai-service:
+    build:
+      context: ./ai-service
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-lab_knowledge}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen2.5:7b}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-large}
+      USE_LOCAL_EMBEDDING: ${USE_LOCAL_EMBEDDING:-false}
+      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-4B}
+      ENABLE_EMBEDDING: ${ENABLE_EMBEDDING:-false}
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+      OCR_DEVICE: ${OCR_DEVICE:-gpu:0}
+    ports:
+      - "${AI_SERVICE_PORT:-8000}:8000"
+    volumes:
+      - ai-model-cache:/app/.model-cache
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      SPRING_PROFILES_ACTIVE: mq
+      SERVER_PORT: 8081
+      MYSQL_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-lab_booking}?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8
+      MYSQL_USERNAME: ${MYSQL_USER:-lab_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-lab_password_change_me}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ROCKETMQ_NAMESERVER: rocketmq-namesrv:9876
+      AI_SERVICE_BASE_URL: http://ai-service:8000
+      KNOWLEDGE_STORAGE_TYPE: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin_change_me}
+      JWT_SECRET: ${JWT_SECRET:-replace-with-at-least-32-random-characters}
+    ports:
+      - "${BACKEND_PORT:-8081}:8081"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+      rocketmq-broker:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/system/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+volumes:
+  mysql-data:
+  redis-data:
+  qdrant-data:
+  minio-data:
+  ai-model-cache:
