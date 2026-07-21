@@ -338,16 +338,29 @@ def parse_batch_answer(
 
 def _parse_json_object(raw: str) -> dict[str, Any]:
     text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end < start:
-        return {}
-    try:
-        payload = json.loads(text[start:end + 1])
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    # Some reasoning models echo a JSON draft inside <think>, then emit their
+    # final JSON object in a Markdown fence.  Prefer the last valid object
+    # rather than slicing from the first "{" to the last "}", which joins two
+    # otherwise valid objects into invalid JSON.
+    fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    for candidate in reversed(fenced):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("answers"), list):
+            return payload
+
+    decoder = json.JSONDecoder()
+    candidates: list[dict[str, Any]] = []
+    for match in re.finditer(r"\{", text):
+        try:
+            payload, _ = decoder.raw_decode(text[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("answers"), list):
+            candidates.append(payload)
+    return candidates[-1] if candidates else {}
 
 
 def result_record(
