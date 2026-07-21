@@ -1,26 +1,7 @@
 from app.config import settings
+from app.core import model_gateway
 from typing import Iterator, List, Optional
-from openai import OpenAI
-
-
-_client = None
-
-
-def get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        _client = OpenAI(
-            api_key=settings.llm_api_key,
-            base_url=_openai_base_url(),
-        )
-    return _client
-
-
-def _openai_base_url() -> str:
-    base_url = settings.llm_base_url.rstrip("/")
-    if base_url.endswith("/v1"):
-        return base_url
-    return f"{base_url}/v1"
+get_client = model_gateway.get_client
 
 
 def chat(
@@ -53,7 +34,7 @@ def chat_with_usage(
 
     if settings.llm_api_mode == "responses":
         response = client.responses.create(
-            model=model or settings.chat_model,
+            model=model_gateway.chat_capability(model).model,
             instructions=system_prompt,
             input=[
                 {
@@ -67,7 +48,7 @@ def chat_with_usage(
         return response.output_text or "", _usage_snapshot(getattr(response, "usage", None))
 
     response = client.chat.completions.create(
-        model=model or settings.chat_model,
+        model=model_gateway.chat_capability(model).model,
         messages=messages,
         temperature=0.1,
     )
@@ -113,7 +94,7 @@ def chat_stream(
         return
 
     stream = client.chat.completions.create(
-        model=model or settings.chat_model,
+        model=model_gateway.chat_capability(model).model,
         messages=messages,
         temperature=0.1,
         stream=True,

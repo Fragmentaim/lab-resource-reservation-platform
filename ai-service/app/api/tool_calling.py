@@ -11,10 +11,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.core.llm import _usage_snapshot, get_client
+from app.core.llm import _usage_snapshot
+from app.core import model_gateway
 
 
 router = APIRouter(prefix="/tool-calling", tags=["tool-calling"])
+get_client = model_gateway.get_client
 
 
 class ExecutedToolCall(BaseModel):
@@ -64,8 +66,10 @@ knowledge_search 仅返回候选 chunk 的定位信息，不能作为事实依�
 
 @router.post("/round", response_model=ToolCallingRoundResponse)
 async def tool_calling_round(request: ToolCallingRoundRequest):
-    if settings.llm_api_mode != "chat_completions":
-        raise HTTPException(status_code=409, detail="Native tool calling currently requires chat_completions mode")
+    try:
+        capability = model_gateway.require_native_tool_calling(request.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not request.tools:
         raise HTTPException(status_code=400, detail="At least one tool definition is required")
 
@@ -107,7 +111,7 @@ async def tool_calling_round(request: ToolCallingRoundRequest):
 
     try:
         response = get_client().chat.completions.create(
-            model=request.model or settings.chat_model,
+            model=capability.model,
             messages=messages,
             tools=request.tools,
             tool_choice="auto",
@@ -131,6 +135,6 @@ async def tool_calling_round(request: ToolCallingRoundRequest):
     return ToolCallingRoundResponse(
         tool_calls=planned_calls,
         answer=None if planned_calls else (message.content or ""),
-        model=request.model or settings.chat_model,
+        model=capability.model,
         provider_usage=_usage_snapshot(getattr(response, "usage", None)),
     )

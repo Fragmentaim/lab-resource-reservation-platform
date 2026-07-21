@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_api_mode: str = "chat_completions"
     chat_model: str = "qwen2.5:7b"
+    tool_calling_model: str = ""
+    llm_timeout_seconds: float = 60.0
+    llm_max_retries: int = 1
     embedding_model: str = "text-embedding-3-large"
     embedding_base_url: str = ""
     embedding_api_key: str = ""
