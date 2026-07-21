@@ -82,6 +82,16 @@ def main() -> None:
     response_dir = output_dir / "model_responses"
     response_dir.mkdir(exist_ok=True)
 
+    if args.phase1_input_dirs:
+        imported = []
+        for source_dir in args.phase1_input_dirs:
+            source_path = source_dir / "phase1_full_context.jsonl"
+            if not source_path.exists():
+                raise FileNotFoundError(f"Missing phase1 result file: {source_path}")
+            imported.extend(read_jsonl(source_path))
+        deduplicated = {(item["question_id"], item["model"]): item for item in imported}
+        write_jsonl(phase1_path, list(deduplicated.values()))
+
     if args.stage in {"all", "answer"}:
         complete_phase1 = load_existing(phase1_path)
         full_context = render_context(chunks, args.full_context_char_cap)
@@ -136,6 +146,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument("--max-output-tokens", type=int, default=16_384)
     parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument("--phase1-input-dirs", type=Path, nargs="*", default=[],
+                        help="Import independently generated phase-1 result directories before validation.")
     parser.add_argument("--limit-questions", type=int, default=0,
                         help="Run a deterministic pilot against the first N sampled questions.")
     parser.add_argument("--stage", choices=["all", "answer", "validate"], default="all")
