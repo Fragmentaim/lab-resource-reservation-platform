@@ -20,6 +20,7 @@ import random
 import re
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -76,7 +77,12 @@ def main() -> None:
     write_jsonl(output_dir / "chunks.jsonl", chunks)
     write_jsonl(output_dir / "questions.jsonl", [asdict(question) for question in questions])
 
-    client = OpenAICompatibleJudge(args.api_base_url, api_key, args.timeout_seconds)
+    client = OpenAICompatibleJudge(
+        args.api_base_url,
+        api_key,
+        args.timeout_seconds,
+        reasoning_effort=args.reasoning_effort,
+    )
     phase1_path = output_dir / "phase1_full_context.jsonl"
     phase2_path = output_dir / "phase2_minimal_context.jsonl"
     response_dir = output_dir / "model_responses"
@@ -93,18 +99,41 @@ def main() -> None:
         write_jsonl(phase1_path, list(deduplicated.values()))
 
     if args.stage in {"all", "answer"}:
-        complete_phase1 = load_existing(phase1_path)
+        existing_phase1 = read_jsonl(phase1_path)
+        complete_phase1 = {
+            (item["question_id"], item["model"])
+            for item in existing_phase1
+        }
+        if args.retry_invalid:
+            complete_phase1 = {
+                (item["question_id"], item["model"])
+                for item in existing_phase1
+                if item.get("format_valid") and not item.get("error")
+            }
         full_context = render_context(chunks, args.full_context_char_cap)
         for model in args.models:
             pending = [question for question in questions if (question.question_id, model) not in complete_phase1]
-            for batch_index, batch in enumerate(batches(pending, args.batch_size), start=1):
-                results, raw = ask_full_context_batch(
-                    client, model, batch, full_context, set(chunk["chunk_id"] for chunk in chunks), args.max_output_tokens
-                )
-                write_json(response_dir / f"phase1_{safe_file_name(model)}_{batch_index:02d}.json", raw)
-                for result in results:
-                    append_jsonl(phase1_path, result)
-                    print_progress("phase1", result["question_id"], model, result)
+            phase1_batches = list(batches(pending, args.batch_size))
+            with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+                futures = {
+                    executor.submit(
+                        ask_full_context_batch,
+                        client,
+                        model,
+                        batch,
+                        full_context,
+                        set(chunk["chunk_id"] for chunk in chunks),
+                        args.max_output_tokens,
+                    ): batch_index
+                    for batch_index, batch in enumerate(phase1_batches, start=1)
+                }
+                for future in as_completed(futures):
+                    batch_index = futures[future]
+                    results, raw = future.result()
+                    write_json(response_dir / f"phase1_{safe_file_name(model)}_{batch_index:02d}.json", raw)
+                    for result in results:
+                        append_jsonl(phase1_path, result)
+                        print_progress("phase1", result["question_id"], model, result)
         if args.stage == "answer":
             return
 
@@ -118,14 +147,27 @@ def main() -> None:
         eligible_questions = [question for question in questions if candidate_by_id[question.question_id]["evidence_chunk_ids"]]
         for model in args.models:
             pending = [question for question in eligible_questions if (question.question_id, model) not in complete_phase2]
-            for batch_index, batch in enumerate(batches(pending, args.batch_size), start=1):
-                results, raw = ask_minimal_context_batch(
-                    client, model, batch, candidate_by_id, by_id, args.max_output_tokens
-                )
-                write_json(response_dir / f"phase2_{safe_file_name(model)}_{batch_index:02d}.json", raw)
-                for result in results:
-                    append_jsonl(phase2_path, result)
-                    print_progress("phase2", result["question_id"], model, result)
+            phase2_batches = list(batches(pending, args.batch_size))
+            with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+                futures = {
+                    executor.submit(
+                        ask_minimal_context_batch,
+                        client,
+                        model,
+                        batch,
+                        candidate_by_id,
+                        by_id,
+                        args.max_output_tokens,
+                    ): batch_index
+                    for batch_index, batch in enumerate(phase2_batches, start=1)
+                }
+                for future in as_completed(futures):
+                    batch_index = futures[future]
+                    results, raw = future.result()
+                    write_json(response_dir / f"phase2_{safe_file_name(model)}_{batch_index:02d}.json", raw)
+                    for result in results:
+                        append_jsonl(phase2_path, result)
+                        print_progress("phase2", result["question_id"], model, result)
 
         report = summarize(questions, args.models, phase1, read_jsonl(phase2_path), candidates)
         write_json(output_dir / "golden_bootstrap_report.json", report)
@@ -145,12 +187,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--full-context-char-cap", type=int, default=320_000)
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument("--max-output-tokens", type=int, default=16_384)
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high"],
+        default="high",
+        help="Reasoning budget requested from compatible judge models.",
+    )
     parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Maximum number of model requests to run concurrently per model.",
+    )
     parser.add_argument("--phase1-input-dirs", type=Path, nargs="*", default=[],
                         help="Import independently generated phase-1 result directories before validation.")
     parser.add_argument("--limit-questions", type=int, default=0,
                         help="Run a deterministic pilot against the first N sampled questions.")
     parser.add_argument("--stage", choices=["all", "answer", "validate"], default="all")
+    parser.add_argument(
+        "--retry-invalid",
+        action="store_true",
+        help="Treat malformed/error phase-1 records as pending so they can be retried.",
+    )
     return parser.parse_args()
 
 
@@ -209,10 +268,17 @@ def select_questions(path: Path, sample_size: int, seed: int) -> list[Question]:
 
 
 class OpenAICompatibleJudge:
-    def __init__(self, api_base_url: str, api_key: str, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        api_base_url: str,
+        api_key: str,
+        timeout_seconds: float,
+        reasoning_effort: str,
+    ) -> None:
         self._url = f"{api_base_url.rstrip('/')}/chat/completions"
         self._headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         self._timeout = timeout_seconds
+        self._reasoning_effort = reasoning_effort
 
     def ask(self, model: str, system: str, user: str, max_tokens: int) -> tuple[str, dict[str, Any], str | None]:
         response = httpx.post(
@@ -221,6 +287,7 @@ class OpenAICompatibleJudge:
             json={
                 "model": model,
                 "temperature": 0,
+                "reasoning_effort": self._reasoning_effort,
                 # Reasoning-capable OpenAI-compatible models may spend part of
                 # this budget on hidden reasoning before producing message
                 # content.  A small output cap therefore yields a valid HTTP
