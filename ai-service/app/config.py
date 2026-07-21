@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     enable_embedding: bool = False
     retrieval_mode: str = "keyword"
     enable_hybrid_search: bool = False
+    hybrid_rrf_k: int = 60
+    hybrid_vector_weight: float = 1.0
+    hybrid_keyword_weight: float = 1.0
 
     # Rerank configuration. Prefer cloud rerank APIs to avoid local model loading.
     enable_rerank: bool = False

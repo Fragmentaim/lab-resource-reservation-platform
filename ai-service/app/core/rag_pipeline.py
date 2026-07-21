@@ -75,44 +75,7 @@ def retrieve_candidates(
     score_threshold: Optional[float] = None,
 ) -> List[dict]:
     """Retrieve and rerank chunks without invoking a chat model or assembling an answer."""
-    k = top_k or settings.top_k
-    threshold = score_threshold or settings.score_threshold
-    keywords = _extract_keywords(question)
-    candidate_k = reranker.candidate_limit(k)
-
-    if settings.retrieval_mode == "vector":
-        query_vector = embedder.embed_query(question)
-        search_results = vectorstore.search(
-            query_vector=query_vector,
-            top_k=candidate_k,
-            score_threshold=threshold,
-            document_ids=document_ids,
-        )
-        _mark_retrieval_source(search_results, "vector")
-        if settings.enable_hybrid_search:
-            keyword_results = vectorstore.search_by_keywords(keywords, top_k=candidate_k, document_ids=document_ids)
-            _mark_retrieval_source(keyword_results, "keyword")
-            search_results.extend(keyword_results)
-        if not search_results:
-            search_results = vectorstore.search_by_keywords(keywords, top_k=k, document_ids=document_ids)
-            _mark_retrieval_source(search_results, "keyword")
-    else:
-        search_results = vectorstore.search_by_keywords(keywords, top_k=candidate_k, document_ids=document_ids)
-        _mark_retrieval_source(search_results, "keyword")
-        if (settings.enable_hybrid_search or not search_results) and settings.enable_embedding:
-            query_vector = embedder.embed_query(question)
-            vector_results = vectorstore.search(
-                query_vector=query_vector,
-                top_k=candidate_k,
-                score_threshold=threshold,
-                document_ids=document_ids,
-            )
-            _mark_retrieval_source(vector_results, "vector")
-            search_results.extend(vector_results)
-
-    search_results = _dedupe_results(search_results)
-    ranked_limit = min(len(search_results), max(k, candidate_k))
-    return reranker.rerank(question, search_results, keywords, ranked_limit)
+    return _retrieve_ranked_candidates(question, document_ids, top_k, score_threshold)
 
 
 def answer_question_stream(
@@ -176,8 +139,6 @@ def _build_rag_prompt(
     score_threshold: Optional[float] = None,
     model: Optional[str] = None,
 ) -> tuple[str, str, list, list, str, bool, dict]:
-    k = top_k or settings.top_k
-    threshold = score_threshold or settings.score_threshold
     rewritten_question, rewrite_applied = query_rewriter.rewrite_question(
         question=question,
         session_summary=session_summary,
@@ -185,46 +146,8 @@ def _build_rag_prompt(
         model=model,
     )
     retrieval_question = rewritten_question or question
-    keywords = _extract_keywords(retrieval_question)
-    candidate_k = reranker.candidate_limit(k)
-
-    if settings.retrieval_mode == "vector":
-        query_vector = embedder.embed_query(retrieval_question)
-        search_results = vectorstore.search(
-            query_vector=query_vector,
-            top_k=candidate_k,
-            score_threshold=threshold,
-            document_ids=document_ids,
-        )
-        _mark_retrieval_source(search_results, "vector")
-        if settings.enable_hybrid_search:
-            keyword_results = vectorstore.search_by_keywords(
-                keywords,
-                top_k=candidate_k,
-                document_ids=document_ids,
-            )
-            _mark_retrieval_source(keyword_results, "keyword")
-            search_results.extend(keyword_results)
-        if not search_results:
-            search_results = vectorstore.search_by_keywords(keywords, top_k=k, document_ids=document_ids)
-            _mark_retrieval_source(search_results, "keyword")
-    else:
-        search_results = vectorstore.search_by_keywords(keywords, top_k=candidate_k, document_ids=document_ids)
-        _mark_retrieval_source(search_results, "keyword")
-        if (settings.enable_hybrid_search or not search_results) and settings.enable_embedding:
-            query_vector = embedder.embed_query(retrieval_question)
-            vector_results = vectorstore.search(
-                query_vector=query_vector,
-                top_k=candidate_k,
-                score_threshold=threshold,
-                document_ids=document_ids,
-            )
-            _mark_retrieval_source(vector_results, "vector")
-            search_results.extend(vector_results)
-
-    search_results = _dedupe_results(search_results)
-    ranked_limit = min(len(search_results), max(k, candidate_k))
-    search_results = reranker.rerank(retrieval_question, search_results, keywords, ranked_limit)
+    k = top_k or settings.top_k
+    search_results = _retrieve_ranked_candidates(retrieval_question, document_ids, top_k, score_threshold)
     assembled = context_assembler.assemble_context(
         original_question=question,
         rewritten_question=retrieval_question,
@@ -264,11 +187,87 @@ def _build_rag_prompt(
     )
 
 
+def _retrieve_ranked_candidates(
+    question: str,
+    document_ids: Optional[List[int]],
+    top_k: Optional[int],
+    score_threshold: Optional[float],
+) -> List[dict]:
+    """Collect lexical and vector candidates, fuse them, then rerank once."""
+    k = top_k or settings.top_k
+    candidate_k = reranker.candidate_limit(k)
+    keywords = _extract_keywords(question)
+    threshold = settings.score_threshold if score_threshold is None else score_threshold
+    vector_results: List[dict] = []
+    keyword_results: List[dict] = []
+
+    if settings.retrieval_mode == "vector":
+        vector_results = vectorstore.search(
+            query_vector=embedder.embed_query(question),
+            top_k=candidate_k,
+            score_threshold=threshold,
+            document_ids=document_ids,
+        )
+        _mark_retrieval_source(vector_results, "vector")
+        if settings.enable_hybrid_search or not vector_results:
+            keyword_results = vectorstore.search_by_keywords(keywords, top_k=candidate_k, document_ids=document_ids)
+            _mark_retrieval_source(keyword_results, "keyword")
+    else:
+        keyword_results = vectorstore.search_by_keywords(keywords, top_k=candidate_k, document_ids=document_ids)
+        _mark_retrieval_source(keyword_results, "keyword")
+        if (settings.enable_hybrid_search or not keyword_results) and settings.enable_embedding:
+            vector_results = vectorstore.search(
+                query_vector=embedder.embed_query(question),
+                top_k=candidate_k,
+                score_threshold=threshold,
+                document_ids=document_ids,
+            )
+            _mark_retrieval_source(vector_results, "vector")
+
+    if settings.enable_hybrid_search and vector_results and keyword_results:
+        first_stage = _fuse_hybrid_results(vector_results, keyword_results, candidate_k)
+    else:
+        first_stage = _dedupe_results(vector_results + keyword_results)
+    ranked_limit = min(len(first_stage), max(k, candidate_k))
+    return reranker.rerank(question, first_stage, keywords, ranked_limit)
+
+
+def _fuse_hybrid_results(vector_results: List[dict], keyword_results: List[dict], limit: int) -> List[dict]:
+    """Fuse incomparable vector/lexical scores with deterministic weighted RRF."""
+    rrf_k = max(1, settings.hybrid_rrf_k)
+    channels = (
+        ("vector", vector_results, max(0.0, settings.hybrid_vector_weight)),
+        ("keyword", keyword_results, max(0.0, settings.hybrid_keyword_weight)),
+    )
+    merged: dict[str, dict] = {}
+    for source, results, weight in channels:
+        for rank, raw in enumerate(results, start=1):
+            key = _result_key(raw)
+            if not key:
+                continue
+            current = merged.setdefault(key, {"result": dict(raw), "score": 0.0, "ranks": {}, "sources": set()})
+            current["score"] += weight / (rrf_k + rank)
+            current["ranks"][source] = rank
+            current["sources"].add(source)
+
+    fused = []
+    for item in merged.values():
+        result = item["result"]
+        result["retrieval_source"] = ",".join(sorted(item["sources"]))
+        result["retrieval_score"] = item["score"]
+        result["fusion_score"] = item["score"]
+        result["fusion_method"] = "weighted_rrf"
+        result["retrieval_ranks"] = item["ranks"]
+        fused.append(result)
+    fused.sort(key=lambda item: (-item["fusion_score"], _result_key(item)))
+    return fused[:max(1, limit)]
+
+
 def _dedupe_results(results: List[dict]) -> List[dict]:
     seen = {}
     deduped = []
     for result in results:
-        key = result.get("chunk_id") or result.get("content_hash") or result.get("content")
+        key = _result_key(result)
         if key in seen:
             existing = seen[key]
             existing_sources = set(str(existing.get("retrieval_source") or "").split(","))
@@ -282,6 +281,10 @@ def _dedupe_results(results: List[dict]) -> List[dict]:
         seen[key] = result
         deduped.append(result)
     return deduped
+
+
+def _result_key(result: dict) -> str:
+    return str(result.get("chunk_id") or result.get("content_hash") or result.get("content") or "")
 
 
 def _mark_retrieval_source(results: List[dict], source: str) -> None:

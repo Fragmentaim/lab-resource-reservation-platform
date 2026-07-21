@@ -1,4 +1,4 @@
-from app.core import reranker
+from app.core import rag_pipeline, reranker
 from app.core.context_assembler import assemble_context
 
 
@@ -60,3 +60,41 @@ def test_rerank_falls_back_to_local_scoring_when_api_returns_nothing(monkeypatch
     assert [item["rerank_provider"] for item in ranked] == ["local", "local"]
     assert ranked[0]["chunk_id"] == "policy"
     assert all(item["retrieval_score"] is not None for item in ranked)
+
+
+def test_hybrid_retrieval_uses_rrf_to_fuse_duplicate_candidates_and_preserves_acl(monkeypatch):
+    monkeypatch.setattr(rag_pipeline.settings, "retrieval_mode", "vector")
+    monkeypatch.setattr(rag_pipeline.settings, "enable_embedding", True)
+    monkeypatch.setattr(rag_pipeline.settings, "enable_hybrid_search", True)
+    monkeypatch.setattr(rag_pipeline.settings, "hybrid_rrf_k", 60)
+    monkeypatch.setattr(rag_pipeline.reranker, "candidate_limit", lambda top_k: top_k)
+    monkeypatch.setattr(rag_pipeline.reranker, "rerank", lambda _question, results, _keywords, _limit: results)
+    monkeypatch.setattr(rag_pipeline.embedder, "embed_query", lambda _question: [0.1, 0.2])
+
+    calls = []
+
+    def vector_search(**kwargs):
+        calls.append(("vector", kwargs["document_ids"]))
+        return [
+            _result("vector-only", "实验室开放时间", 0.95),
+            _result("shared", "取消预约需要提前确认", 0.75),
+        ]
+
+    def keyword_search(_keywords, top_k, document_ids):
+        calls.append(("keyword", document_ids))
+        return [
+            _result("shared", "取消预约需要提前确认", 9.0),
+            _result("keyword-only", "预约规则与违约处理", 6.0),
+        ]
+
+    monkeypatch.setattr(rag_pipeline.vectorstore, "search", vector_search)
+    monkeypatch.setattr(rag_pipeline.vectorstore, "search_by_keywords", keyword_search)
+
+    results = rag_pipeline.retrieve_candidates("取消预约规则", document_ids=[12], top_k=3)
+
+    assert [item["chunk_id"] for item in results] == ["shared", "vector-only", "keyword-only"]
+    assert results[0]["retrieval_source"] == "keyword,vector"
+    assert results[0]["fusion_method"] == "weighted_rrf"
+    assert results[0]["retrieval_ranks"] == {"vector": 2, "keyword": 1}
+    assert len({item["chunk_id"] for item in results}) == 3
+    assert calls == [("vector", [12]), ("keyword", [12])]
