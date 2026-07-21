@@ -1,0 +1,19 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.10
+pydantic-settings>=2.7
+# PaddleOCR 3.3 still imports the LangChain 0.x compatibility module
+# langchain.docstore. Keep this sidecar on the compatible family.
+langchain>=0.3.0,<1.0.0
+langchain-community>=0.3.0,<0.4.0
+langchain-text-splitters>=0.3.0,<1.0.0
+qdrant-client>=1.12.0
+pymupdf>=1.25.0
+python-docx>=1.1.0
+openpyxl>=3.1.5
+Pillow>=11.1.0
+pytesseract>=0.3.13
+python-multipart>=0.0.18
+httpx>=0.28.0
+tiktoken>=0.9.0
+openai>=1.55.0

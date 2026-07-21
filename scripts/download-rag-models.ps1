@@ -1,26 +1,18 @@
 param(
     [ValidateSet('embedding', 'reranker', 'both')]
     [string]$Target = 'both',
-    [string]$ModelRoot = 'D:\AI-Models',
-    [string]$PythonExe = 'D:\ComfyUI-FlashVSR\ComfyUI_windows_portable\python_embeded\python.exe',
-    [string]$ProxyUrl = 'http://127.0.0.1:7890',
-    [int]$MinimumDFreeGb = 10,
-    [int]$MinimumCFreeGb = 5
+    [string]$ModelRoot = (Join-Path $PSScriptRoot '..\.model-cache'),
+    [string]$PythonExe = 'python',
+    [string]$ProxyUrl = '',
+    [int]$MinimumFreeGb = 10
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path -LiteralPath $PythonExe)) {
-    throw "未找到 GPU Python: $PythonExe。请通过 -PythonExe 指定已验证的 CUDA Python。"
-}
-
-$cFreeGb = [math]::Floor((Get-PSDrive C).Free / 1GB)
-$dFreeGb = [math]::Floor((Get-PSDrive D).Free / 1GB)
-if ($cFreeGb -lt $MinimumCFreeGb) {
-    throw "C 盘仅剩 $cFreeGb GB，已停止下载以保护系统盘。请先释放 C 盘，或在确认安全后显式降低 -MinimumCFreeGb。"
-}
-if ($dFreeGb -lt $MinimumDFreeGb) {
-    throw "D 盘仅剩 $dFreeGb GB，不足以安全下载模型。"
+$modelDrive = (Split-Path -Qualifier ([System.IO.Path]::GetFullPath($ModelRoot))).TrimEnd(':')
+$modelFreeGb = [math]::Floor((Get-PSDrive $modelDrive).Free / 1GB)
+if ($modelFreeGb -lt $MinimumFreeGb) {
+    throw "模型目录所在磁盘仅剩 $modelFreeGb GB，不足以安全下载模型。"
 }
 
 $env:HF_HOME = Join-Path $ModelRoot 'huggingface-home'

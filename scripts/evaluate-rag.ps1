@@ -5,7 +5,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Password,
     [string]$QuestionSetPath = (Join-Path $PSScriptRoot '..\docs\rag-evaluation\question-set.jsonl'),
-    [string]$ResultPath = (Join-Path 'D:\AI-Models\logs' ("rag-evaluation-{0}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss')))
+    [string]$ResultPath = (Join-Path $PSScriptRoot ("..\logs\rag-evaluation-{0}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss')))
 )
 
 $ErrorActionPreference = 'Stop'

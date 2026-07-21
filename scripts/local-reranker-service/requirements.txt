@@ -1,6 +1,4 @@
-# Packages are already available in D:\python-packages on the development machine.
-# Install to a D: target if a fresh environment is needed:
-# pip install --target D:\python-packages -r requirements.txt
+# Install in an isolated virtual environment before starting the service.
 fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
 torch>=2.6,<3

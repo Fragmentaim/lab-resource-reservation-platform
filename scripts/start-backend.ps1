@@ -1,3 +1,3 @@
-Set-Location -LiteralPath "D:\lab-booking-course\backend"
+Set-Location -LiteralPath (Join-Path $PSScriptRoot '..\backend')
 mvn spring-boot:run
 

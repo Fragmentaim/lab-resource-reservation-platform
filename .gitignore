@@ -2,11 +2,6 @@
 backend/target/
 backend/.mvn/wrapper/maven-wrapper.jar
 
-# Node / Vite
-frontend/node_modules/
-frontend/dist/
-frontend/dist-ssr/
-
 # Logs
 logs/
 *.log
@@ -20,14 +15,20 @@ pnpm-debug.log*
 *.local
 .env
 .env.*
+!.env.example
+
+# Python / AI service
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.qdrant-local/
+.model-cache/
+tokenmp.local.env
 
 # Local runtime data and one-off verification fixtures
 uploads/
 .codex-run/
-
-# Load-test runtime fixtures and generated reports
-loadtest/runtime/
-loadtest/results/
 
 # IDE / OS
 .idea/

@@ -7,7 +7,7 @@
 ## 使用方式
 
 1. 管理员在“知识库管理”上传 `lab-booking-policy.md`，确认状态为 `READY`。
-2. 启动后端和 AI 服务后，执行 `scripts/evaluate-rag.ps1`，结果默认写入 `D:\AI-Models\logs`，不会进入 Git。
+2. 启动后端和 AI 服务后，执行 `scripts/evaluate-rag.ps1`，结果默认写入仓库根目录的 `logs/`，不会进入 Git。
 3. 记录每次运行的模型、检索配置、召回条数、正确数、拒答数和延迟；只在同一题集、同一知识源下比较不同配置。
 
 `scripts/evaluate-rag-retrieval.ps1` 是纯 RAG 评测入口：它直接访问 AI 服务并固定 `document_ids`，不会被预约工具路由截获。结果同时记录：

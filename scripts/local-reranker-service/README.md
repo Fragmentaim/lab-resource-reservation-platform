@@ -12,7 +12,7 @@ GET  http://127.0.0.1:8011/healthz
 Run it from PowerShell:
 
 ```powershell
-cd D:\_Projects\01_Java\lab-booking-course\scripts\local-reranker-service
+cd scripts/local-reranker-service
 .\start-local-reranker.ps1
 ```
 

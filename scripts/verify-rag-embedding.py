@@ -12,7 +12,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model-path",
-        default=r"D:\AI-Models\models\Qwen3-Embedding-0.6B",
+        default="Qwen/Qwen3-Embedding-0.6B",
         help="Local Hugging Face model directory.",
     )
     parser.add_argument("--expected-dimension", type=int, default=1024)

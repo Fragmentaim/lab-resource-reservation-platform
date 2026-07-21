@@ -5,7 +5,7 @@ param(
     [int]$TopK = 5,
     [int]$MaxSamples = 0,
     [int]$RequestTimeoutSeconds = 120,
-    [string]$ResultPath = (Join-Path 'D:\AI-Models\logs' ("rag-retrieval-evaluation-{0}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss')))
+    [string]$ResultPath = (Join-Path $PSScriptRoot ("..\logs\rag-retrieval-evaluation-{0}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss')))
 )
 
 $ErrorActionPreference = 'Stop'

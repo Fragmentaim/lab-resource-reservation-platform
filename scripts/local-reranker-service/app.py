@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-MODEL_PATH = os.getenv("LOCAL_RERANKER_MODEL_PATH", r"D:\AI-Models\models\Qwen3-Reranker-0.6B")
+MODEL_PATH = os.getenv("LOCAL_RERANKER_MODEL_PATH", "Qwen/Qwen3-Reranker-0.6B")
 API_KEY = os.getenv("LOCAL_RERANKER_API_KEY", "")
 MAX_DOCUMENTS = int(os.getenv("LOCAL_RERANKER_MAX_DOCUMENTS", "32"))
 MAX_QUERY_CHARS = int(os.getenv("LOCAL_RERANKER_MAX_QUERY_CHARS", "2000"))
@@ -110,8 +110,6 @@ def _verify_authorization(authorization: str | None) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if not os.path.isdir(MODEL_PATH):
-        raise RuntimeError(f"local reranker model directory is missing: {MODEL_PATH}")
     yield
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

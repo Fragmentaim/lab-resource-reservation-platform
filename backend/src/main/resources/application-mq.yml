@@ -10,7 +10,7 @@ app:
       enabled: true
   message-outbox:
     enabled: true
-    name-server: 127.0.0.1:9876
+    name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
     producer-group: lab-booking-message-outbox-producer-group
     max-reconsume-times: -1
     lock-seconds: 60
@@ -21,10 +21,10 @@ app:
       batch-size: 20
   knowledge:
     storage:
-      type: minio
+      type: ${KNOWLEDGE_STORAGE_TYPE:minio}
     document-processing:
       enabled: true
-      name-server: 127.0.0.1:9876
+      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
       topic: knowledge-document-process
       tag: KNOWLEDGE_DOCUMENT_PROCESS
       event-type: KNOWLEDGE_DOCUMENT_PROCESS
