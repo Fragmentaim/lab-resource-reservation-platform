@@ -177,6 +177,12 @@ docker compose --profile mcp up mcp
 
 不要让多个用户共享同一个 `MCP_ACCESS_TOKEN`；多租户 HTTP 部署需要接入 OAuth/资源服务器后再开放。
 
+### Agent 恢复点
+
+Agent Run 在规划和每次工具执行状态变化后写入短时 checkpoint（默认 15 分钟）。checkpoint 只保存阶段、轮次、已完成工具和检索候选引用，不保存用户问题、模型回答、工具正文或文档内容。`POST /knowledge/qa/resume/{traceId}` 仅允许原用户恢复仍为 `PENDING` 的运行，并会重新执行当前 ACL、会话规划与工具校验；成功、失败或过期时 checkpoint 会被清理。
+
+这不是对模型输出的盲目重放，也不恢复任何预约写操作。
+
 ## 代码导航
 
 - Agent 工具编排：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/tool/`、`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/NativeToolCallingServiceImpl.java`

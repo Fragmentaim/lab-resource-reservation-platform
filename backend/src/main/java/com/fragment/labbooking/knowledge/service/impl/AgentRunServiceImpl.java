@@ -10,11 +10,13 @@ import com.fragment.labbooking.knowledge.agent.ContextPlan;
 import com.fragment.labbooking.knowledge.agent.SessionContextPlan;
 import com.fragment.labbooking.knowledge.agent.PolicyContext;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
+import com.fragment.labbooking.knowledge.entity.AgentRuntimeCheckpoint;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
 import com.fragment.labbooking.knowledge.entity.QaContextTrace;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.knowledge.mapper.AgentRunMapper;
+import com.fragment.labbooking.knowledge.mapper.AgentRuntimeCheckpointMapper;
 import com.fragment.labbooking.knowledge.mapper.AgentStepMapper;
 import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
@@ -24,6 +26,7 @@ import com.fragment.labbooking.knowledge.vo.AgentStepVO;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -32,6 +35,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Persists a privacy-safe execution view for one QA record. Raw questions,
@@ -47,14 +51,20 @@ public class AgentRunServiceImpl implements AgentRunService {
     private static final String FAILED = "FAILED";
 
     private final AgentRunMapper agentRunMapper;
+    private final AgentRuntimeCheckpointMapper checkpointMapper;
     private final AgentStepMapper agentStepMapper;
     private final QaContextTraceMapper qaContextTraceMapper;
     private final ObjectMapper objectMapper;
 
-    public AgentRunServiceImpl(AgentRunMapper agentRunMapper, AgentStepMapper agentStepMapper,
+    @Value("${app.knowledge.agent-checkpoint.ttl-seconds:900}")
+    private long checkpointTtlSeconds;
+
+    public AgentRunServiceImpl(AgentRunMapper agentRunMapper, AgentRuntimeCheckpointMapper checkpointMapper,
+                               AgentStepMapper agentStepMapper,
                                QaContextTraceMapper qaContextTraceMapper,
                                ObjectMapper objectMapper) {
         this.agentRunMapper = agentRunMapper;
+        this.checkpointMapper = checkpointMapper;
         this.agentStepMapper = agentStepMapper;
         this.qaContextTraceMapper = qaContextTraceMapper;
         this.objectMapper = objectMapper;
@@ -99,8 +109,32 @@ public class AgentRunServiceImpl implements AgentRunService {
             if (run != null) {
                 insertStep(run.getId(), nextStepNo(run.getId()), "STATE", "agent_state", SUCCEEDED, 0, null,
                         state.safeSnapshot());
+                upsertCheckpoint(run, state);
             }
         });
+    }
+
+    @Override
+    public Optional<AgentState> restoreRuntimeCheckpoint(String traceId, PolicyContext policy) {
+        if (!StringUtils.hasText(traceId) || policy == null || policy.userId() == null) {
+            return Optional.empty();
+        }
+        try {
+            AgentRuntimeCheckpoint stored = checkpointMapper.selectById(traceId);
+            if (stored == null) {
+                return Optional.empty();
+            }
+            if (!policy.userId().equals(stored.getUserId())
+                    || stored.getExpiresAt() == null || !stored.getExpiresAt().isAfter(LocalDateTime.now())) {
+                checkpointMapper.deleteById(traceId);
+                return Optional.empty();
+            }
+            AgentState.Checkpoint checkpoint = deserializeCheckpoint(stored.getCheckpointJson());
+            return Optional.of(AgentState.restore(checkpoint, policy));
+        } catch (Exception exception) {
+            log.warn("Failed to restore agent checkpoint. traceId={}, reason={}", traceId, exception.getMessage());
+            return Optional.empty();
+        }
     }
 
     @Override
@@ -166,6 +200,7 @@ public class AgentRunServiceImpl implements AgentRunService {
             run.setStatus(FAILED);
             run.setFinishedAt(LocalDateTime.now());
             agentRunMapper.updateById(run);
+            clearCheckpoint(record.getTraceId());
             insertStep(run.getId(), nextStepNo(run.getId()), "FAILURE", "execution_failed", FAILED, 0, null,
                     Map.of("error_type", exception.getClass().getSimpleName(), "message", safeText(exception.getMessage())));
         });
@@ -237,6 +272,7 @@ public class AgentRunServiceImpl implements AgentRunService {
         run.setSourceCount(sourceCount);
         run.setFinishedAt(LocalDateTime.now());
         agentRunMapper.updateById(run);
+        clearCheckpoint(record.getTraceId());
 
         int stepNo = nextStepNo(run.getId());
         for (StepData step : steps) {
@@ -303,6 +339,77 @@ public class AgentRunServiceImpl implements AgentRunService {
         return agentRunMapper.selectOne(new LambdaQueryWrapper<AgentRun>()
                 .eq(AgentRun::getTraceId, traceId)
                 .last("LIMIT 1"));
+    }
+
+    private void upsertCheckpoint(AgentRun run, AgentState state) {
+        LocalDateTime now = LocalDateTime.now();
+        AgentRuntimeCheckpoint checkpoint = new AgentRuntimeCheckpoint();
+        checkpoint.setTraceId(run.getTraceId());
+        checkpoint.setAgentRunId(run.getId());
+        checkpoint.setUserId(run.getUserId());
+        checkpoint.setSessionId(run.getSessionId());
+        checkpoint.setCheckpointJson(serializeCheckpoint(state.checkpoint()));
+        checkpoint.setExpiresAt(now.plusSeconds(Math.max(60L, checkpointTtlSeconds)));
+        checkpoint.setUpdatedAt(now);
+        if (checkpointMapper.selectById(run.getTraceId()) == null) {
+            checkpointMapper.insert(checkpoint);
+        } else {
+            checkpointMapper.updateById(checkpoint);
+        }
+    }
+
+    private String serializeCheckpoint(AgentState.Checkpoint checkpoint) {
+        try {
+            return objectMapper.writeValueAsString(checkpoint);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Cannot serialize agent checkpoint", exception);
+        }
+    }
+
+    private AgentState.Checkpoint deserializeCheckpoint(String json) throws Exception {
+        Map<String, Object> value = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+        String traceId = safeText(value.get("traceId"));
+        String sessionId = safeText(value.get("sessionId"));
+        Long actorId = longValue(value.get("actorId"));
+        AgentState.Phase phase = AgentState.Phase.valueOf(safeText(value.get("phase")));
+        int round = intValue(value.get("round"));
+        List<String> completedTools = stringList(value.get("completedTools"));
+        List<String> openedChunkUids = stringList(value.get("openedChunkUids"));
+        Map<String, Long> candidates = new LinkedHashMap<>();
+        Object candidateValue = value.get("searchableChunkDocumentIds");
+        if (candidateValue instanceof Map<?, ?> rawCandidates) {
+            rawCandidates.forEach((key, documentId) -> {
+                Long parsedId = longValue(documentId);
+                if (key != null && parsedId != null) {
+                    candidates.put(String.valueOf(key), parsedId);
+                }
+            });
+        }
+        return new AgentState.Checkpoint(traceId, sessionId, actorId, phase, round, completedTools, candidates, openedChunkUids);
+    }
+
+    private List<String> stringList(Object raw) {
+        if (!(raw instanceof List<?> values)) {
+            return List.of();
+        }
+        return values.stream().filter(String.class::isInstance).map(String.class::cast).toList();
+    }
+
+    private Long longValue(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return value == null ? null : Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private void clearCheckpoint(String traceId) {
+        if (StringUtils.hasText(traceId)) {
+            checkpointMapper.deleteById(traceId);
+        }
     }
 
     private int nextStepNo(Long runId) {

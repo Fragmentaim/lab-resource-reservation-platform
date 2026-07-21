@@ -52,12 +52,15 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
         }
         try {
             List<Map<String, Object>> trace = new ArrayList<>();
-            List<NativeToolCallingClient.ExecutedToolCall> executed = new ArrayList<>();
             List<QaSourceVO> openedSources = new ArrayList<>();
             int sourceCount = 0;
             PolicyContext policy = PolicyContext.from(actor);
-            AgentState state = new AgentState(traceId, sessionId, policy);
             boolean runtimeManaged = traceId != null && !traceId.isBlank();
+            AgentState state = runtimeManaged
+                    ? agentRunService.restoreRuntimeCheckpoint(traceId, policy)
+                    .orElseGet(() -> new AgentState(traceId, sessionId, policy))
+                    : new AgentState(traceId, sessionId, policy);
+            List<NativeToolCallingClient.ExecutedToolCall> executed = new ArrayList<>(resumeCandidateCalls(state));
             if (runtimeManaged) {
                 agentRunService.beginRuntime(traceId, policy);
             }
@@ -165,6 +168,26 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
         if (runtimeManaged) {
             agentRunService.recordRuntimeState(traceId, state);
         }
+    }
+
+    private List<NativeToolCallingClient.ExecutedToolCall> resumeCandidateCalls(AgentState state) {
+        List<String> chunkUids = state.resumableKnowledgeChunkUids();
+        if (chunkUids.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> candidates = chunkUids.stream()
+                .map(chunkUid -> Map.<String, Object>of("chunk_uid", chunkUid))
+                .toList();
+        Map<String, Object> output = Map.of(
+                "status", "RESUMED_CANDIDATES",
+                "candidate_count", candidates.size(),
+                "candidates", candidates,
+                "checkpoint_replayed", true
+        );
+        return List.of(new NativeToolCallingClient.ExecutedToolCall(
+                "checkpoint-knowledge-search", "knowledge_search",
+                Map.of("query", "checkpoint-resume"), output
+        ));
     }
 
     private void observePlan(boolean runtimeManaged, String traceId, ContextPlan plan) {

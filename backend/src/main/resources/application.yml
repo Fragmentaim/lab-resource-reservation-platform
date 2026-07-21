@@ -126,3 +126,6 @@ app:
           compaction-target-ratio: 0.70
     native-tool-calling:
       enabled: true
+    agent-checkpoint:
+      # Private runtime recovery state is short-lived and excludes raw prompts/tool payloads.
+      ttl-seconds: ${AGENT_CHECKPOINT_TTL_SECONDS:900}

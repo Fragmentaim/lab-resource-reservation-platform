@@ -32,3 +32,15 @@ CREATE TABLE IF NOT EXISTS agent_step (
     KEY idx_agent_step_tool_trace (tool_trace_id),
     KEY idx_agent_step_run_created (agent_run_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agent_runtime_checkpoint (
+    trace_id        VARCHAR(64)  PRIMARY KEY,
+    agent_run_id    BIGINT       NOT NULL,
+    user_id         BIGINT       NOT NULL,
+    session_id      VARCHAR(64)  NOT NULL,
+    checkpoint_json TEXT         NOT NULL COMMENT 'No raw question, answer, tool payload or document content',
+    expires_at      DATETIME     NOT NULL,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_agent_checkpoint_expiry (expires_at),
+    KEY idx_agent_checkpoint_user (user_id, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

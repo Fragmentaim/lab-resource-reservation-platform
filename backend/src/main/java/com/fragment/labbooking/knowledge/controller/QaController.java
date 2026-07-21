@@ -38,6 +38,11 @@ public class QaController {
         return Result.success(qaRecordService.ask(dto, UserContext.requireUser()));
     }
 
+    @PostMapping("/resume/{traceId}")
+    public Result<QaAnswerVO> resume(@PathVariable String traceId) {
+        return Result.success(qaRecordService.resume(traceId, UserContext.requireUser()));
+    }
+
     @PostMapping(value = "/ask/stream", produces = "application/x-ndjson")
     public ResponseEntity<ResponseBodyEmitter> askStream(@Valid @RequestBody QaAskDTO dto) {
         com.fragment.labbooking.common.auth.LoginUser actor = UserContext.requireUser();

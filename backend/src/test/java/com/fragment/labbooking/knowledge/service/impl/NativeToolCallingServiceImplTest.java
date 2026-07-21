@@ -3,6 +3,8 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.knowledge.agent.ContextTokenCounter;
 import com.fragment.labbooking.knowledge.agent.ModelContextProfileProperties;
+import com.fragment.labbooking.knowledge.agent.AgentState;
+import com.fragment.labbooking.knowledge.agent.PolicyContext;
 import com.fragment.labbooking.knowledge.agent.ToolResultContextPacker;
 import com.fragment.labbooking.knowledge.agent.tool.AgentToolRegistry;
 import com.fragment.labbooking.knowledge.agent.tool.KnowledgeOpenChunksAgentTool;
@@ -12,6 +14,7 @@ import com.fragment.labbooking.knowledge.agent.tool.ReservationContextAgentTool;
 import com.fragment.labbooking.knowledge.agent.tool.ResourceAvailabilityAgentTool;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
+import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.service.NativeToolCallingClient;
 import com.fragment.labbooking.knowledge.service.ReservationCancellationPreviewToolService;
@@ -28,6 +31,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -46,6 +50,7 @@ class NativeToolCallingServiceImplTest {
     @Mock private ResourceAvailabilityToolService availabilityTool;
     @Mock private ReservationCancellationPreviewToolService cancellationTool;
     @Mock private AiToolCallAuditService auditService;
+    @Mock private AgentRunService agentRunService;
     @Mock private KbDocumentService kbDocumentService;
     @Mock private AiServiceClient aiServiceClient;
     private NativeToolCallingServiceImpl service;
@@ -55,6 +60,7 @@ class NativeToolCallingServiceImplTest {
         service = new NativeToolCallingServiceImpl();
         ReflectionTestUtils.setField(service, "nativeToolCallingClient", nativeClient);
         ReflectionTestUtils.setField(service, "aiToolCallAuditService", auditService);
+        ReflectionTestUtils.setField(service, "agentRunService", agentRunService);
         ReflectionTestUtils.setField(service, "agentToolRegistry", new AgentToolRegistry(List.of(
                 new ReservationContextAgentTool(contextTool),
                 new ResourceAvailabilityAgentTool(availabilityTool),
@@ -128,6 +134,27 @@ class NativeToolCallingServiceImplTest {
         verify(auditService).recordSuccess(any(), eq("knowledge_search"), any(), any(),
                 eq("ACL_FILTERED_KNOWLEDGE"), anyLong(), any());
         verify(nativeClient, atLeastOnce()).nextRound(any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldReuseSameActorCheckpointBeforePlanningAResumedToolRound() {
+        AgentState checkpoint = new AgentState("trace-1", "session-1", new PolicyContext(7L, "USER", false));
+        checkpoint.registerKnowledgeCandidates(List.of(Map.entry("chunk-12-3", 12L)));
+        when(agentRunService.restoreRuntimeCheckpoint(eq("trace-1"), any())).thenReturn(Optional.of(checkpoint));
+        NativeToolCallingClient.PlannedToolCall openCall = new NativeToolCallingClient.PlannedToolCall(
+                "call_open", "knowledge_open_chunks", Map.of("chunkUids", List.of("chunk-12-3")));
+        when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
+                new NativeToolCallingClient.ToolRound(List.of(openCall), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(), "已读取恢复的证据。", "glm-5.1")
+        );
+        when(kbDocumentService.listAccessibleReadyDocumentIds(any())).thenReturn(List.of(12L));
+        when(aiServiceClient.openKnowledgeChunks(List.of("chunk-12-3"), List.of(12L))).thenReturn(List.of());
+
+        ToolRouteResult result = service.tryAnswer("继续上次问题", user(), "session-1", "trace-1").orElseThrow();
+
+        assertThat(result.answer()).isEqualTo("已读取恢复的证据。");
+        verify(agentRunService).restoreRuntimeCheckpoint(eq("trace-1"), any());
+        verify(aiServiceClient).openKnowledgeChunks(List.of("chunk-12-3"), List.of(12L));
     }
 
     private LoginUser user() {

@@ -13,6 +13,7 @@ import com.fragment.labbooking.knowledge.vo.ContextTraceVO;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface AgentRunService {
 
@@ -21,6 +22,8 @@ public interface AgentRunService {
     void beginRuntime(String traceId, PolicyContext policy);
 
     void recordRuntimeState(String traceId, AgentState state);
+
+    Optional<AgentState> restoreRuntimeCheckpoint(String traceId, PolicyContext policy);
 
     void recordContextPlan(String traceId, ContextPlan plan);
 

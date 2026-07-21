@@ -86,6 +86,35 @@ public final class AgentState {
         this.phase = Phase.SUCCEEDED;
     }
 
+    /** Safe candidate identifiers that may be replayed to the planner after an interrupted run. */
+    public List<String> resumableKnowledgeChunkUids() {
+        return List.copyOf(searchableChunkDocumentIds.keySet());
+    }
+
+    /**
+     * Internal recovery data only. It intentionally excludes the question,
+     * model output, tool payloads and document text.
+     */
+    public Checkpoint checkpoint() {
+        return new Checkpoint(traceId, sessionId, policy.userId(), phase, round,
+                completedTools, searchableChunkDocumentIds, openedChunkUids);
+    }
+
+    /** Rehydrate only for the same authenticated principal; downstream tools still re-check ACL. */
+    public static AgentState restore(Checkpoint checkpoint, PolicyContext policy) {
+        if (checkpoint == null || policy == null || policy.userId() == null
+                || !policy.userId().equals(checkpoint.actorId())) {
+            throw new IllegalArgumentException("Agent checkpoint does not belong to the current actor");
+        }
+        AgentState state = new AgentState(checkpoint.traceId(), checkpoint.sessionId(), policy);
+        state.phase = checkpoint.phase() == null ? Phase.PLANNING : checkpoint.phase();
+        state.round = Math.max(0, checkpoint.round());
+        state.completedTools.addAll(checkpoint.completedTools());
+        state.searchableChunkDocumentIds.putAll(checkpoint.searchableChunkDocumentIds());
+        state.openedChunkUids.addAll(checkpoint.openedChunkUids());
+        return state;
+    }
+
     public Map<String, Object> safeSnapshot() {
         return Map.of(
                 "phase", phase.name(),
@@ -96,5 +125,23 @@ public final class AgentState {
                 "opened_knowledge_chunk_count", openedChunkUids.size(),
                 "actor_type", policy.admin() ? "ADMIN" : "USER"
         );
+    }
+
+    public record Checkpoint(
+            String traceId,
+            String sessionId,
+            Long actorId,
+            Phase phase,
+            int round,
+            List<String> completedTools,
+            Map<String, Long> searchableChunkDocumentIds,
+            List<String> openedChunkUids
+    ) {
+        public Checkpoint {
+            completedTools = completedTools == null ? List.of() : List.copyOf(completedTools);
+            searchableChunkDocumentIds = searchableChunkDocumentIds == null
+                    ? Map.of() : Map.copyOf(searchableChunkDocumentIds);
+            openedChunkUids = openedChunkUids == null ? List.of() : List.copyOf(openedChunkUids);
+        }
     }
 }

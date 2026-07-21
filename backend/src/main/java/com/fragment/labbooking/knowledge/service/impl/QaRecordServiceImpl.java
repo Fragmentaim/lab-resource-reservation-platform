@@ -96,6 +96,52 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     }
 
     @Override
+    public QaAnswerVO resume(String traceId, LoginUser actor) {
+        if (!StringUtils.hasText(traceId) || actor == null || actor.getId() == null) {
+            throw new BusinessException("恢复运行需要有效的 traceId 和登录用户");
+        }
+        QaRecord record = getOne(new LambdaQueryWrapper<QaRecord>()
+                .eq(QaRecord::getTraceId, traceId)
+                .eq(QaRecord::getUserId, actor.getId())
+                .last("LIMIT 1"));
+        if (record == null || !"PENDING".equals(record.getStatus())) {
+            throw new BusinessException("运行不存在、已结束或无权恢复");
+        }
+        if (agentRunService.restoreRuntimeCheckpoint(traceId, com.fragment.labbooking.knowledge.agent.PolicyContext.from(actor)).isEmpty()) {
+            throw new BusinessException("运行恢复点不存在或已过期，请重新提问");
+        }
+        QaSession session = qaSessionMapper.selectById(record.getSessionId());
+        if (session == null || Boolean.TRUE.equals(session.getDeleted()) || !actor.getId().equals(session.getUserId())) {
+            throw new BusinessException("会话不存在或无权访问");
+        }
+        PreparedSessionContext prepared = prepareSessionContext(session, record.getQuestion());
+        SessionContextPlan sessionPlan = prepared.plan();
+        agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
+
+        java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
+                record.getQuestion(), actor, record.getSessionId(), record.getTraceId(),
+                new AgentConversationContext(prepared.session().getSummary(), sessionPlan.historyMessages()));
+        if (routed.isEmpty()) {
+            throw new BusinessException("运行恢复后未得到可用 Agent 结果，请重新提问");
+        }
+        QaAnswerVO answer = new QaAnswerVO();
+        answer.setAnswer(routed.get().answer());
+        answer.setLatencyMs(0);
+        answer.setModelName(toolRouteModel(routed.get()));
+        answer.setQuestionType("TOOL");
+        answer.setSources(routed.get().sources());
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("route", "permission_scoped_tool_resume");
+        stats.put("tool_calls", routed.get().toolCalls());
+        stats.put("runtime_managed", routed.get().runtimeManaged());
+        stats.put("selected_source_count", routed.get().sourceCount());
+        stats.put("session_context_plan", sessionPlan.safeDetail());
+        answer.setContextStats(stats);
+        finishToolAnswer(record, answer, record.getSessionId(), actor.getId(), record.getQuestion(), nextTurnNo(prepared.session()));
+        return answer;
+    }
+
+    @Override
     public void askStream(QaAskDTO dto, LoginUser actor, ResponseBodyEmitter emitter) {
         RoutedAnswer result = routeAndBuildAnswer(dto, actor);
         QaAnswerVO answer = result.answer();
