@@ -153,18 +153,19 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-当前 Java 测试集覆盖预约状态、权限边界、工具调用、上下文规划、文档 ACL、异步任务和异常路径。仓库发布前已通过 **70 项测试，0 failure / 0 error**。
+当前 Java 测试集覆盖预约状态、权限边界、工具调用、上下文规划、文档 ACL、异步任务和异常路径；AI 测试覆盖解析路由、上下文裁剪、重排回退、混合检索融合与 ACL 检索门槛。以 CI 实际结果为准，不在 README 固化会过期的性能或测试数量。
 
 每次推送和 PR 会由 GitHub Actions 运行 Java 测试、Python 编译检查、Docker Compose 配置校验和敏感信息扫描。实际容器联调依赖 Docker Daemon 与外部模型配置，因此只在本地或部署环境完成。
 
 ## 代码导航
 
-- Agent 工具编排：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/NativeToolCallingServiceImpl.java`
+- Agent 工具编排：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/tool/`、`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/NativeToolCallingServiceImpl.java`
 - Agent 运行轨迹：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/AgentRunServiceImpl.java`
 - 会话上下文：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/`
 - 文档权限与知识库：`backend/src/main/java/com/fragment/labbooking/knowledge/`
 - 文档解析与 OCR：`ai-service/app/core/parser.py`、`ai-service/app/core/ocr_engine.py`
-- 检索与切片：`ai-service/app/core/chunker.py`、`ai-service/app/core/retrieval.py`
+- 检索与切片：`ai-service/app/core/chunker.py`、`ai-service/app/core/rag_pipeline.py`、`ai-service/app/core/reranker.py`
+- 检索质量门槛：`ai-service/app/core/retrieval_eval.py`、`ai-service/evals/`
 - 数据库脚本：`sql/`
 
 ## 安全说明
