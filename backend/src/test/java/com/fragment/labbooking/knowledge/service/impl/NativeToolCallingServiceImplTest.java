@@ -4,6 +4,7 @@ import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.knowledge.agent.ContextTokenCounter;
 import com.fragment.labbooking.knowledge.agent.ModelContextProfileProperties;
 import com.fragment.labbooking.knowledge.agent.AgentState;
+import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
 import com.fragment.labbooking.knowledge.agent.PolicyContext;
 import com.fragment.labbooking.knowledge.agent.ToolResultContextPacker;
 import com.fragment.labbooking.knowledge.agent.tool.AgentToolRegistry;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -155,6 +157,27 @@ class NativeToolCallingServiceImplTest {
         assertThat(result.answer()).isEqualTo("已读取恢复的证据。");
         verify(agentRunService).restoreRuntimeCheckpoint(eq("trace-1"), any());
         verify(aiServiceClient).openKnowledgeChunks(List.of("chunk-12-3"), List.of(12L));
+    }
+
+    @Test
+    void shouldCaptureSanitizedArgumentsOnlyWhenDedicatedEvaluationModeIsEnabled() {
+        ReflectionTestUtils.setField(service, "captureEvaluationArguments", true);
+        NativeToolCallingClient.PlannedToolCall searchCall = new NativeToolCallingClient.PlannedToolCall(
+                "call_eval_1", "knowledge_search", Map.of("query", "预约规则", "apiToken", "not-for-storage"));
+        when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
+                new NativeToolCallingClient.ToolRound(List.of(searchCall), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(), "已完成", "glm-5.1")
+        );
+        when(kbDocumentService.listAccessibleReadyDocumentIds(any())).thenReturn(List.of(12L));
+        when(aiServiceClient.retrieveKnowledge("预约规则", List.of(12L)))
+                .thenReturn(new AiServiceClient.KnowledgeSearchResult("预约规则", List.of()));
+
+        service.tryAnswer("测试评测参数", user(), "session-eval", "trace-eval").orElseThrow();
+
+        ArgumentCaptor<AgentToolExecution> execution = ArgumentCaptor.forClass(AgentToolExecution.class);
+        verify(agentRunService).recordToolExecution(eq("trace-eval"), execution.capture());
+        assertThat(execution.getValue().safeDetail().get("evaluation_arguments"))
+                .isEqualTo(Map.of("query", "预约规则", "apiToken", "<redacted>"));
     }
 
     private LoginUser user() {

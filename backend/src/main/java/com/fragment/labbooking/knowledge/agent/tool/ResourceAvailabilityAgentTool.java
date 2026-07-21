@@ -40,10 +40,13 @@ public class ResourceAvailabilityAgentTool implements AgentTool {
     public AgentToolResult execute(AgentToolInvocation invocation) {
         ResourceAvailabilityToolVO value = resourceAvailabilityToolService.findAvailableSlots(
                 AgentToolArguments.optionalText(invocation.arguments().get("keyword"), 40), 5);
-        return AgentToolResult.of(Map.of(
+        return new AgentToolResult(Map.of(
                 "resultCount", value.getResultCount(),
                 "slots", value.getSlots(),
                 "generatedAt", value.getGeneratedAt()
+        ), 0, Map.of(
+                "result_type", "RESOURCE_AVAILABILITY",
+                "result_count", value.getResultCount()
         ));
     }
 }

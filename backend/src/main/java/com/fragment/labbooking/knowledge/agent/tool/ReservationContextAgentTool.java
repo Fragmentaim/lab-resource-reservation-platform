@@ -43,6 +43,9 @@ public class ReservationContextAgentTool implements AgentTool {
         output.put("activeReservationCount", value.getActiveReservationCount());
         output.put("upcomingReservations", value.getUpcomingReservations());
         output.put("generatedAt", value.getGeneratedAt());
-        return AgentToolResult.of(output);
+        return new AgentToolResult(output, 0, Map.of(
+                "result_type", "RESERVATION_CONTEXT",
+                "actor_user_id", invocation.actor().getId()
+        ));
     }
 }

@@ -44,6 +44,10 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
     @Value("${app.knowledge.native-tool-calling.enabled:true}")
     private boolean enabled;
 
+    /** Dedicated evaluation environments may capture sanitized arguments in AgentStep detail. Off in normal runtime. */
+    @Value("${app.knowledge.agent-evaluation.capture-arguments:false}")
+    private boolean captureEvaluationArguments;
+
     @Override
     public Optional<ToolRouteResult> tryAnswer(String question, LoginUser actor, String sessionId, String traceId,
                                                AgentConversationContext conversationContext) {
@@ -67,10 +71,12 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
             for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
                 state.planning(round + 1);
                 observeState(runtimeManaged, traceId, state);
+                long planningStartedAt = System.nanoTime();
                 NativeToolCallingClient.ToolRound plan = nativeToolCallingClient.nextRound(
                         question, agentToolRegistry.definitionsFor(policy), executed,
                         conversationContext == null ? AgentConversationContext.empty() : conversationContext);
-                observePlan(runtimeManaged, traceId, ContextPlan.from(round + 1, plan));
+                observePlan(runtimeManaged, traceId, ContextPlan.from(round + 1, plan,
+                        (int) Math.min(Integer.MAX_VALUE, elapsedMs(planningStartedAt))));
                 if (plan.toolCalls() == null || plan.toolCalls().isEmpty()) {
                     if (plan.answer() == null || plan.answer().isBlank()) {
                         state.fallingBackToRag();
@@ -124,14 +130,14 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
             aiToolCallAuditService.recordSuccess(traceId, tool.name(), actor, actor.getId(), tool.accessScope(), latencyMs,
                     summarizeArguments(arguments));
             return new ExecutedCall(tool.name(), arguments, output, trace(tool.name(), traceId, latencyMs, "SUCCESS"),
-                    execution(tool.name(), traceId, latencyMs, "SUCCESS", output, result.executionDetail()), result.sourceCount());
+                    execution(tool.name(), traceId, latencyMs, "SUCCESS", output, result.executionDetail(), arguments), result.sourceCount());
         } catch (RuntimeException exception) {
             long latencyMs = elapsedMs(startedAt);
             aiToolCallAuditService.recordFailure(traceId, toolName, actor, actor.getId(), latencyMs,
                     summarizeArguments(arguments), exception.getMessage());
             Map<String, Object> output = Map.of("error", "TOOL_EXECUTION_REJECTED", "message", exception.getMessage());
             return new ExecutedCall(toolName, arguments, output, trace(toolName, traceId, latencyMs, "REJECTED"),
-                    execution(toolName, traceId, latencyMs, "REJECTED", output, Map.of()), 0);
+                    execution(toolName, traceId, latencyMs, "REJECTED", output, Map.of(), arguments), 0);
         }
     }
 
@@ -145,7 +151,8 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
     }
 
     private AgentToolExecution execution(String toolName, String traceId, long latencyMs, String status,
-                                         Map<String, Object> output, Map<String, Object> toolDetail) {
+                                         Map<String, Object> output, Map<String, Object> toolDetail,
+                                         Map<String, Object> arguments) {
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("result", status);
         if (toolDetail != null) {
@@ -155,6 +162,9 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
             detail.putIfAbsent("candidate_count", listSize(output.get("candidates")));
             detail.putIfAbsent("opened_chunk_count", listSize(output.get("chunks")));
             detail.putIfAbsent("knowledge_status", String.valueOf(output.getOrDefault("status", "")));
+        }
+        if (captureEvaluationArguments) {
+            detail.put("evaluation_arguments", sanitizedEvaluationArguments(arguments));
         }
         return new AgentToolExecution(toolName, status, (int) Math.min(Integer.MAX_VALUE, latencyMs), traceId,
                 "native_function_calling", detail);
@@ -168,6 +178,25 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
         if (runtimeManaged) {
             agentRunService.recordRuntimeState(traceId, state);
         }
+    }
+
+    private Map<String, Object> sanitizedEvaluationArguments(Map<String, Object> arguments) {
+        if (arguments == null || arguments.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> safe = new LinkedHashMap<>();
+        arguments.forEach((key, value) -> {
+            String normalizedKey = key == null ? "" : key.toLowerCase();
+            if (normalizedKey.contains("password") || normalizedKey.contains("token") || normalizedKey.contains("secret")
+                    || normalizedKey.contains("authorization")) {
+                safe.put(key, "<redacted>");
+            } else if (value instanceof String text) {
+                safe.put(key, com.fragment.labbooking.common.util.TruncateUtil.truncate(text, 240));
+            } else {
+                safe.put(key, value);
+            }
+        });
+        return safe;
     }
 
     private List<NativeToolCallingClient.ExecutedToolCall> resumeCandidateCalls(AgentState state) {

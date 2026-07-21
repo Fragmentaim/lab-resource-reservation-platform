@@ -118,6 +118,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         SessionContextPlan sessionPlan = prepared.plan();
         agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
 
+        long routeStartedAt = System.nanoTime();
         java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
                 record.getQuestion(), actor, record.getSessionId(), record.getTraceId(),
                 new AgentConversationContext(prepared.session().getSummary(), sessionPlan.historyMessages()));
@@ -126,7 +127,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         }
         QaAnswerVO answer = new QaAnswerVO();
         answer.setAnswer(routed.get().answer());
-        answer.setLatencyMs(0);
+        answer.setLatencyMs(elapsedMs(routeStartedAt));
         answer.setModelName(toolRouteModel(routed.get()));
         answer.setQuestionType("TOOL");
         answer.setSources(routed.get().sources());
@@ -205,6 +206,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         sessionEventService.appendUserInput(record, turnNo);
         agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
 
+        long routeStartedAt = System.nanoTime();
         try {
             java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
                     dto.getQuestion(), actor, sessionId, record.getTraceId(),
@@ -212,7 +214,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             if (routed.isPresent()) {
                 QaAnswerVO answer = new QaAnswerVO();
                 answer.setAnswer(routed.get().answer());
-                answer.setLatencyMs(0);
+                answer.setLatencyMs(elapsedMs(routeStartedAt));
                 answer.setModelName(toolRouteModel(routed.get()));
                 answer.setQuestionType("TOOL");
                 answer.setSources(routed.get().sources());
@@ -239,6 +241,10 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     }
 
     private record RoutedAnswer(QaAnswerVO answer) {}
+
+    private int elapsedMs(long startedAt) {
+        return (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - startedAt) / 1_000_000L);
+    }
 
     private void finishToolAnswer(QaRecord record, QaAnswerVO answer, String sessionId, Long userId, String question,
                                   int turnNo) {
