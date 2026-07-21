@@ -23,6 +23,7 @@ class ChunkResult(BaseModel):
     char_end: Optional[int] = None
     vector_id: str
     block_type: Optional[str] = None
+    chunk_strategy: Optional[str] = None
     source_location: Optional[dict] = None
 
 

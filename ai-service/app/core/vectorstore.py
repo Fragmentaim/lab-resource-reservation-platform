@@ -77,6 +77,7 @@ def upsert_chunks(
                 "char_start": chunk.get("char_start"),
                 "char_end": chunk.get("char_end"),
                 "block_type": chunk.get("block_type"),
+                "chunk_strategy": chunk.get("chunk_strategy"),
                 "source_location": chunk.get("source_location"),
                 "parser_provider": chunk.get("parser_provider"),
             },

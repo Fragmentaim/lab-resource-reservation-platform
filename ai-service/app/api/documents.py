@@ -145,6 +145,7 @@ def _process_file(
             char_end=chunk.get("char_end"),
             vector_id=vector_id,
             block_type=chunk.get("block_type"),
+            chunk_strategy=chunk.get("chunk_strategy"),
             source_location=chunk.get("source_location"),
         )
         for chunk, vector_id in zip(chunks, vector_ids)

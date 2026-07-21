@@ -74,3 +74,63 @@ def test_chunker_carries_heading_path_source_location_and_hash():
     assert chunks[0]["parser_provider"] == "test-provider"
     assert chunks[0]["content_hash"]
     assert chunks[0]["token_count"] > 0
+
+
+def test_chunker_keeps_structured_blocks_atomic_and_marks_their_strategy():
+    parsed = ParsedDocument(
+        blocks=[
+            DocumentBlock(
+                "TABLE",
+                "| 命令码 | 说明 |\n| --- | --- |\n| 0x0101 | 图形数据 |",
+                SourceLocation(7, "page:7"),
+                ["串口协议"],
+            ),
+            DocumentBlock(
+                "CODE",
+                "typedef struct {\n  uint16_t cmd_id;\n} frame_t;",
+                SourceLocation(7, "page:7"),
+                ["串口协议"],
+            ),
+        ],
+        quality=ParseQualityReport(
+            provider="test-provider",
+            provider_version="1",
+            parse_mode="STRUCTURED",
+            unit_count=1,
+            non_empty_unit_count=1,
+            character_count=100,
+        ),
+    )
+
+    chunks = chunk_document(parsed)
+
+    assert len(chunks) == 2
+    assert [chunk["block_type"] for chunk in chunks] == ["TABLE", "CODE"]
+    assert all(chunk["chunk_strategy"] == "ATOMIC" for chunk in chunks)
+    assert "0x0101" in chunks[0]["content"]
+    assert "frame_t" in chunks[1]["content"]
+
+
+def test_chunker_detects_fenced_code_without_document_specific_rules():
+    parsed = ParsedDocument(
+        blocks=[DocumentBlock(
+            "TEXT",
+            "# 示例\n说明文字。\n```c\ntypedef struct {\n  int id;\n} item_t;\n```\n结束说明。",
+            SourceLocation(3, "page:3"),
+        )],
+        quality=ParseQualityReport(
+            provider="test-provider",
+            provider_version="1",
+            parse_mode="TEXT",
+            unit_count=1,
+            non_empty_unit_count=1,
+            character_count=50,
+        ),
+    )
+
+    chunks = chunk_document(parsed)
+
+    code_chunks = [chunk for chunk in chunks if chunk["block_type"] == "CODE"]
+    assert len(code_chunks) == 1
+    assert code_chunks[0]["chunk_strategy"] == "ATOMIC"
+    assert "item_t" in code_chunks[0]["content"]

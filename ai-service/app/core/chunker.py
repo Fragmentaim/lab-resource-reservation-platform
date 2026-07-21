@@ -9,6 +9,15 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _NUMBERED_HEADING_RE = re.compile(
     r"^((第[一二三四五六七八九十百千0-9]+[章节条])|([一二三四五六七八九十]+[、.])|(\d+(\.\d+){0,4}[、.\s]))\s*(.+)$"
 )
+_FENCED_CODE_RE = re.compile(r"^```")
+_CODE_START_RE = re.compile(
+    r"^(?:typedef\b|struct\b|class\b|enum\b|#include\b|using\b|"
+    r"(?:public|private|protected)\s*:|[A-Za-z_]\w*(?:\s*[<>,:*&\[\]]+\s*|\s+)"
+    r"[A-Za-z_]\w*\s*\([^)]*\)\s*\{)"
+)
+_CODE_LINE_RE = re.compile(r"^(?:[{}]|.*[;{}]$|\s+[A-Za-z_]\w*.*)$")
+_LIST_ITEM_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)、]\s+|[一二三四五六七八九十]+[、.])")
+_ATOMIC_BLOCK_TYPES = {"TABLE", "CODE", "FIGURE", "IMAGE"}
 
 
 def chunk_document(document: ParsedDocument) -> List[dict]:
@@ -25,42 +34,62 @@ def chunk_document(document: ParsedDocument) -> List[dict]:
     chunks = []
     chunk_index = 0
     for block in document.blocks:
-        if not block.content.strip():
+        if not block.content.strip() or block.block_type == "TITLE":
             continue
-        for section in _extract_sections(block.content, block.location.unit_no, block.title_path):
-            parts = splitter.split_text(section["content"])
+
+        if block.block_type in _ATOMIC_BLOCK_TYPES:
+            chunk_index = _append_chunk(
+                chunks=chunks,
+                chunk_index=chunk_index,
+                content=block.content.strip(),
+                block=block,
+                title_path=block.title_path,
+                char_start=block.location.char_start or 0,
+                char_end=block.location.char_end,
+                parser_provider=document.quality.provider,
+                chunk_strategy="ATOMIC",
+            )
+            continue
+
+        for section in _extract_sections(block.content, block.title_path):
+            section_type = section["block_type"]
+            section_content = section["content"]
+            if section_type in _ATOMIC_BLOCK_TYPES:
+                chunk_index = _append_chunk(
+                    chunks=chunks,
+                    chunk_index=chunk_index,
+                    content=section_content,
+                    block=block,
+                    title_path=section["title_path"],
+                    char_start=section["char_start"],
+                    char_end=section["char_start"] + len(section_content),
+                    parser_provider=document.quality.provider,
+                    chunk_strategy="ATOMIC",
+                    block_type=section_type,
+                )
+                continue
+
             cursor = 0
-            for part in parts:
+            for part in splitter.split_text(section_content):
                 part = part.strip()
                 if not part:
                     continue
-
-                char_start = section["content"].find(part, cursor)
+                char_start = section_content.find(part, cursor)
                 if char_start < 0:
                     char_start = cursor
-                char_end = char_start + len(part)
-                cursor = char_end
-
-                title_path = section["title_path"]
-                content = _with_heading_context(part, title_path)
-                content_hash = _content_hash(content)
-
-                chunks.append({
-                    "chunk_index": chunk_index,
-                    "content": content,
-                    "page_no": block.location.unit_no,
-                    "section_title": title_path[-1] if title_path else None,
-                    "title_path": title_path,
-                    "title_path_text": " > ".join(title_path),
-                    "content_hash": content_hash,
-                    "char_start": section["char_start"] + char_start,
-                    "char_end": section["char_start"] + char_end,
-                    "token_count": _estimate_token_count(content),
-                    "block_type": block.block_type,
-                    "source_location": block.location.as_dict(),
-                    "parser_provider": document.quality.provider,
-                })
-                chunk_index += 1
+                cursor = char_start + len(part)
+                chunk_index = _append_chunk(
+                    chunks=chunks,
+                    chunk_index=chunk_index,
+                    content=part,
+                    block=block,
+                    title_path=section["title_path"],
+                    char_start=section["char_start"] + char_start,
+                    char_end=section["char_start"] + cursor,
+                    parser_provider=document.quality.provider,
+                    chunk_strategy="SEMANTIC_SPLIT",
+                    block_type=section_type,
+                )
 
     return chunks
 
@@ -89,7 +118,40 @@ def chunk_text(pages: List[Tuple[str, int]]) -> List[dict]:
     ))
 
 
-def _extract_sections(text: str, page_no: int, initial_title_path: List[str] | None = None) -> List[dict]:
+def _append_chunk(
+    *,
+    chunks: list[dict],
+    chunk_index: int,
+    content: str,
+    block: DocumentBlock,
+    title_path: List[str],
+    char_start: int,
+    char_end: int | None,
+    parser_provider: str,
+    chunk_strategy: str,
+    block_type: str | None = None,
+) -> int:
+    content_with_context = _with_heading_context(content, title_path)
+    chunks.append({
+        "chunk_index": chunk_index,
+        "content": content_with_context,
+        "page_no": block.location.unit_no,
+        "section_title": title_path[-1] if title_path else None,
+        "title_path": list(title_path),
+        "title_path_text": " > ".join(title_path),
+        "content_hash": _content_hash(content_with_context),
+        "char_start": char_start,
+        "char_end": char_end if char_end is not None else char_start + len(content),
+        "token_count": _estimate_token_count(content_with_context),
+        "block_type": block_type or block.block_type,
+        "chunk_strategy": chunk_strategy,
+        "source_location": block.location.as_dict(),
+        "parser_provider": parser_provider,
+    })
+    return chunk_index + 1
+
+
+def _extract_sections(text: str, initial_title_path: List[str] | None = None) -> List[dict]:
     """Extract heading-aware text sections from one parsed page."""
     sections = []
     title_stack: List[tuple[int, str]] = [
@@ -108,7 +170,7 @@ def _extract_sections(text: str, page_no: int, initial_title_path: List[str] | N
         heading = _parse_heading(line)
         if heading:
             if current_lines:
-                sections.append(_build_section(current_lines, page_no, current_path, current_start))
+                sections.extend(_build_semantic_sections(current_lines, current_path, current_start))
                 current_lines = []
 
             level, title = heading
@@ -123,7 +185,7 @@ def _extract_sections(text: str, page_no: int, initial_title_path: List[str] | N
         current_lines.append(raw_line)
 
     if current_lines:
-        sections.append(_build_section(current_lines, page_no, current_path, current_start))
+        sections.extend(_build_semantic_sections(current_lines, current_path, current_start))
 
     if sections:
         return [s for s in sections if s["content"]]
@@ -131,20 +193,60 @@ def _extract_sections(text: str, page_no: int, initial_title_path: List[str] | N
     content = text.strip()
     return [{
         "content": content,
-        "page_no": page_no,
         "title_path": [],
         "char_start": 0,
+        "block_type": "TEXT",
     }] if content else []
 
 
-def _build_section(lines: List[str], page_no: int, title_path: List[str], char_start: int) -> dict:
-    content = "\n".join(lines).strip()
-    return {
-        "content": content,
-        "page_no": page_no,
-        "title_path": list(title_path),
-        "char_start": char_start,
-    }
+def _build_semantic_sections(lines: List[str], title_path: List[str], char_start: int) -> list[dict]:
+    """Classify code/list runs without relying on source file names or page numbers."""
+    sections: list[dict] = []
+    pending: list[str] = []
+    pending_start = char_start
+    mode = "TEXT"
+    offset = char_start
+
+    def flush() -> None:
+        nonlocal pending
+        content = "\n".join(pending).strip()
+        if content:
+            sections.append({
+                "content": content,
+                "title_path": list(title_path),
+                "char_start": pending_start,
+                "block_type": mode,
+            })
+        pending = []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        line_mode = _line_mode(line, mode)
+        if pending and line_mode != mode:
+            flush()
+            pending_start = offset
+        if not pending:
+            pending_start = offset
+            mode = line_mode
+        pending.append(raw_line)
+        offset += len(raw_line) + 1
+
+    flush()
+    return sections
+
+
+def _line_mode(line: str, current_mode: str) -> str:
+    if not line:
+        return current_mode
+    if _FENCED_CODE_RE.match(line):
+        return "CODE"
+    if _CODE_START_RE.match(line):
+        return "CODE"
+    if current_mode == "CODE" and _CODE_LINE_RE.match(line):
+        return "CODE"
+    if _LIST_ITEM_RE.match(line):
+        return "LIST"
+    return "TEXT"
 
 
 def _parse_heading(line: str) -> tuple[int, str] | None:

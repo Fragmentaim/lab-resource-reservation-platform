@@ -10,7 +10,18 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-BlockType = Literal["TITLE", "TEXT", "TABLE", "IMAGE"]
+# Keep this vocabulary parser-neutral.  A provider may emit only the block
+# types it can identify with confidence; downstream chunking must never need
+# to know whether the source was a PDF, DOCX, spreadsheet, or OCR image.
+BlockType = Literal[
+    "TITLE",
+    "TEXT",
+    "LIST",
+    "TABLE",
+    "CODE",
+    "FIGURE",
+    "IMAGE",
+]
 
 
 @dataclass(frozen=True)
