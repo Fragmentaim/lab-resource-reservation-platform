@@ -3,8 +3,9 @@ package com.fragment.labbooking.common.reservation;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
-import com.fragment.labbooking.common.delay.DelayMessageOutboxService;
+import com.fragment.labbooking.common.delay.DelayMessageTags;
 import com.fragment.labbooking.common.delay.ReservationAutoCancelDelayPayload;
+import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.entity.Reservation;
@@ -27,7 +28,8 @@ public class ReservationAutoCancelService {
     private final HotReservationRedisService hotReservationRedisService;
     private final ResourceRedisCacheService resourceRedisCacheService;
     private final UserNotificationService userNotificationService;
-    private final DelayMessageOutboxService delayMessageOutboxService;
+    private final MessageOutboxService messageOutboxService;
+    private final String delayTopic;
     private final boolean enabled;
     private final long graceMinutes;
 
@@ -36,7 +38,8 @@ public class ReservationAutoCancelService {
                                         HotReservationRedisService hotReservationRedisService,
                                         ResourceRedisCacheService resourceRedisCacheService,
                                         UserNotificationService userNotificationService,
-                                        DelayMessageOutboxService delayMessageOutboxService,
+                                        MessageOutboxService messageOutboxService,
+                                        @Value("${app.message-outbox.delay-topic:reservation-delay}") String delayTopic,
                                         @Value("${app.reservation.auto-cancel.enabled:true}") boolean enabled,
                                         @Value("${app.reservation.auto-cancel.grace-minutes:15}") long graceMinutes) {
         this.reservationMapper = reservationMapper;
@@ -44,7 +47,8 @@ public class ReservationAutoCancelService {
         this.hotReservationRedisService = hotReservationRedisService;
         this.resourceRedisCacheService = resourceRedisCacheService;
         this.userNotificationService = userNotificationService;
-        this.delayMessageOutboxService = delayMessageOutboxService;
+        this.messageOutboxService = messageOutboxService;
+        this.delayTopic = delayTopic;
         this.enabled = enabled;
         this.graceMinutes = Math.max(graceMinutes, 0);
     }
@@ -64,8 +68,12 @@ public class ReservationAutoCancelService {
             return;
         }
 
-        delayMessageOutboxService.enqueue(
+        messageOutboxService.enqueue(
+                "RESERVATION",
+                String.valueOf(reservation.getId()),
                 DelayMessageEventTypes.RESERVATION_AUTO_CANCEL,
+                delayTopic,
+                DelayMessageTags.tagFor(DelayMessageEventTypes.RESERVATION_AUTO_CANCEL),
                 String.valueOf(reservation.getId()),
                 reservation.getAutoCancelDeadline(),
                 new ReservationAutoCancelDelayPayload(reservation.getId())

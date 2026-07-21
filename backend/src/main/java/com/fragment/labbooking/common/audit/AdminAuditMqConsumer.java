@@ -1,6 +1,7 @@
 package com.fragment.labbooking.common.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fragment.labbooking.common.outbox.MessageOutboxEnvelope;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.client.consumer.DefaultMQPushConsumer;
 import org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyContext;
@@ -98,7 +99,7 @@ public class AdminAuditMqConsumer {
         for (MessageExt message : messages) {
             AdminAuditLogEvent event = null;
             try {
-                event = objectMapper.readValue(message.getBody(), AdminAuditLogEvent.class);
+                event = parseEvent(message);
                 if (shouldSimulatePermanentFailure(event)) {
                     log.warn("Simulating repeated failure for admin audit log event. eventId={}, reconsumeTimes={}, summary={}",
                             event.getEventId(), message.getReconsumeTimes(), event.getSummary());
@@ -119,6 +120,18 @@ public class AdminAuditMqConsumer {
             }
         }
         return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+    }
+
+    private AdminAuditLogEvent parseEvent(MessageExt message) throws Exception {
+        try {
+            MessageOutboxEnvelope envelope = objectMapper.readValue(message.getBody(), MessageOutboxEnvelope.class);
+            if (StringUtils.hasText(envelope.getPayload())) {
+                return objectMapper.readValue(envelope.getPayload(), AdminAuditLogEvent.class);
+            }
+        } catch (Exception exception) {
+            log.debug("Admin audit message is not an outbox envelope, trying legacy payload format.");
+        }
+        return objectMapper.readValue(message.getBody(), AdminAuditLogEvent.class);
     }
 
     private boolean shouldSimulateRetry(AdminAuditLogEvent event) {

@@ -1,6 +1,7 @@
 package com.fragment.labbooking.common.reservation;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fragment.labbooking.common.outbox.MessageOutboxEnvelope;
 import com.fragment.labbooking.service.ReservationRequestService;
 import org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyStatus;
 import org.apache.rocketmq.common.message.MessageExt;
@@ -37,6 +38,34 @@ class ReservationMqConsumerTest {
 
         assertThat(status).isEqualTo(ConsumeConcurrentlyStatus.CONSUME_SUCCESS);
         verify(requestService).processPendingHotRequest("REQ-6001");
+    }
+
+    @Test
+    void consumeMessagesShouldProcessRequestFromOutboxEnvelope() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        ReservationRequestService requestService = mock(ReservationRequestService.class);
+        ReservationMqConsumer consumer = new ReservationMqConsumer(
+                objectMapper,
+                requestService,
+                false,
+                "",
+                "reservation-create",
+                "group",
+                -1
+        );
+
+        ReservationCreateEvent event = new ReservationCreateEvent();
+        event.setRequestNo("REQ-6002");
+        MessageOutboxEnvelope envelope = new MessageOutboxEnvelope();
+        envelope.setEventId("RESERVATION_CREATE:RESERVATION_REQUEST:REQ-6002");
+        envelope.setPayload(objectMapper.writeValueAsString(event));
+        MessageExt message = new MessageExt();
+        message.setBody(objectMapper.writeValueAsBytes(envelope));
+
+        ConsumeConcurrentlyStatus status = consumer.consumeMessages(List.of(message));
+
+        assertThat(status).isEqualTo(ConsumeConcurrentlyStatus.CONSUME_SUCCESS);
+        verify(requestService).processPendingHotRequest("REQ-6002");
     }
 
     @Test

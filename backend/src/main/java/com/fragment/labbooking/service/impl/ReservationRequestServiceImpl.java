@@ -3,7 +3,7 @@ package com.fragment.labbooking.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
-import com.fragment.labbooking.common.delay.DelayMessageOutboxService;
+import com.fragment.labbooking.common.delay.DelayMessageTags;
 import com.fragment.labbooking.common.delay.ReservationRequestTimeoutDelayPayload;
 import com.fragment.labbooking.common.constants.ReservationRequestStatusConstants;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
@@ -11,10 +11,14 @@ import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.id.ReservationNoGenerator;
+import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationCreateEvent;
+import com.fragment.labbooking.common.reservation.ReservationMqPublisher;
+import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
+import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationRequest;
 import com.fragment.labbooking.entity.Resource;
@@ -26,7 +30,6 @@ import com.fragment.labbooking.service.ReservationRequestService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,10 +40,7 @@ import java.util.List;
 @Service
 public class ReservationRequestServiceImpl implements ReservationRequestService {
 
-    private static final int RESERVATION_NO_RETRY_TIMES = 3;
-    private static final String DISPATCH_PENDING = "PENDING";
-    private static final String DISPATCH_SENT = "SENT";
-    private static final String DISPATCH_FAILED = "FAILED";
+    private static final String RESERVATION_CREATE_EVENT_TYPE = "RESERVATION_CREATE";
 
     private final ReservationRequestMapper reservationRequestMapper;
     private final ReservationMapper reservationMapper;
@@ -49,10 +49,12 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     private final ReservationReminderTaskService reservationReminderTaskService;
     private final HotReservationRedisService hotReservationRedisService;
     private final ResourceRedisCacheService resourceRedisCacheService;
+    private final ReservationPersistenceHelper reservationPersistenceHelper;
     private final ReservationNoGenerator reservationNoGenerator;
-    private final DelayMessageOutboxService delayMessageOutboxService;
     private final ReservationAutoCancelService reservationAutoCancelService;
-    private final boolean delayMessageEnabled;
+    private final MessageOutboxService messageOutboxService;
+    private final String reservationCreateTopic;
+    private final String delayTopic;
     private final long requestTimeoutSeconds;
 
     public ReservationRequestServiceImpl(ReservationRequestMapper reservationRequestMapper,
@@ -62,10 +64,12 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                                          ReservationReminderTaskService reservationReminderTaskService,
                                          HotReservationRedisService hotReservationRedisService,
                                          ResourceRedisCacheService resourceRedisCacheService,
+                                         ReservationPersistenceHelper reservationPersistenceHelper,
                                          ReservationNoGenerator reservationNoGenerator,
-                                         DelayMessageOutboxService delayMessageOutboxService,
                                          ReservationAutoCancelService reservationAutoCancelService,
-                                         @org.springframework.beans.factory.annotation.Value("${app.delay-message.enabled:false}") boolean delayMessageEnabled,
+                                         MessageOutboxService messageOutboxService,
+                                         @org.springframework.beans.factory.annotation.Value("${app.reservation.async.topic:reservation-create}") String reservationCreateTopic,
+                                         @org.springframework.beans.factory.annotation.Value("${app.message-outbox.delay-topic:reservation-delay}") String delayTopic,
                                          @org.springframework.beans.factory.annotation.Value("${app.reservation.async.request-timeout-seconds:30}") long requestTimeoutSeconds) {
         this.reservationRequestMapper = reservationRequestMapper;
         this.reservationMapper = reservationMapper;
@@ -74,10 +78,12 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
         this.reservationReminderTaskService = reservationReminderTaskService;
         this.hotReservationRedisService = hotReservationRedisService;
         this.resourceRedisCacheService = resourceRedisCacheService;
+        this.reservationPersistenceHelper = reservationPersistenceHelper;
         this.reservationNoGenerator = reservationNoGenerator;
-        this.delayMessageOutboxService = delayMessageOutboxService;
         this.reservationAutoCancelService = reservationAutoCancelService;
-        this.delayMessageEnabled = delayMessageEnabled;
+        this.messageOutboxService = messageOutboxService;
+        this.reservationCreateTopic = reservationCreateTopic;
+        this.delayTopic = delayTopic;
         this.requestTimeoutSeconds = requestTimeoutSeconds;
     }
 
@@ -99,8 +105,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
         request.setActiveKey(activeKey);
         request.setSourceType(sourceType);
         request.setStatus(ReservationRequestStatusConstants.PENDING);
-        request.setDispatchStatus(DISPATCH_PENDING);
-        request.setDispatchRetryCount(0);
         request.setCreatedAt(now);
         request.setUpdatedAt(now);
         try {
@@ -112,17 +116,9 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
             }
             throw duplicateKeyException;
         }
+        enqueueReservationCreateMessage(request);
         enqueueTimeoutMessage(request);
         return request;
-    }
-
-    @Override
-    public List<ReservationRequest> findPendingDispatchBatch(int batchSize) {
-        return reservationRequestMapper.selectList(new LambdaQueryWrapper<ReservationRequest>()
-                .eq(ReservationRequest::getDispatchStatus, DISPATCH_PENDING)
-                .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
-                .orderByAsc(ReservationRequest::getId)
-                .last("LIMIT " + Math.max(batchSize, 1)));
     }
 
     @Override
@@ -135,29 +131,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     }
 
     @Override
-    public void markDispatched(ReservationRequest request) {
-        LocalDateTime now = LocalDateTime.now();
-        reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
-                .eq(ReservationRequest::getId, request.getId())
-                .eq(ReservationRequest::getDispatchStatus, DISPATCH_PENDING)
-                .set(ReservationRequest::getDispatchStatus, DISPATCH_SENT)
-                .set(ReservationRequest::getUpdatedAt, now)
-                .set(ReservationRequest::getLastDispatchErrorMessage, null));
-    }
-
-    @Override
-    public void markDispatchFailure(ReservationRequest request, String errorMessage) {
-        LocalDateTime now = LocalDateTime.now();
-        reservationRequestMapper.update(null, new LambdaUpdateWrapper<ReservationRequest>()
-                .eq(ReservationRequest::getId, request.getId())
-                .eq(ReservationRequest::getDispatchStatus, DISPATCH_PENDING)
-                .set(ReservationRequest::getDispatchRetryCount,
-                        request.getDispatchRetryCount() == null ? 1 : request.getDispatchRetryCount() + 1)
-                .set(ReservationRequest::getLastDispatchErrorMessage, truncate(errorMessage, 512))
-                .set(ReservationRequest::getUpdatedAt, now));
-    }
-
-    @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public boolean markTimedOut(ReservationRequest request, String failReason) {
         LocalDateTime now = LocalDateTime.now();
@@ -165,10 +138,8 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                 .eq(ReservationRequest::getId, request.getId())
                 .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.FAILED)
-                .set(ReservationRequest::getDispatchStatus, DISPATCH_FAILED)
                 .set(ReservationRequest::getActiveKey, null)
-                .set(ReservationRequest::getFailReason, truncate(failReason, 255))
-                .set(ReservationRequest::getLastDispatchErrorMessage, truncate(failReason, 512))
+                .set(ReservationRequest::getFailReason, TruncateUtil.truncate(failReason, 255))
                 .set(ReservationRequest::getCompletedAt, now)
                 .set(ReservationRequest::getUpdatedAt, now));
         if (updatedRows > 0) {
@@ -197,8 +168,7 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                 .last("LIMIT 1"));
     }
 
-    @Override
-    public ReservationCreateEvent toCreateEvent(ReservationRequest request) {
+    private ReservationCreateEvent toCreateEvent(ReservationRequest request) {
         ReservationCreateEvent event = new ReservationCreateEvent();
         event.setRequestNo(request.getRequestNo());
         event.setUserId(request.getUserId());
@@ -273,8 +243,9 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
         try {
             resourceSlotService.deductQuotaIfAvailable(request.getSlotId());
             quotaDeducted = true;
-            Reservation reservation = buildReservation(request, resource, slot);
-            saveReservationWithRetry(reservation);
+            Reservation reservation = reservationPersistenceHelper.buildReservation(
+                    request.getUserId(), request.getResourceId(), request.getSlotId(), resource, slot);
+            reservationPersistenceHelper.saveWithRetry(reservation);
             reservationReminderTaskService.createBeforeStartReminder(reservation);
             reservationAutoCancelService.schedule(reservation);
             resourceRedisCacheService.invalidateResourceSlotList(request.getResourceId());
@@ -285,23 +256,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
             }
             markFailedAndRelease(request, exception.getMessage());
         }
-    }
-
-    private Reservation buildReservation(ReservationRequest request, Resource resource, ResourceSlot slot) {
-        Reservation reservation = new Reservation();
-        reservation.setUserId(request.getUserId());
-        reservation.setResourceId(request.getResourceId());
-        reservation.setSlotId(request.getSlotId());
-        reservation.setResourceName(resource.getResourceName());
-        reservation.setResourceCode(resource.getResourceCode());
-        reservation.setResourceLocation(resource.getLocation());
-        reservation.setSlotStartDatetime(slot.getStartDatetime());
-        reservation.setSlotEndDatetime(slot.getEndDatetime());
-        reservation.setIsActive(1);
-        reservation.setStatus(ReservationStatusConstants.BOOKED);
-        reservation.setSourceType(slot.getSlotType());
-        reservationAutoCancelService.fillAutoCancelDeadline(reservation);
-        return reservation;
     }
 
     private void markSuccess(ReservationRequest request, Reservation reservation) {
@@ -329,57 +283,12 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                 .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PROCESSING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.FAILED)
                 .set(ReservationRequest::getActiveKey, null)
-                .set(ReservationRequest::getFailReason, truncate(reason, 255))
+                .set(ReservationRequest::getFailReason, TruncateUtil.truncate(reason, 255))
                 .set(ReservationRequest::getCompletedAt, now)
                 .set(ReservationRequest::getUpdatedAt, now));
         if (updatedRows > 0) {
             hotReservationRedisService.releaseAfterCommit(request.getSourceType(), request.getSlotId(), request.getUserId());
         }
-    }
-
-    private void saveReservationWithRetry(Reservation reservation) {
-        for (int attempt = 0; attempt < RESERVATION_NO_RETRY_TIMES; attempt++) {
-            reservation.setReservationNo(reservationNoGenerator.nextReservationNo());
-            try {
-                int inserted = reservationMapper.insert(reservation);
-                if (inserted <= 0) {
-                    throw new BusinessException("创建预约失败，请重试");
-                }
-                return;
-            } catch (DataIntegrityViolationException exception) {
-                if (isReservationNoConflict(exception)) {
-                    continue;
-                }
-                if (isDuplicateActiveReservationConflict(exception)) {
-                    throw new BusinessException("当前用户已预约该时段");
-                }
-                throw exception;
-            }
-        }
-        throw new BusinessException("创建预约失败，请重试");
-    }
-
-    private boolean isReservationNoConflict(DataIntegrityViolationException exception) {
-        String message = getMostSpecificCauseMessage(exception);
-        return message != null && message.contains("uk_reservation_no");
-    }
-
-    private boolean isDuplicateActiveReservationConflict(DataIntegrityViolationException exception) {
-        String message = getMostSpecificCauseMessage(exception);
-        return message != null && message.contains("uk_reservation_user_slot_active");
-    }
-
-    private String getMostSpecificCauseMessage(DataIntegrityViolationException exception) {
-        return exception.getMostSpecificCause() == null
-                ? exception.getMessage()
-                : exception.getMostSpecificCause().getMessage();
-    }
-
-    private String truncate(String text, int maxLength) {
-        if (text == null) {
-            return null;
-        }
-        return text.length() <= maxLength ? text : text.substring(0, maxLength);
     }
 
     private ReservationRequest tryStartProcessing(String requestNo) {
@@ -392,8 +301,7 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                 .eq(ReservationRequest::getRequestNo, requestNo)
                 .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
                 .set(ReservationRequest::getStatus, ReservationRequestStatusConstants.PROCESSING)
-                .set(ReservationRequest::getUpdatedAt, now)
-                .set(ReservationRequest::getLastDispatchErrorMessage, null));
+                .set(ReservationRequest::getUpdatedAt, now));
         if (updatedRows <= 0) {
             return null;
         }
@@ -420,15 +328,32 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     }
 
     private void enqueueTimeoutMessage(ReservationRequest request) {
-        if (!delayMessageEnabled || requestTimeoutSeconds <= 0) {
+        if (requestTimeoutSeconds <= 0) {
             return;
         }
 
-        delayMessageOutboxService.enqueue(
+        messageOutboxService.enqueue(
+                "RESERVATION_REQUEST",
+                request.getRequestNo(),
                 DelayMessageEventTypes.RESERVATION_REQUEST_TIMEOUT,
+                delayTopic,
+                DelayMessageTags.tagFor(DelayMessageEventTypes.RESERVATION_REQUEST_TIMEOUT),
                 request.getRequestNo(),
                 request.getCreatedAt().plusSeconds(requestTimeoutSeconds),
                 new ReservationRequestTimeoutDelayPayload(request.getRequestNo())
+        );
+    }
+
+    private void enqueueReservationCreateMessage(ReservationRequest request) {
+        messageOutboxService.enqueue(
+                "RESERVATION_REQUEST",
+                request.getRequestNo(),
+                RESERVATION_CREATE_EVENT_TYPE,
+                reservationCreateTopic,
+                ReservationMqPublisher.TAG,
+                request.getRequestNo(),
+                LocalDateTime.now(),
+                toCreateEvent(request)
         );
     }
 }

@@ -1,233 +1,157 @@
-# 实验室资源预约平台
+# 实验室智能预约与知识库 Agent 平台（后端）
 
-一个面向实验室资源管理场景的前后端分离预约系统。系统覆盖资源浏览、时段预约、热门资源异步确认、预约提醒、未签到自动取消、通知中心和管理后台等功能，并通过 MySQL、Redis 与 RocketMQ 处理预约链路中的并发控制、异步确认、延迟触发和状态一致性问题。
+面向实验室资源预约、制度问答和业务查询场景的后端项目。仓库由 **Spring Boot 业务服务**与 **FastAPI AI 服务**组成，不包含前端；重点展示预约一致性、可靠异步链路、原生 LLM Function Calling、RAG 权限控制、上下文管理和可观测性。
 
-## 功能特性
+## 系统架构
 
-- 基于 Spring Boot 4 + MyBatis-Plus 实现资源、时段、预约、通知、用户和管理端核心业务。
-- 基于数据库事务、库存扣减和唯一约束，保证同一用户同一时段不可重复预约，并避免时段名额超卖。
-- 基于 RocketMQ 将热门预约改造为“请求受理 + 异步确认”流程，请求侧返回 `PENDING`，消费侧在事务内完成预约确认与请求状态更新。
-- 基于 Redis 实现热点时段库存预占、重复提交控制、接口限流和资源时段缓存，降低高频请求对 MySQL 的直接压力。
-- 基于 RocketMQ 4.9.6 延迟等级 + 自推进重投实现预约前提醒、未签到自动取消和热门请求超时失败。
-- 基于 outbox 表解决“业务事务成功但 MQ 投递失败”的可靠投递问题，消费端通过状态机和条件更新保证幂等。
+```mermaid
+flowchart LR
+    Client[API Client] --> Java[Spring Boot Business Service]
+    Java --> Auth[JWT / RBAC / Document ACL]
+    Java --> Booking[Reservation Domain]
+    Java --> Agent[Agent Runtime]
+    Agent --> Tools[Business and RAG Tools]
+    Tools --> AI[FastAPI AI Service]
+    AI --> Parser[Parser / Chunker / OCR]
+    AI --> Retrieval[Embedding / Qdrant / Rerank]
+    Java --> MySQL[(MySQL)]
+    Java --> Redis[(Redis)]
+    Java --> MQ[RocketMQ]
+    Java --> MinIO[(MinIO)]
+    AI --> Qdrant[(Qdrant)]
+```
+
+Java 服务负责身份、权限、预约业务、文档元数据、工具执行与审计；Python 服务负责文档解析、切片、向量检索、重排、上下文摘要和模型调用。业务权限始终由 Java 侧校验，模型不能绕过服务层直接访问数据库。
+
+## 核心设计
+
+### 1. 预约与可靠异步链路
+
+- 通过数据库事务、名额条件更新与唯一约束保证同一用户、资源和时段不会重复预约。
+- 热门时段支持 Redis 预占、请求单受理和 RocketMQ 异步确认；消费端在事务内完成预约落库与状态流转。
+- 使用 Outbox 记录待投递事件，避免“数据库提交成功但消息未发送”的双写不一致。
+- 预约提醒、未签到自动取消和请求超时使用 RocketMQ 延迟消息；消费者按事件 ID 和业务终态实现幂等，并保留重试、死信和扫描兜底能力。
+- Redis 用于热点资源缓存、限流和重复提交控制；MySQL 保存最终业务事实。
+
+### 2. 原生 Function Calling Agent
+
+RAG 不是固定前置步骤，而是 Agent 可按需调用的工具。当前工具包括：
+
+| 工具 | 作用 | 安全边界 |
+| --- | --- | --- |
+| `reservation_context` | 查询当前用户的预约摘要 | 默认只能读取本人数据 |
+| `resource_availability` | 查询资源和未来可预约时段 | 只读、限制返回字段和数量 |
+| `reservation_cancellation_preview` | 预检预约是否可取消 | 不直接执行取消写操作 |
+| `knowledge_search` | 在有权限的文档范围内召回候选片段 | 返回候选定位信息 |
+| `knowledge_open_chunks` | 打开已召回候选的完整正文 | 只能读取本轮候选 chunk |
+
+模型通过 OpenAI-compatible `tools/tool_calls` 协议选择工具；Java 运行时负责工具白名单、参数校验、权限检查、调用执行和结果回传。知识库回答采用“先检索候选、再打开证据”的两阶段读取，减少无关文本进入上下文并保留引用来源。
+
+### 3. 会话上下文与可观测性
+
+- 根据模型能力配置动态计算上下文预算，组织系统提示、最近对话、Working Memory、工具结果和证据。
+- 当历史内容逼近窗口时，由模型生成结构化会话摘要；旧摘要与新增对话继续合并，避免只依赖固定轮数截断。
+- 大型工具结果保留摘要和结果标识，需要细节时再按需打开，降低上下文噪声。
+- `Agent Run / Step` 记录路由、工具调用、检索、模型执行、耗时、token 使用和异常，支持按 `traceId` 回溯完整链路。
+
+### 4. 多格式知识入库与文档 ACL
+
+- 支持 PDF、Word、Excel、Markdown、纯文本和图片入库，保留页码、标题路径、表格位置和 chunk 标识等元数据。
+- PDF 按页执行 Native / Hybrid / OCR 路由：文本页直接解析，图文混排页仅 OCR 图片区域，扫描页执行整页 OCR。
+- PaddleOCR 按需加载，可配置 GPU/CPU；解析结果记录路由、字符数、图片数、置信度和警告信息。
+- 文档访问范围支持公开、管理员、上传者和指定用户；向量检索前先计算可访问文档集合并下推过滤条件。
+- 文档上传、解析、切片和索引构建通过 RocketMQ + Outbox 异步执行，失败任务保留重试次数与处理轨迹。
 
 ## 技术栈
 
-- 后端：Java 17、Spring Boot 4、MyBatis-Plus、MySQL、JWT
-- 中间件：Redis / Memurai、RocketMQ 4.9.6
-- 前端：Vue 3、Vite、Naive UI、Pinia、Vue Router、Axios
-- 工程与测试：Maven、JUnit 5、Mockito、Git
+- Java 17、Spring Boot 4、MyBatis-Plus、MySQL、Redis、RocketMQ、JWT
+- Python 3.11+、FastAPI、Qdrant、PaddleOCR、Sentence Transformers
+- MinIO、Maven、Docker、Git
 
-## 架构概览
-
-```text
-Vue 前端
-  |
-  | REST API / JWT
-  v
-Spring Boot 后端
-  |
-  |-- MySQL：资源、时段、预约、请求单、通知、outbox
-  |-- Redis：热点库存、重复提交控制、限流、资源时段缓存
-  |-- RocketMQ：热门预约异步确认、延迟提醒、自动取消、请求超时
-```
-
-## 核心链路
-
-### 普通预约
-
-1. 用户选择资源时段并提交预约。
-2. 后端校验资源、时段、状态、剩余名额和用户重复预约。
-3. 事务内扣减 `resource_slot.remain_quota`，插入 `reservation`。
-4. 创建预约前提醒和未签到自动取消延迟事件。
-5. 用户在“我的预约”中查看预约状态。
-
-### 热门预约异步确认
-
-1. 请求侧完成参数校验、限流、重复提交控制和 Redis 预占。
-2. 写入 `reservation_request`，状态为 `PENDING`。
-3. relay 将请求投递到 RocketMQ。
-4. 消费侧将请求从 `PENDING` 原子更新为 `PROCESSING`，避免重复消费并发创建预约。
-5. 消费侧事务内扣减数据库名额、创建预约、更新请求为 `SUCCESS`。
-6. 如果请求超时仍未成功，由延迟消息标记为 `FAILED` 并释放 Redis 预占。
-
-### MQ4 延迟消息
-
-统一延迟消息结构：
-
-```json
-{
-  "eventId": "RESERVATION_AUTO_CANCEL:1001",
-  "eventType": "RESERVATION_AUTO_CANCEL",
-  "businessKey": "1001",
-  "deliverAt": "2026-06-08T10:15:00",
-  "payload": "{\"reservationId\":1001}"
-}
-```
-
-topic 使用 `reservation-delay`，tag 包括：
-
-- `reservation-reminder`：预约前提醒
-- `reservation-auto-cancel`：预约开始后未签到自动取消
-- `reservation-timeout`：热门预约请求超时失败
-
-RocketMQ 4.x 只有固定延迟等级，本项目采用“向下取可用等级 + 消费端自推进重投”：超过最大延迟等级的消息先投递到最大等级，到达消费者后如果 `deliverAt` 未到，则按剩余时间再次投递，直到真正到期再执行业务逻辑。
-
-### 未签到自动取消
-
-1. 预约成功后设置 `auto_cancel_deadline = slot_start_datetime + 15 分钟`。
-2. 写入 `RESERVATION_AUTO_CANCEL` 延迟事件。
-3. 用户可在预约开始前 30 分钟至自动取消截止时间内调用 `PUT /reservation/{id}/check-in` 签到。
-4. 自动取消消息到期后，仅当预约仍是 `BOOKED` 且 `checked_in_at IS NULL` 时才改为 `CANCELLED`。
-5. 自动取消成功后恢复名额、释放 HOT Redis 预占语义，并写入用户通知。
-
-## 可靠性设计
-
-- **请求幂等**：`reservation_request.active_key = userId:slotId` 保证同一用户同一时段只保留一个未完成热门预约请求。
-- **预约幂等**：`reservation` 使用 `user_id + slot_id + is_active` 唯一约束，终态预约清空 `is_active`，允许后续重新提交。
-- **消费幂等**：MQ 消费端按业务状态做条件更新，已签到、已取消、已完成的预约直接消费成功。
-- **可靠投递**：业务事务内写 outbox，relay 负责投递 MQ，失败后记录重试次数和错误原因。
-- **失败重试**：业务异常或坏消息返回 RocketMQ 重试；超过最大重试次数后依赖 RocketMQ 死信队列进行隔离和后续排查。
-
-## 目录结构
+## 仓库结构
 
 ```text
-lab-resource-reservation-platform/
-  backend/              Spring Boot 后端
-  frontend/             Vue 3 + Vite 前端
-  sql/                  数据库初始化和升级脚本
-  scripts/              本地启动脚本
-  README.md
+.
+├─ backend/                 Spring Boot 业务服务与 Agent 运行时
+├─ ai-service/              FastAPI 文档解析、检索和模型服务
+├─ sql/                     初始化与增量升级脚本
+├─ scripts/                 启动、模型验收和 RAG 评测脚本
+└─ docs/                    架构、数据模型和 RAG 评测说明
 ```
 
-## 本地启动
+## 快速启动
 
-### 初始化数据库
+### 1. 基础设施
 
-先启动 MySQL，然后执行：
+准备 MySQL 8、Redis、RocketMQ 4.9.x、MinIO 和 Qdrant，并执行：
 
 ```sql
 source sql/lab-booking-rebuild-init.sql;
 ```
 
-默认数据库配置：
+如从旧版本升级，请按 `sql/` 中升级脚本的日期和说明依次执行。
 
-```yaml
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3306/lab_booking
-    username: root
-    password: ""
-```
+### 2. 启动 Java 服务
 
-旧库升级可按需执行：
-
-```text
-sql/reservation-request-upgrade.sql
-sql/reservation-request-active-key-upgrade.sql
-sql/delay-message-outbox-upgrade.sql
-sql/reservation-auto-cancel-upgrade.sql
-```
-
-### 启动后端
-
-```powershell
-cd backend
-mvn spring-boot:run
-```
-
-默认地址：
-
-```text
-http://127.0.0.1:8081
-```
-
-### 启动 MQ 增强模式
-
-普通启动只依赖 MySQL。若要验证 Redis / RocketMQ 链路，需要先启动 Redis 和 RocketMQ 4.9.6，然后执行：
-
-```powershell
+```bash
 cd backend
 mvn spring-boot:run -Dspring-boot.run.profiles=mq
 ```
 
-MQ profile 会开启延迟消息，并关闭提醒和热门请求超时的扫描 fallback：
+常用环境变量：
 
-```yaml
-app:
-  reservation:
-    async:
-      enabled: true
-      timeout-scan-fallback-enabled: false
-    reminder:
-      scan-fallback-enabled: false
-  delay-message:
-    enabled: true
-```
-
-### 启动前端
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-前端默认地址：
-
-```text
-http://127.0.0.1:5175
-```
-
-## 演示账号
-
-| 角色 | 用户名 | 密码 |
-| --- | --- | --- |
-| 管理员 | `admin` | `123456` |
-| 普通用户 | `tester` | `123456` |
-| 锁定用户 | `locked_user` | `123456` |
-
-初始化脚本中的旧密码会在登录成功后自动升级为 BCrypt 密文。
-
-## 核心数据表
-
-| 表名 | 作用 |
+| 变量 | 示例 |
 | --- | --- |
-| `sys_user` | 用户、角色和账号状态 |
-| `resource` | 实验室资源 |
-| `resource_slot` | 资源可预约时段和剩余名额 |
-| `reservation` | 预约记录、签到时间、自动取消截止时间 |
-| `reservation_request` | 热门预约异步请求单 |
-| `reservation_reminder_task` | 预约前提醒任务账本 |
-| `delay_message_outbox` | 延迟消息可靠投递 outbox |
-| `user_notification` | 用户通知 |
-| `admin_audit_log` | 管理端审计日志 |
+| `MYSQL_URL` | `jdbc:mysql://127.0.0.1:3306/lab_booking?...` |
+| `MYSQL_USERNAME` / `MYSQL_PASSWORD` | 数据库账号 |
+| `REDIS_HOST` / `REDIS_PORT` | Redis 地址 |
+| `ROCKETMQ_NAMESERVER` | `127.0.0.1:9876` |
+| `JWT_SECRET` | 至少 32 字节的随机字符串 |
+| `AI_SERVICE_BASE_URL` | `http://127.0.0.1:8000` |
+| `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | MinIO 配置 |
 
-## 主要接口
+Java API 默认监听 `http://127.0.0.1:8081`。
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `POST` | `/auth/login` | 登录 |
-| `GET` | `/resource/page` | 资源分页 |
-| `GET` | `/resource-slot/list` | 查询资源可预约时段 |
-| `POST` | `/reservation` | 提交预约 |
-| `GET` | `/reservation/request/{requestNo}` | 查询热门预约请求状态 |
-| `PUT` | `/reservation/{id}/check-in` | 本人签到 |
-| `PUT` | `/reservation/{id}/cancel` | 取消预约 |
-| `GET` | `/notification/page` | 我的通知 |
-| `GET` | `/admin/dashboard/overview` | 管理端概览 |
+### 3. 启动 AI 服务
+
+```bash
+cd ai-service
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+# 可选：在支持 CUDA 的 OCR 工作节点安装 GPU OCR 依赖
+# pip install -r requirements-ocr-gpu.txt
+cp .env.example .env
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+在 `.env` 中配置 OpenAI-compatible 模型接口、Embedding、Rerank、Qdrant 和 OCR。密钥及本地模型目录不会提交到仓库。
 
 ## 测试
 
-后端单测覆盖 RocketMQ 延迟等级解析、outbox relay、延迟消息消费、提醒投递、自动取消、热门预约异步处理和预约签到等核心逻辑。
-
-```powershell
+```bash
 cd backend
 mvn test
+
+cd ../ai-service
+python -m compileall app
 ```
 
-当前回归结果：
+当前 Java 测试集覆盖预约状态、权限边界、工具调用、上下文规划、文档 ACL、异步任务和异常路径。仓库发布前已通过 **70 项测试，0 failure / 0 error**。
 
-```text
-Tests run: 53, Failures: 0, Errors: 0, Skipped: 0
-```
+## 代码导航
+
+- Agent 工具编排：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/NativeToolCallingServiceImpl.java`
+- Agent 运行轨迹：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/AgentRunServiceImpl.java`
+- 会话上下文：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/`
+- 文档权限与知识库：`backend/src/main/java/com/fragment/labbooking/knowledge/`
+- 文档解析与 OCR：`ai-service/app/core/parser.py`、`ai-service/app/core/ocr_engine.py`
+- 检索与切片：`ai-service/app/core/chunker.py`、`ai-service/app/core/retrieval.py`
+- 数据库脚本：`sql/`
+
+## 安全说明
+
+- 示例配置仅用于本地开发；生产环境必须通过环境变量或密钥管理服务注入凭据。
+- 不要提交 `.env`、模型缓存、上传文件、向量库数据、日志或构建产物。
+- Agent 中会产生副作用的业务操作应保留人工确认；当前取消工具仅返回预检结果。

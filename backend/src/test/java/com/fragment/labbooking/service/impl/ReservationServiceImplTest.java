@@ -9,9 +9,10 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.id.ReservationNoGenerator;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ReservationRateLimiter;
-import com.fragment.labbooking.common.redis.ReservationSubmitGuard;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
+import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
+import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
 import com.fragment.labbooking.dto.ReservationCreateDTO;
 import com.fragment.labbooking.entity.Reservation;
@@ -55,8 +56,6 @@ class ReservationServiceImplTest {
     @Mock
     private SysUserService sysUserService;
     @Mock
-    private ReservationSubmitGuard reservationSubmitGuard;
-    @Mock
     private HotReservationRedisService hotReservationRedisService;
     @Mock
     private ReservationRateLimiter reservationRateLimiter;
@@ -79,14 +78,15 @@ class ReservationServiceImplTest {
     void setUp() {
         initTableInfo(Reservation.class);
         reservationService = new ReservationServiceImpl();
+        ReservationPersistenceHelper reservationPersistenceHelper =
+                new ReservationPersistenceHelper(reservationNoGenerator, reservationMapper, reservationAutoCancelService);
         ReflectionTestUtils.setField(reservationService, "resourceService", resourceService);
         ReflectionTestUtils.setField(reservationService, "resourceSlotService", resourceSlotService);
         ReflectionTestUtils.setField(reservationService, "sysUserService", sysUserService);
-        ReflectionTestUtils.setField(reservationService, "reservationSubmitGuard", reservationSubmitGuard);
         ReflectionTestUtils.setField(reservationService, "hotReservationRedisService", hotReservationRedisService);
         ReflectionTestUtils.setField(reservationService, "reservationRateLimiter", reservationRateLimiter);
         ReflectionTestUtils.setField(reservationService, "resourceRedisCacheService", resourceRedisCacheService);
-        ReflectionTestUtils.setField(reservationService, "reservationNoGenerator", reservationNoGenerator);
+        ReflectionTestUtils.setField(reservationService, "reservationPersistenceHelper", reservationPersistenceHelper);
         ReflectionTestUtils.setField(reservationService, "reservationReminderTaskService", reservationReminderTaskService);
         ReflectionTestUtils.setField(reservationService, "reservationAutoCancelService", reservationAutoCancelService);
         ReflectionTestUtils.setField(reservationService, "reservationRequestService", reservationRequestService);
@@ -103,7 +103,6 @@ class ReservationServiceImplTest {
 
         when(resourceService.getById(1L)).thenReturn(resource);
         when(resourceSlotService.getById(10L)).thenReturn(slot);
-        when(reservationSubmitGuard.acquire(7L, 10L)).thenReturn("guard:7:10");
         when(reservationMapper.selectCount(any())).thenReturn(0L);
         when(reservationNoGenerator.nextReservationNo()).thenReturn("RES-1001");
         when(reservationMapper.insert(any(Reservation.class))).thenAnswer(invocation -> {
@@ -134,8 +133,6 @@ class ReservationServiceImplTest {
         verify(reservationAutoCancelService).fillAutoCancelDeadline(savedReservation);
         verify(reservationAutoCancelService).schedule(savedReservation);
         verify(resourceRedisCacheService).invalidateResourceSlotList(1L);
-        verify(reservationSubmitGuard).completeAfterTransaction("guard:7:10");
-        verify(reservationSubmitGuard, never()).release(any());
     }
 
     @Test
@@ -149,7 +146,6 @@ class ReservationServiceImplTest {
 
         when(resourceService.getById(1L)).thenReturn(resource);
         when(resourceSlotService.getById(12L)).thenReturn(slot);
-        when(reservationSubmitGuard.acquire(3L, 12L)).thenReturn("guard:3:12");
         when(reservationMapper.selectCount(any())).thenReturn(0L);
         when(reservationRequestService.createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT))
                 .thenReturn(request);
@@ -164,26 +160,22 @@ class ReservationServiceImplTest {
         verify(reservationRequestService).createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT);
         verify(resourceSlotService, never()).deductQuotaIfAvailable(anyLong());
         verify(reservationMapper, never()).insert(any(Reservation.class));
-        verify(reservationSubmitGuard).completeAfterTransaction("guard:3:12");
     }
 
     @Test
-    void createReservationShouldReleaseSubmitGuardWhenDuplicateReservationDetected() {
+    void createReservationShouldRejectDuplicateReservation() {
         Resource resource = buildResource(1L, "TC-01", "1号靶车");
         ResourceSlot slot = buildSlot(10L, 1L, ResourceSlotTypeConstants.NORMAL);
         ReservationCreateDTO dto = buildCreateDto(1L, 10L);
 
         when(resourceService.getById(1L)).thenReturn(resource);
         when(resourceSlotService.getById(10L)).thenReturn(slot);
-        when(reservationSubmitGuard.acquire(9L, 10L)).thenReturn("guard:9:10");
         when(reservationMapper.selectCount(any())).thenReturn(1L);
 
         assertThatThrownBy(() -> reservationService.createReservation(9L, dto))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("当前用户已预约该时段");
 
-        verify(reservationSubmitGuard).release("guard:9:10");
-        verify(reservationSubmitGuard, never()).completeAfterTransaction(any());
         verify(reservationMapper, never()).insert(any(Reservation.class));
     }
 

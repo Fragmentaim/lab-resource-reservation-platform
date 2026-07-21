@@ -36,15 +36,6 @@ public class ReservationRequest {
     @TableField("status")
     private String status;
 
-    @TableField("dispatch_status")
-    private String dispatchStatus;
-
-    @TableField("dispatch_retry_count")
-    private Integer dispatchRetryCount;
-
-    @TableField("last_dispatch_error_message")
-    private String lastDispatchErrorMessage;
-
     @TableField("fail_reason")
     private String failReason;
 

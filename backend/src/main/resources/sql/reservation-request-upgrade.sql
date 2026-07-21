@@ -9,9 +9,6 @@ CREATE TABLE IF NOT EXISTS reservation_request (
     active_key VARCHAR(128) NULL,
     source_type VARCHAR(16) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    dispatch_status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    dispatch_retry_count INT NOT NULL DEFAULT 0,
-    last_dispatch_error_message VARCHAR(512) NULL,
     fail_reason VARCHAR(255) NULL,
     reservation_id BIGINT NULL,
     reservation_no VARCHAR(64) NULL,
@@ -21,6 +18,5 @@ CREATE TABLE IF NOT EXISTS reservation_request (
     UNIQUE KEY uk_reservation_request_no (request_no),
     UNIQUE KEY uk_reservation_request_active_key (active_key),
     KEY idx_reservation_request_user_created (user_id, created_at),
-    KEY idx_reservation_request_dispatch_status_created (dispatch_status, created_at),
     KEY idx_reservation_request_status_created (status, created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

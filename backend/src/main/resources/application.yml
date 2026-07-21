@@ -1,16 +1,16 @@
 server:
-  port: 8081
+  port: ${SERVER_PORT:8081}
 
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3306/lab_booking?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8
-    username: root
-    password: ""
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/lab_booking?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
   data:
     redis:
-      host: 127.0.0.1
-      port: 6379
-      database: 0
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:0}
       timeout: 3000ms
 
 mybatis-plus:
@@ -19,23 +19,18 @@ mybatis-plus:
 
 app:
   jwt:
-    secret: lab-booking-jwt-secret-key-change-this-for-production-2026
+    secret: ${JWT_SECRET:local-development-secret-change-before-production}
     expire-hours: 24
   cors:
     allowed-origins: http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,http://127.0.0.1:5188,http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5188
   reservation:
-    submit-guard-enabled: false
-    submit-guard-ttl-seconds: 5
     hot-redis-enabled: false
     hot-init-wait-millis: 1000
     async:
       enabled: false
-      name-server: 192.168.91.129:9876
+      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
       topic: reservation-create
-      producer-group: lab-booking-reservation-producer-group
       consumer-group: lab-booking-reservation-consumer-group
-      relay-delay-millis: 200
-      batch-size: 20
       max-reconsume-times: -1
       request-timeout-seconds: 30
       timeout-scan-fallback-enabled: true
@@ -62,13 +57,14 @@ app:
       enabled: true
       grace-minutes: 15
       check-in-before-start-minutes: 30
-  delay-message:
+  message-outbox:
     enabled: false
-    name-server: 192.168.91.129:9876
-    topic: reservation-delay
-    producer-group: lab-booking-delay-producer-group
-    consumer-group: lab-booking-delay-consumer-group
+    name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
+    producer-group: lab-booking-message-outbox-producer-group
     max-reconsume-times: -1
+    lock-seconds: 60
+    delay-topic: reservation-delay
+    delay-consumer-group: lab-booking-delay-consumer-group
     outbox:
       relay-delay-millis: 1000
       batch-size: 20
@@ -76,14 +72,10 @@ app:
     enabled: true
     mq:
       enabled: false
-      name-server: 192.168.91.129:9876
+      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
       topic: admin-audit-log
-      producer-group: lab-booking-audit-producer-group
       consumer-group: lab-booking-audit-consumer-group
       max-reconsume-times: -1
-      outbox:
-        relay-delay-millis: 5000
-        batch-size: 20
       demo:
         fail-once-enabled: false
         fail-once-match:
@@ -94,3 +86,43 @@ app:
   resource-cache:
     enabled: false
     ttl-seconds: 300
+  knowledge:
+    ai-service:
+      base-url: ${AI_SERVICE_BASE_URL:http://127.0.0.1:8000}
+      connect-timeout: 5000
+      read-timeout: 180000
+    storage:
+      type: ${KNOWLEDGE_STORAGE_TYPE:local}
+      local-dir: ${KNOWLEDGE_LOCAL_DIR:../uploads/knowledge}
+      minio:
+        endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+        access-key: ${MINIO_ACCESS_KEY:minioadmin}
+        secret-key: ${MINIO_SECRET_KEY:minioadmin}
+        bucket: ${MINIO_BUCKET:lab-knowledge}
+        presign-expiry-seconds: 900
+    document-processing:
+      enabled: false
+      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
+      topic: knowledge-document-process
+      tag: KNOWLEDGE_DOCUMENT_PROCESS
+      event-type: KNOWLEDGE_DOCUMENT_PROCESS
+      consumer-group: lab-booking-knowledge-document-consumer-group
+      max-reconsume-times: -1
+      max-retry-attempts: 3
+    # Operator-owned model capabilities. End users never configure per-bucket
+    # history/RAG limits; change active-profile when changing the LLM.
+    model-context:
+      active-profile: safe-default
+      profiles:
+        safe-default:
+          context-window-tokens: 12000
+          max-output-tokens: 2000
+          safety-margin-tokens: 512
+          compaction-target-ratio: 0.70
+        long-context-256k:
+          context-window-tokens: 256000
+          max-output-tokens: 8000
+          safety-margin-tokens: 4096
+          compaction-target-ratio: 0.70
+    native-tool-calling:
+      enabled: true

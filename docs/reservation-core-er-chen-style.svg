@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3200" height="2000" viewBox="0 0 3200 2000" preserveAspectRatio="xMidYMid meet">
+  <defs>
+    <style>
+      .line { stroke: #111; stroke-width: 3; fill: none; }
+      .entity { fill: #fff; stroke: #111; stroke-width: 3; }
+      .attribute { fill: #fff; stroke: #111; stroke-width: 3; }
+      .relation { fill: #fff; stroke: #111; stroke-width: 3; }
+      .entity-text {
+        font-family: "SimSun", "Microsoft YaHei", sans-serif;
+        font-size: 44px;
+        fill: #111;
+        text-anchor: middle;
+        dominant-baseline: middle;
+      }
+      .relation-text {
+        font-family: "SimSun", "Microsoft YaHei", sans-serif;
+        font-size: 38px;
+        fill: #111;
+        text-anchor: middle;
+        dominant-baseline: middle;
+      }
+      .attr-text {
+        font-family: "SimSun", "Microsoft YaHei", sans-serif;
+        font-size: 34px;
+        fill: #111;
+        text-anchor: middle;
+        dominant-baseline: middle;
+      }
+      .key { text-decoration: underline; }
+      .cardinality {
+        font-family: "Times New Roman", serif;
+        font-size: 38px;
+        font-weight: 700;
+        fill: #111;
+        text-anchor: middle;
+        dominant-baseline: middle;
+      }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="3200" height="2000" fill="#fff"/>
+
+  <!-- Connecting Lines (Drawn first so shapes mask them) -->
+  <g>
+    <!-- Attribute lines for User -->
+    <line class="line" x1="200" y1="350" x2="500" y2="500"/>
+    <line class="line" x1="180" y1="500" x2="500" y2="500"/>
+    <line class="line" x1="200" y1="650" x2="500" y2="500"/>
+
+    <!-- Attribute lines for Request -->
+    <line class="line" x1="1200" y1="250" x2="1600" y2="500"/>
+    <line class="line" x1="1600" y1="180" x2="1600" y2="500"/>
+    <line class="line" x1="2000" y1="250" x2="1600" y2="500"/>
+
+    <!-- Attribute lines for Reservation -->
+    <line class="line" x1="1150" y1="1650" x2="1600" y2="1400"/>
+    <line class="line" x1="1450" y1="1750" x2="1600" y2="1400"/>
+    <line class="line" x1="1780" y1="1750" x2="1600" y2="1400"/>
+    <line class="line" x1="2080" y1="1650" x2="1600" y2="1400"/>
+
+    <!-- Attribute lines for Resource -->
+    <line class="line" x1="2700" y1="250" x2="2700" y2="500"/>
+    <line class="line" x1="3000" y1="380" x2="2700" y2="500"/>
+    <line class="line" x1="3030" y1="500" x2="2700" y2="500"/>
+
+    <!-- Attribute lines for Slot -->
+    <line class="line" x1="3030" y1="1400" x2="2700" y2="1400"/>
+    <line class="line" x1="3020" y1="1520" x2="2700" y2="1400"/>
+    <line class="line" x1="3020" y1="1620" x2="2700" y2="1400"/>
+    <line class="line" x1="2700" y1="1650" x2="2700" y2="1400"/>
+    <line class="line" x1="2430" y1="1600" x2="2700" y2="1400"/>
+
+    <!-- Relationship lines -->
+    <!-- User to Request via 提交 -->
+    <line class="line" x1="500" y1="500" x2="1050" y2="500"/>
+    <line class="line" x1="1050" y1="500" x2="1600" y2="500"/>
+
+    <!-- User to Reservation via 创建 -->
+    <line class="line" x1="500" y1="500" x2="1050" y2="950"/>
+    <line class="line" x1="1050" y1="950" x2="1600" y2="1400"/>
+
+    <!-- Request to Reservation via 确认 -->
+    <line class="line" x1="1600" y1="500" x2="1600" y2="950"/>
+    <line class="line" x1="1600" y1="950" x2="1600" y2="1400"/>
+
+    <!-- Resource to Slot via 包含 -->
+    <line class="line" x1="2700" y1="500" x2="2700" y2="950"/>
+    <line class="line" x1="2700" y1="950" x2="2700" y2="1400"/>
+
+    <!-- Slot to Reservation via 被预约 -->
+    <line class="line" x1="2700" y1="1400" x2="2150" y2="1400"/>
+    <line class="line" x1="2150" y1="1400" x2="1600" y2="1400"/>
+  </g>
+
+  <!-- Attributes (Ellipses with White Fills) -->
+  <g>
+    <!-- User Attributes -->
+    <ellipse class="attribute" cx="200" cy="350" rx="120" ry="45"/>
+    <ellipse class="attribute" cx="180" cy="500" rx="120" ry="45"/>
+    <ellipse class="attribute" cx="200" cy="650" rx="110" ry="45"/>
+
+    <!-- Request Attributes -->
+    <ellipse class="attribute" cx="1200" cy="250" rx="170" ry="45"/>
+    <ellipse class="attribute" cx="1600" cy="180" rx="185" ry="45"/>
+    <ellipse class="attribute" cx="2000" cy="250" rx="110" ry="45"/>
+
+    <!-- Reservation Attributes -->
+    <ellipse class="attribute" cx="1150" cy="1650" rx="170" ry="45"/>
+    <ellipse class="attribute" cx="1450" cy="1750" rx="120" ry="45"/>
+    <ellipse class="attribute" cx="1780" cy="1750" rx="160" ry="45"/>
+    <ellipse class="attribute" cx="2080" cy="1650" rx="125" ry="45"/>
+
+    <!-- Resource Attributes -->
+    <ellipse class="attribute" cx="2700" cy="250" rx="185" ry="45"/>
+    <ellipse class="attribute" cx="3000" cy="380" rx="125" ry="45"/>
+    <ellipse class="attribute" cx="3030" cy="500" rx="95" ry="45"/>
+
+    <!-- Slot Attributes -->
+    <ellipse class="attribute" cx="3030" cy="1400" rx="120" ry="45"/>
+    <ellipse class="attribute" cx="3020" cy="1520" rx="125" ry="45"/>
+    <ellipse class="attribute" cx="3020" cy="1620" rx="125" ry="45"/>
+    <ellipse class="attribute" cx="2700" cy="1650" rx="125" ry="45"/>
+    <ellipse class="attribute" cx="2430" cy="1600" rx="125" ry="45"/>
+  </g>
+
+  <!-- Relationships (Diamonds with White Fills) -->
+  <g>
+    <!-- 提交 (Diamond center 1050, 500) -->
+    <polygon class="relation" points="1050,440 1140,500 1050,560 960,500"/>
+    
+    <!-- 创建 (Diamond center 1050, 950) -->
+    <polygon class="relation" points="1050,890 1140,950 1050,1010 960,950"/>
+
+    <!-- 确认 (Diamond center 1600, 950) -->
+    <polygon class="relation" points="1600,890 1690,950 1600,1010 1510,950"/>
+
+    <!-- 包含 (Diamond center 2700, 950) -->
+    <polygon class="relation" points="2700,890 2790,950 2700,1010 2610,950"/>
+
+    <!-- 被预约 (Diamond center 2150, 1400) -->
+    <polygon class="relation" points="2150,1340 2240,1400 2150,1460 2060,1400"/>
+  </g>
+
+  <!-- Entities (Rectangles with White Fills) -->
+  <g>
+    <rect class="entity" x="390" y="455" width="220" height="90"/>
+    <rect class="entity" x="1450" y="450" width="300" height="100"/>
+    <rect class="entity" x="1485" y="1355" width="230" height="90"/>
+    <rect class="entity" x="2570" y="450" width="260" height="100"/>
+    <rect class="entity" x="2565" y="1355" width="270" height="90"/>
+  </g>
+
+  <!-- Entity Text -->
+  <g>
+    <text class="entity-text" x="500" y="506">用户</text>
+    <text class="entity-text" x="1600" y="506">热门预约请求</text>
+    <text class="entity-text" x="1600" y="1406">预约</text>
+    <text class="entity-text" x="2700" y="506">实验室资源</text>
+    <text class="entity-text" x="2700" y="1406">资源时段</text>
+  </g>
+
+  <!-- Relationship Text -->
+  <g>
+    <text class="relation-text" x="1050" y="956">创建</text>
+    <text class="relation-text" x="1050" y="506">提交</text>
+    <text class="relation-text" x="1600" y="956">确认</text>
+    <text class="relation-text" x="2700" y="956">包含</text>
+    <text class="relation-text" x="2150" y="1406">被预约</text>
+  </g>
+
+  <!-- Attribute Text -->
+  <g>
+    <!-- User attributes -->
+    <text class="attr-text key" x="200" y="356">用户ID</text>
+    <text class="attr-text" x="180" y="506">用户名</text>
+    <text class="attr-text" x="200" y="656">角色</text>
+
+    <!-- Request attributes -->
+    <text class="attr-text key" x="1200" y="256">请求号(唯一)</text>
+    <text class="attr-text key" x="1600" y="186">activeKey(唯一)</text>
+    <text class="attr-text" x="2000" y="256">状态</text>
+
+    <!-- Reservation attributes -->
+    <text class="attr-text key" x="1150" y="1656">预约号(唯一)</text>
+    <text class="attr-text" x="1450" y="1756">签到时间</text>
+    <text class="attr-text" x="1780" y="1756">自动取消时间</text>
+    <text class="attr-text" x="2080" y="1656">预约状态</text>
+
+    <!-- Resource attributes -->
+    <text class="attr-text key" x="2700" y="256">资源编号(唯一)</text>
+    <text class="attr-text" x="3000" y="386">资源名称</text>
+    <text class="attr-text" x="3030" y="506">状态</text>
+
+    <!-- Slot attributes -->
+    <text class="attr-text key" x="3030" y="1406">时段ID</text>
+    <text class="attr-text" x="3020" y="1526">开始时间</text>
+    <text class="attr-text" x="3020" y="1626">结束时间</text>
+    <text class="attr-text" x="2700" y="1656">剩余名额</text>
+    <text class="attr-text" x="2430" y="1606">时段类型</text>
+  </g>
+
+  <!-- Cardinalities -->
+  <g>
+    <!-- 提交 (User -> Request) -->
+    <text class="cardinality" x="650" y="470">1</text>
+    <text class="cardinality" x="1400" y="470">N</text>
+
+    <!-- 创建 (User -> Reservation) -->
+    <text class="cardinality" x="650" y="590">1</text>
+    <text class="cardinality" x="1440" y="1280">N</text>
+
+    <!-- 确认 (Request -> Reservation) -->
+    <text class="cardinality" x="1560" y="600">1</text>
+    <text class="cardinality" x="1550" y="1300">0..1</text>
+
+    <!-- 包含 (Resource -> Slot) -->
+    <text class="cardinality" x="2660" y="600">1</text>
+    <text class="cardinality" x="2660" y="1300">N</text>
+
+    <!-- 被预约 (Slot -> Reservation) -->
+    <text class="cardinality" x="1750" y="1370">N</text>
+    <text class="cardinality" x="2510" y="1370">1</text>
+  </g>
+</svg>

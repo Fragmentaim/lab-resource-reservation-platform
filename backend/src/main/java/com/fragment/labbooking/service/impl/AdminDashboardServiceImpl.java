@@ -5,7 +5,7 @@ import com.fragment.labbooking.common.constants.ReservationRequestStatusConstant
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
-import com.fragment.labbooking.entity.AdminAuditOutbox;
+import com.fragment.labbooking.entity.MessageOutbox;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationReminderTask;
 import com.fragment.labbooking.entity.ReservationRequest;
@@ -13,7 +13,7 @@ import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.entity.SysUser;
 import com.fragment.labbooking.entity.UserNotification;
-import com.fragment.labbooking.mapper.AdminAuditOutboxMapper;
+import com.fragment.labbooking.mapper.MessageOutboxMapper;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.mapper.ReservationReminderTaskMapper;
 import com.fragment.labbooking.mapper.ReservationRequestMapper;
@@ -42,6 +42,8 @@ import java.util.stream.Collectors;
 public class AdminDashboardServiceImpl implements AdminDashboardService {
 
     private static final String STATUS_PENDING = "PENDING";
+    private static final String RESERVATION_CREATE_EVENT_TYPE = "RESERVATION_CREATE";
+    private static final String ADMIN_AUDIT_LOG_EVENT_TYPE = "ADMIN_AUDIT_LOG";
     private static final String RESOURCE_AVAILABLE = "AVAILABLE";
 
     private final ReservationMapper reservationMapper;
@@ -50,7 +52,7 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
     private final ReservationRequestMapper reservationRequestMapper;
     private final ReservationReminderTaskMapper reservationReminderTaskMapper;
     private final UserNotificationMapper userNotificationMapper;
-    private final AdminAuditOutboxMapper adminAuditOutboxMapper;
+    private final MessageOutboxMapper messageOutboxMapper;
     private final SysUserMapper sysUserMapper;
 
     public AdminDashboardServiceImpl(ReservationMapper reservationMapper,
@@ -59,7 +61,7 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
                                      ReservationRequestMapper reservationRequestMapper,
                                      ReservationReminderTaskMapper reservationReminderTaskMapper,
                                      UserNotificationMapper userNotificationMapper,
-                                     AdminAuditOutboxMapper adminAuditOutboxMapper,
+                                     MessageOutboxMapper messageOutboxMapper,
                                      SysUserMapper sysUserMapper) {
         this.reservationMapper = reservationMapper;
         this.resourceMapper = resourceMapper;
@@ -67,7 +69,7 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
         this.reservationRequestMapper = reservationRequestMapper;
         this.reservationReminderTaskMapper = reservationReminderTaskMapper;
         this.userNotificationMapper = userNotificationMapper;
-        this.adminAuditOutboxMapper = adminAuditOutboxMapper;
+        this.messageOutboxMapper = messageOutboxMapper;
         this.sysUserMapper = sysUserMapper;
     }
 
@@ -89,9 +91,9 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
         overview.setOpenSlotCount(countSlots(null, ResourceSlotStatusConstants.OPEN));
         overview.setHotOpenSlotCount(countSlots(ResourceSlotTypeConstants.HOT, ResourceSlotStatusConstants.OPEN));
 
-        overview.setPendingAsyncRequestCount(countReservationRequests(ReservationRequestStatusConstants.PENDING, null));
+        overview.setPendingAsyncRequestCount(countReservationRequests(ReservationRequestStatusConstants.PENDING));
         overview.setDispatchPendingRequestCount(countPendingDispatchRequests());
-        overview.setFailedAsyncRequestCount(countReservationRequests(ReservationRequestStatusConstants.FAILED, null));
+        overview.setFailedAsyncRequestCount(countReservationRequests(ReservationRequestStatusConstants.FAILED));
         overview.setPendingReminderCount(countReminderTasks(STATUS_PENDING));
         overview.setUnreadNotificationCount(countUnreadNotifications());
         overview.setPendingAuditOutboxCount(countPendingAuditOutbox());
@@ -120,16 +122,15 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
                 .eq(StringUtils.hasText(status), ResourceSlot::getStatus, status));
     }
 
-    private long countReservationRequests(String status, String dispatchStatus) {
+    private long countReservationRequests(String status) {
         return reservationRequestMapper.selectCount(new LambdaQueryWrapper<ReservationRequest>()
-                .eq(StringUtils.hasText(status), ReservationRequest::getStatus, status)
-                .eq(StringUtils.hasText(dispatchStatus), ReservationRequest::getDispatchStatus, dispatchStatus));
+                .eq(StringUtils.hasText(status), ReservationRequest::getStatus, status));
     }
 
     private long countPendingDispatchRequests() {
-        return reservationRequestMapper.selectCount(new LambdaQueryWrapper<ReservationRequest>()
-                .eq(ReservationRequest::getStatus, ReservationRequestStatusConstants.PENDING)
-                .eq(ReservationRequest::getDispatchStatus, STATUS_PENDING));
+        return messageOutboxMapper.selectCount(new LambdaQueryWrapper<MessageOutbox>()
+                .eq(MessageOutbox::getEventType, RESERVATION_CREATE_EVENT_TYPE)
+                .eq(MessageOutbox::getStatus, STATUS_PENDING));
     }
 
     private long countReminderTasks(String status) {
@@ -143,8 +144,9 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
     }
 
     private long countPendingAuditOutbox() {
-        return adminAuditOutboxMapper.selectCount(new LambdaQueryWrapper<AdminAuditOutbox>()
-                .eq(AdminAuditOutbox::getStatus, STATUS_PENDING));
+        return messageOutboxMapper.selectCount(new LambdaQueryWrapper<MessageOutbox>()
+                .eq(MessageOutbox::getEventType, ADMIN_AUDIT_LOG_EVENT_TYPE)
+                .eq(MessageOutbox::getStatus, STATUS_PENDING));
     }
 
     private List<AdminDashboardHotSlotVO> buildHotSlots(LocalDateTime now) {
@@ -250,8 +252,6 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
             item.setResourceId(request.getResourceId());
             item.setSlotId(request.getSlotId());
             item.setStatus(request.getStatus());
-            item.setDispatchStatus(request.getDispatchStatus());
-            item.setDispatchRetryCount(request.getDispatchRetryCount());
             item.setFailReason(request.getFailReason());
             item.setCreatedAt(request.getCreatedAt());
             item.setCompletedAt(request.getCompletedAt());
