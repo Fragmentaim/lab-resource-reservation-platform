@@ -1,0 +1,131 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/lab_booking?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:0}
+      timeout: 3000ms
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:local-development-secret-change-before-production}
+    expire-hours: 24
+  cors:
+    allowed-origins: http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,http://127.0.0.1:5188,http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5188
+  reservation:
+    hot-redis-enabled: false
+    hot-init-wait-millis: 1000
+    async:
+      enabled: false
+      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
+      topic: reservation-create
+      consumer-group: lab-booking-reservation-consumer-group
+      max-reconsume-times: -1
+      request-timeout-seconds: 30
+      timeout-scan-fallback-enabled: true
+      timeout-scan-delay-millis: 5000
+      timeout-scan-batch-size: 20
+      cleanup-delay-millis: 10000
+      cleanup-batch-size: 100
+      success-retention-days: 7
+      failed-retention-days: 14
+    rate-limit:
+      enabled: false
+      normal-max-requests: 5
+      normal-window-seconds: 10
+      hot-max-requests: 3
+      hot-window-seconds: 10
+    reminder:
+      enabled: true
+      before-start-minutes: 10
+      scan-fallback-enabled: true
+      scheduler:
+        delay-millis: 60000
+        batch-size: 20
+    auto-cancel:
+      enabled: true
+      grace-minutes: 15
+      check-in-before-start-minutes: 30
+  message-outbox:
+    enabled: false
+    name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
+    producer-group: lab-booking-message-outbox-producer-group
+    max-reconsume-times: -1
+    lock-seconds: 60
+    delay-topic: reservation-delay
+    delay-consumer-group: lab-booking-delay-consumer-group
+    outbox:
+      relay-delay-millis: 1000
+      batch-size: 20
+  audit:
+    enabled: true
+    mq:
+      enabled: false
+      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
+      topic: admin-audit-log
+      consumer-group: lab-booking-audit-consumer-group
+      max-reconsume-times: -1
+      demo:
+        fail-once-enabled: false
+        fail-once-match:
+        fail-always-match:
+  snowflake:
+    worker-id: 1
+    datacenter-id: 1
+  resource-cache:
+    enabled: false
+    ttl-seconds: 300
+  knowledge:
+    ai-service:
+      base-url: ${AI_SERVICE_BASE_URL:http://127.0.0.1:8000}
+      connect-timeout: 5000
+      read-timeout: 180000
+    storage:
+      type: ${KNOWLEDGE_STORAGE_TYPE:local}
+      local-dir: ${KNOWLEDGE_LOCAL_DIR:../uploads/knowledge}
+      minio:
+        endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+        access-key: ${MINIO_ACCESS_KEY:minioadmin}
+        secret-key: ${MINIO_SECRET_KEY:minioadmin}
+        bucket: ${MINIO_BUCKET:lab-knowledge}
+        presign-expiry-seconds: 900
+    document-processing:
+      enabled: false
+      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
+      topic: knowledge-document-process
+      tag: KNOWLEDGE_DOCUMENT_PROCESS
+      event-type: KNOWLEDGE_DOCUMENT_PROCESS
+      consumer-group: lab-booking-knowledge-document-consumer-group
+      max-reconsume-times: -1
+      max-retry-attempts: 3
+    # Operator-owned model capabilities. End users never configure per-bucket
+    # history/RAG limits; change active-profile when changing the LLM.
+    model-context:
+      active-profile: safe-default
+      profiles:
+        safe-default:
+          context-window-tokens: 12000
+          max-output-tokens: 2000
+          safety-margin-tokens: 512
+          compaction-target-ratio: 0.70
+        long-context-256k:
+          context-window-tokens: 256000
+          max-output-tokens: 8000
+          safety-margin-tokens: 4096
+          compaction-target-ratio: 0.70
+    native-tool-calling:
+      enabled: true
+    agent-checkpoint:
+      # Private runtime recovery state is short-lived and excludes raw prompts/tool payloads.
+      ttl-seconds: ${AGENT_CHECKPOINT_TTL_SECONDS:900}

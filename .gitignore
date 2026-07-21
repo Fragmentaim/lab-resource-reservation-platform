@@ -1,0 +1,38 @@
+# Java / Maven
+backend/target/
+backend/.mvn/wrapper/maven-wrapper.jar
+
+# Logs
+logs/
+*.log
+*.err
+*.out
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Local config
+*.local
+.env
+.env.*
+!.env.example
+
+# Python / AI service
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.qdrant-local/
+.model-cache/
+tokenmp.local.env
+
+# Local runtime data and one-off verification fixtures
+uploads/
+.codex-run/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

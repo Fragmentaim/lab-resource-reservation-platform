@@ -1,0 +1,33 @@
+app:
+  reservation:
+    async:
+      enabled: true
+      timeout-scan-fallback-enabled: false
+    reminder:
+      enabled: true
+      scan-fallback-enabled: false
+    auto-cancel:
+      enabled: true
+  message-outbox:
+    enabled: true
+    name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
+    producer-group: lab-booking-message-outbox-producer-group
+    max-reconsume-times: -1
+    lock-seconds: 60
+    delay-topic: reservation-delay
+    delay-consumer-group: lab-booking-delay-consumer-group
+    outbox:
+      relay-delay-millis: 1000
+      batch-size: 20
+  knowledge:
+    storage:
+      type: ${KNOWLEDGE_STORAGE_TYPE:minio}
+    document-processing:
+      enabled: true
+      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
+      topic: knowledge-document-process
+      tag: KNOWLEDGE_DOCUMENT_PROCESS
+      event-type: KNOWLEDGE_DOCUMENT_PROCESS
+      consumer-group: lab-booking-knowledge-document-consumer-group
+      max-reconsume-times: -1
+      max-retry-attempts: 3
