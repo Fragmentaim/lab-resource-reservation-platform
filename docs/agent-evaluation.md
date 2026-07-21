@@ -28,3 +28,29 @@
 本仓库已具备评测数据模型、固定套件、评分器、从 Run/Step 聚合 Trace 的适配器，以及针对这些规则的单元测试。它们保证口径与数据规模正确，但**不代表已经产生真实模型成功率**。
 
 正式报告只能写入实际运行生成的 trace；在未运行隔离环境前，不得把任何示例数据或单测通过数写进简历。
+
+## 规划器契约冒烟（不等同正式评测）
+
+`AgentEvaluationFixtureExporter` 会从 Java 的固定套件导出 JSON；
+`ai-service/evals/run_agent_planner_benchmark.py` 再把这些输入交给运行中的
+FastAPI `/tool-calling/round`。模型调用是真实的，工具输出是确定性模拟值，目的仅是快速定位
+Function Calling 的工具选择、参数格式和多轮工具衔接问题。
+
+```powershell
+cd backend
+& 'D:\tools\apache-maven-3.9.11\bin\mvn.cmd' -q exec:java `
+  '-Dexec.mainClass=com.fragment.labbooking.knowledge.evaluation.AgentEvaluationFixtureExporter' `
+  '-Dexec.args=D:\agent-eval-runtime\agent-suite-v1.json'
+
+cd ..
+& '.\ai-service\.venv\Scripts\python.exe' .\ai-service\evals\run_agent_planner_benchmark.py `
+  --suite D:\agent-eval-runtime\agent-suite-v1.json `
+  --output D:\agent-eval-runtime\planner-contract-v1.json `
+  --endpoint http://127.0.0.1:8005/api/v1/ai/tool-calling/round `
+  --token $env:AI_SERVICE_TOKEN --model glm-5.1 --concurrency 10
+```
+
+不要把 API Key 写入命令、报告或仓库。先由操作者在当前进程环境中设置 `LLM_API_KEY`、
+`LLM_BASE_URL`、`AI_SERVICE_TOKEN` 后启动隔离端口的 FastAPI。输出中的
+`benchmark_type=real_model_planner_contract` 明确表示它**不是**真实预约成功率、ACL 数据库
+泄漏率或端到端任务成功率；这三项仍必须通过上面的正式隔离环境和 `AgentRun/Step` trace 生成。
