@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     tool_calling_model: str = ""
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 1
+    mcp_backend_base_url: str = "http://127.0.0.1:8082"
+    mcp_access_token: str = ""
+    mcp_request_timeout_seconds: float = 30.0
     embedding_model: str = "text-embedding-3-large"
     embedding_base_url: str = ""
     embedding_api_key: str = ""

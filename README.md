@@ -157,6 +157,26 @@ python -m pytest -q
 
 每次推送和 PR 会由 GitHub Actions 运行 Java 测试、Python 编译检查、Docker Compose 配置校验和敏感信息扫描。实际容器联调依赖 Docker Daemon 与外部模型配置，因此只在本地或部署环境完成。
 
+### MCP Sidecar
+
+项目提供基于官方 Python MCP SDK 的独立 MCP Sidecar，暴露“我的预约上下文、资源可用性、取消预检、知识库问答”四个能力。它只转发 Java 后端已有的鉴权接口，JWT 由 MCP 进程环境中的 `MCP_ACCESS_TOKEN` 持有，不会作为模型可见的 Tool 参数传递；预约写操作不在 MCP 中暴露。
+
+本地 IDE 使用 stdio：
+
+```bash
+cd ai-service
+set MCP_ACCESS_TOKEN=your-jwt
+python -m app.mcp_server
+```
+
+需要 Streamable HTTP 时以单用户 Sidecar 方式启动：
+
+```bash
+docker compose --profile mcp up mcp
+```
+
+不要让多个用户共享同一个 `MCP_ACCESS_TOKEN`；多租户 HTTP 部署需要接入 OAuth/资源服务器后再开放。
+
 ## 代码导航
 
 - Agent 工具编排：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/tool/`、`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/NativeToolCallingServiceImpl.java`

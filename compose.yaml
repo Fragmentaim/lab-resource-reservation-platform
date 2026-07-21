@@ -158,6 +158,23 @@ services:
       retries: 18
       start_period: 30s
 
+  # Optional per-user MCP bridge. Do not share one MCP_ACCESS_TOKEN between users.
+  mcp:
+    profiles: ["mcp"]
+    build:
+      context: ./ai-service
+    command: ["python", "-m", "app.mcp_server"]
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_BACKEND_BASE_URL: ${MCP_BACKEND_BASE_URL:-http://backend:8081}
+      MCP_ACCESS_TOKEN: ${MCP_ACCESS_TOKEN:-}
+      MCP_REQUEST_TIMEOUT_SECONDS: ${MCP_REQUEST_TIMEOUT_SECONDS:-30}
+    ports:
+      - "${MCP_PORT:-8001}:8000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   mysql-data:
   redis-data:
