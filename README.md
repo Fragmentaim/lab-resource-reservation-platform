@@ -154,6 +154,8 @@ python -m compileall app
 
 当前 Java 测试集覆盖预约状态、权限边界、工具调用、上下文规划、文档 ACL、异步任务和异常路径。仓库发布前已通过 **70 项测试，0 failure / 0 error**。
 
+每次推送和 PR 会由 GitHub Actions 运行 Java 测试、Python 编译检查、Docker Compose 配置校验和敏感信息扫描。实际容器联调依赖 Docker Daemon 与外部模型配置，因此只在本地或部署环境完成。
+
 ## 代码导航
 
 - Agent 工具编排：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/NativeToolCallingServiceImpl.java`
