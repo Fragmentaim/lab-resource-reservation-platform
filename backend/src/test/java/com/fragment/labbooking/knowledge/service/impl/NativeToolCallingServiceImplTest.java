@@ -4,6 +4,12 @@ import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.knowledge.agent.ContextTokenCounter;
 import com.fragment.labbooking.knowledge.agent.ModelContextProfileProperties;
 import com.fragment.labbooking.knowledge.agent.ToolResultContextPacker;
+import com.fragment.labbooking.knowledge.agent.tool.AgentToolRegistry;
+import com.fragment.labbooking.knowledge.agent.tool.KnowledgeOpenChunksAgentTool;
+import com.fragment.labbooking.knowledge.agent.tool.KnowledgeSearchAgentTool;
+import com.fragment.labbooking.knowledge.agent.tool.ReservationCancellationPreviewAgentTool;
+import com.fragment.labbooking.knowledge.agent.tool.ReservationContextAgentTool;
+import com.fragment.labbooking.knowledge.agent.tool.ResourceAvailabilityAgentTool;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
@@ -48,12 +54,14 @@ class NativeToolCallingServiceImplTest {
     void setUp() {
         service = new NativeToolCallingServiceImpl();
         ReflectionTestUtils.setField(service, "nativeToolCallingClient", nativeClient);
-        ReflectionTestUtils.setField(service, "reservationContextToolService", contextTool);
-        ReflectionTestUtils.setField(service, "resourceAvailabilityToolService", availabilityTool);
-        ReflectionTestUtils.setField(service, "cancellationPreviewToolService", cancellationTool);
         ReflectionTestUtils.setField(service, "aiToolCallAuditService", auditService);
-        ReflectionTestUtils.setField(service, "kbDocumentService", kbDocumentService);
-        ReflectionTestUtils.setField(service, "aiServiceClient", aiServiceClient);
+        ReflectionTestUtils.setField(service, "agentToolRegistry", new AgentToolRegistry(List.of(
+                new ReservationContextAgentTool(contextTool),
+                new ResourceAvailabilityAgentTool(availabilityTool),
+                new ReservationCancellationPreviewAgentTool(cancellationTool),
+                new KnowledgeSearchAgentTool(kbDocumentService, aiServiceClient),
+                new KnowledgeOpenChunksAgentTool(kbDocumentService, aiServiceClient)
+        )));
         ReflectionTestUtils.setField(service, "toolResultContextPacker", new ToolResultContextPacker(
                 new ContextTokenCounter(), new ModelContextProfileProperties()));
         ReflectionTestUtils.setField(service, "enabled", true);
