@@ -1,10 +1,14 @@
 from pathlib import Path
 from typing import Optional
 import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(Path(__file__).resolve().parents[1] / ".env"),
+    )
+
     app_name: str = "Lab Knowledge AI Service"
     debug: bool = True
 
@@ -63,10 +67,6 @@ class Settings(BaseSettings):
     ocr_min_native_chars: int = 80
     ocr_hybrid_image_coverage: float = 0.20
     ocr_scan_image_coverage: float = 0.35
-
-    class Config:
-        env_file = str(Path(__file__).resolve().parents[1] / ".env")
-
 
 settings = Settings()
 os.environ.setdefault("PADDLE_PDX_CACHE_HOME", settings.ocr_model_cache_dir)

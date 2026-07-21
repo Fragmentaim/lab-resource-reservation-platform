@@ -149,7 +149,8 @@ cd backend
 mvn test
 
 cd ../ai-service
-python -m compileall app
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
 ```
 
 当前 Java 测试集覆盖预约状态、权限边界、工具调用、上下文规划、文档 ACL、异步任务和异常路径。仓库发布前已通过 **70 项测试，0 failure / 0 error**。
