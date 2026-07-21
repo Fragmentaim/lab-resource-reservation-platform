@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "lab_knowledge"
     qdrant_vector_size: int = 2560  # Qwen3-Embedding-4B 的向量维度
+    # Used only when no remote Qdrant service is reachable. Keep benchmark or
+    # development indexes on an explicitly configured data disk instead of a
+    # system temporary directory.
+    qdrant_local_path: str = ""
 
     chunk_size: int = 512
     chunk_overlap: int = 64

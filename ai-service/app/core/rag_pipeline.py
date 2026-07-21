@@ -73,9 +73,10 @@ def retrieve_candidates(
     document_ids: Optional[List[int]] = None,
     top_k: Optional[int] = None,
     score_threshold: Optional[float] = None,
+    apply_rerank: bool = True,
 ) -> List[dict]:
     """Retrieve and rerank chunks without invoking a chat model or assembling an answer."""
-    return _retrieve_ranked_candidates(question, document_ids, top_k, score_threshold)
+    return _retrieve_ranked_candidates(question, document_ids, top_k, score_threshold, apply_rerank)
 
 
 def answer_question_stream(
@@ -192,6 +193,7 @@ def _retrieve_ranked_candidates(
     document_ids: Optional[List[int]],
     top_k: Optional[int],
     score_threshold: Optional[float],
+    apply_rerank: bool = True,
 ) -> List[dict]:
     """Collect lexical and vector candidates, fuse them, then rerank once."""
     k = top_k or settings.top_k
@@ -229,6 +231,8 @@ def _retrieve_ranked_candidates(
     else:
         first_stage = _dedupe_results(vector_results + keyword_results)
     ranked_limit = min(len(first_stage), max(k, candidate_k))
+    if not apply_rerank:
+        return first_stage[:ranked_limit]
     return reranker.rerank(question, first_stage, keywords, ranked_limit)
 
 

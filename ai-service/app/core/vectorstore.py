@@ -22,8 +22,11 @@ def get_client() -> QdrantClient:
             remote_client.get_collections()
             _client = remote_client
         except Exception:
-            # 使用临时目录避免锁定问题
-            local_path = Path(tempfile.gettempdir()) / "qdrant_lab_knowledge"
+            # Use an explicit local path when provided, e.g. a D: benchmark
+            # workspace. The temp fallback keeps the existing dev behaviour.
+            local_path = Path(settings.qdrant_local_path) if settings.qdrant_local_path else (
+                Path(tempfile.gettempdir()) / "qdrant_lab_knowledge"
+            )
             local_path.mkdir(exist_ok=True)
             _client = QdrantClient(path=str(local_path))
     return _client
