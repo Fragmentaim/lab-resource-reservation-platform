@@ -1,12 +1,13 @@
 package com.fragment.labbooking.common.reservation;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.id.ReservationNoGenerator;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.mapper.ReservationMapper;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 
 /**
@@ -67,32 +68,22 @@ public class ReservationPersistenceHelper {
                     throw new BusinessException("创建预约失败，请重试");
                 }
                 return;
-            } catch (DataIntegrityViolationException exception) {
-                if (isReservationNoConflict(exception)) {
-                    continue;
-                }
-                if (isDuplicateActiveReservationConflict(exception)) {
+            } catch (DuplicateKeyException exception) {
+                if (hasActiveReservation(reservation.getUserId(), reservation.getSlotId())) {
                     throw new BusinessException("当前用户已预约该时段");
                 }
-                throw exception;
+                // The active-reservation key did not conflict, so retry with a new reservation number.
             }
         }
         throw new BusinessException("创建预约失败，请重试");
     }
 
-    private boolean isReservationNoConflict(DataIntegrityViolationException exception) {
-        String message = getMostSpecificCauseMessage(exception);
-        return message != null && message.contains("uk_reservation_no");
-    }
-
-    private boolean isDuplicateActiveReservationConflict(DataIntegrityViolationException exception) {
-        String message = getMostSpecificCauseMessage(exception);
-        return message != null && message.contains("uk_reservation_user_slot_active");
-    }
-
-    private String getMostSpecificCauseMessage(DataIntegrityViolationException exception) {
-        return exception.getMostSpecificCause() == null
-                ? exception.getMessage()
-                : exception.getMostSpecificCause().getMessage();
+    private boolean hasActiveReservation(Long userId, Long slotId) {
+        return reservationMapper.selectOne(new LambdaQueryWrapper<Reservation>()
+                .select(Reservation::getId)
+                .eq(Reservation::getUserId, userId)
+                .eq(Reservation::getSlotId, slotId)
+                .eq(Reservation::getIsActive, 1)
+                .last("LIMIT 1 FOR UPDATE")) != null;
     }
 }

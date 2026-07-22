@@ -24,7 +24,6 @@ import com.fragment.labbooking.service.ResourceSlotService;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 
 import java.time.LocalDateTime;
@@ -261,7 +260,7 @@ class ReservationRequestServiceImplTest {
         when(reservationMapper.selectCount(any())).thenReturn(0L);
         when(reservationNoGenerator.nextReservationNo()).thenReturn("R-1");
         when(reservationMapper.insert(any(Reservation.class)))
-                .thenThrow(new DataIntegrityViolationException("Duplicate entry for uk_reservation_user_slot_active"));
+                .thenThrow(new DuplicateKeyException("duplicate active reservation"));
 
         service.processPendingHotRequest("REQ-8");
 
