@@ -6,11 +6,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/**
- * Selects complete turns against the active model's context capacity. It does
- * not use a fixed number of turns: the available budget changes with the
- * current question and persisted summary.
- */
+/** Keeps the newest complete turns that fit in the model window. */
 @Component
 public class SessionContextPlanner {
 
@@ -44,8 +40,7 @@ public class SessionContextPlanner {
                 includedReversed.add(turn);
                 historyTokens += turnTokens;
             } else {
-                // History must remain a contiguous recent suffix. Skipping an oversized
-                // middle turn but including an older one breaks conversational causality.
+                // Keep history as one contiguous recent suffix.
                 break;
             }
         }

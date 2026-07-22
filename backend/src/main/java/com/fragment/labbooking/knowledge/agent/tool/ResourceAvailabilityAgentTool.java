@@ -3,6 +3,7 @@ package com.fragment.labbooking.knowledge.agent.tool;
 import com.fragment.labbooking.knowledge.service.ResourceAvailabilityToolService;
 import com.fragment.labbooking.knowledge.vo.ResourceAvailabilityToolVO;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.util.Map;
 
@@ -38,15 +39,17 @@ public class ResourceAvailabilityAgentTool implements AgentTool {
 
     @Override
     public AgentToolResult execute(AgentToolInvocation invocation) {
+        String keyword = AgentToolArguments.optionalText(invocation.arguments().get("keyword"), 40);
         ResourceAvailabilityToolVO value = resourceAvailabilityToolService.findAvailableSlots(
-                AgentToolArguments.optionalText(invocation.arguments().get("keyword"), 40), 5);
+                keyword, 5);
         return new AgentToolResult(Map.of(
                 "resultCount", value.getResultCount(),
                 "slots", value.getSlots(),
                 "generatedAt", value.getGeneratedAt()
         ), 0, Map.of(
                 "result_type", "RESOURCE_AVAILABILITY",
-                "result_count", value.getResultCount()
+                "result_count", value.getResultCount(),
+                "keyword", StringUtils.hasText(keyword) ? keyword : ""
         ));
     }
 }

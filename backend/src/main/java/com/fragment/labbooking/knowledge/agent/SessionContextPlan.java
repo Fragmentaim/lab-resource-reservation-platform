@@ -6,7 +6,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** A backend-owned, explainable decision about the history supplied to a model call. */
 public record SessionContextPlan(
         int modelContextWindowTokens,
         int maxOutputTokens,

@@ -198,7 +198,6 @@ def _retrieve_ranked_candidates(
     """Collect lexical and vector candidates, fuse them, then rerank once."""
     k = top_k or settings.top_k
     candidate_k = reranker.candidate_limit(k)
-    keywords = _extract_keywords(question)
     threshold = settings.score_threshold if score_threshold is None else score_threshold
     vector_results: List[dict] = []
     keyword_results: List[dict] = []
@@ -212,11 +211,11 @@ def _retrieve_ranked_candidates(
         )
         _mark_retrieval_source(vector_results, "vector")
         if settings.enable_hybrid_search or not vector_results:
-            keyword_results = vectorstore.search_by_keywords(keywords, top_k=candidate_k, document_ids=document_ids)
-            _mark_retrieval_source(keyword_results, "keyword")
+            keyword_results = vectorstore.search_by_keywords(question, top_k=candidate_k, document_ids=document_ids)
+            _mark_retrieval_source(keyword_results, "bm25")
     else:
-        keyword_results = vectorstore.search_by_keywords(keywords, top_k=candidate_k, document_ids=document_ids)
-        _mark_retrieval_source(keyword_results, "keyword")
+        keyword_results = vectorstore.search_by_keywords(question, top_k=candidate_k, document_ids=document_ids)
+        _mark_retrieval_source(keyword_results, "bm25")
         if (settings.enable_hybrid_search or not keyword_results) and settings.enable_embedding:
             vector_results = vectorstore.search(
                 query_vector=embedder.embed_query(question),
@@ -233,7 +232,7 @@ def _retrieve_ranked_candidates(
     ranked_limit = min(len(first_stage), max(k, candidate_k))
     if not apply_rerank:
         return first_stage[:ranked_limit]
-    return reranker.rerank(question, first_stage, keywords, ranked_limit)
+    return reranker.rerank(question, first_stage, _extract_keywords(question), ranked_limit)
 
 
 def _fuse_hybrid_results(vector_results: List[dict], keyword_results: List[dict], limit: int) -> List[dict]:
@@ -241,7 +240,7 @@ def _fuse_hybrid_results(vector_results: List[dict], keyword_results: List[dict]
     rrf_k = max(1, settings.hybrid_rrf_k)
     channels = (
         ("vector", vector_results, max(0.0, settings.hybrid_vector_weight)),
-        ("keyword", keyword_results, max(0.0, settings.hybrid_keyword_weight)),
+        ("bm25", keyword_results, max(0.0, settings.hybrid_keyword_weight)),
     )
     merged: dict[str, dict] = {}
     for source, results, weight in channels:

@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,7 +45,7 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
     @Value("${app.knowledge.native-tool-calling.enabled:true}")
     private boolean enabled;
 
-    /** Dedicated evaluation environments may capture sanitized arguments in AgentStep detail. Off in normal runtime. */
+    // Optional sanitized arguments for evaluation runs.
     @Value("${app.knowledge.agent-evaluation.capture-arguments:false}")
     private boolean captureEvaluationArguments;
 
@@ -65,6 +66,8 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                     .orElseGet(() -> new AgentState(traceId, sessionId, policy))
                     : new AgentState(traceId, sessionId, policy);
             List<NativeToolCallingClient.ExecutedToolCall> executed = new ArrayList<>(resumeCandidateCalls(state));
+            List<Map<String, Object>> providerUsages = new ArrayList<>();
+            List<Map<String, Object>> clientActions = new ArrayList<>();
             if (runtimeManaged) {
                 agentRunService.beginRuntime(traceId, policy);
             }
@@ -75,6 +78,7 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                 NativeToolCallingClient.ToolRound plan = nativeToolCallingClient.nextRound(
                         question, agentToolRegistry.definitionsFor(policy), executed,
                         conversationContext == null ? AgentConversationContext.empty() : conversationContext);
+                providerUsages.add(plan.providerUsage());
                 observePlan(runtimeManaged, traceId, ContextPlan.from(round + 1, plan,
                         (int) Math.min(Integer.MAX_VALUE, elapsedMs(planningStartedAt))));
                 if (plan.toolCalls() == null || plan.toolCalls().isEmpty()) {
@@ -87,7 +91,8 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                     observeState(runtimeManaged, traceId, state);
                     state.succeed();
                     observeState(runtimeManaged, traceId, state);
-                    return Optional.of(new ToolRouteResult(plan.answer(), trace, runtimeManaged, sourceCount, openedSources));
+                    return Optional.of(new ToolRouteResult(plan.answer(), trace, runtimeManaged, sourceCount, openedSources,
+                            aggregateProviderUsage(providerUsages), clientActions));
                 }
                 for (NativeToolCallingClient.PlannedToolCall call : plan.toolCalls()) {
                     state.executingTool();
@@ -96,9 +101,10 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                     ToolResultContextPacker.PackedToolResult packed = toolResultContextPacker.pack(
                             result.toolName(), result.output());
                     executed.add(new NativeToolCallingClient.ExecutedToolCall(
-                            safeCallId(call.callId()), result.toolName(), result.arguments(), packed.modelOutput()));
+                            safeCallId(call.callId()), result.toolName(), result.arguments(), packed.modelOutput(), round + 1));
                     trace.add(result.trace());
                     sourceCount += result.sourceCount();
+                    reservationDraftAction(result.toolName(), result.output()).ifPresent(clientActions::add);
                     observeTool(runtimeManaged, traceId, withContextPacking(result.execution(), packed.safeDetail()));
                     state.completeTool(result.toolName());
                     observeState(runtimeManaged, traceId, state);
@@ -109,9 +115,10 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
             state.succeed();
             observeState(runtimeManaged, traceId, state);
             return Optional.of(new ToolRouteResult(
-                    "已完成所需数据查询，但工具调用轮次达到安全上限，请换一种更具体的问法。", trace, runtimeManaged, sourceCount, openedSources));
+                    "已完成所需数据查询，但工具调用轮次达到安全上限，请换一种更具体的问法。", trace, runtimeManaged, sourceCount, openedSources,
+                    aggregateProviderUsage(providerUsages), clientActions));
         } catch (BusinessException exception) {
-            // The rule router remains a safe fallback when the model gateway is temporarily unavailable.
+            // Fall back to deterministic routing if the model gateway is unavailable.
             return Optional.empty();
         }
     }
@@ -129,15 +136,53 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
             long latencyMs = elapsedMs(startedAt);
             aiToolCallAuditService.recordSuccess(traceId, tool.name(), actor, actor.getId(), tool.accessScope(), latencyMs,
                     summarizeArguments(arguments));
-            return new ExecutedCall(tool.name(), arguments, output, trace(tool.name(), traceId, latencyMs, "SUCCESS"),
+            return new ExecutedCall(tool.name(), arguments, output, trace(tool.name(), traceId, latencyMs, "SUCCESS", arguments),
                     execution(tool.name(), traceId, latencyMs, "SUCCESS", output, result.executionDetail(), arguments), result.sourceCount());
-        } catch (RuntimeException exception) {
+        } catch (BusinessException exception) {
             long latencyMs = elapsedMs(startedAt);
             aiToolCallAuditService.recordFailure(traceId, toolName, actor, actor.getId(), latencyMs,
                     summarizeArguments(arguments), exception.getMessage());
             Map<String, Object> output = Map.of("error", "TOOL_EXECUTION_REJECTED", "message", exception.getMessage());
-            return new ExecutedCall(toolName, arguments, output, trace(toolName, traceId, latencyMs, "REJECTED"),
+            return new ExecutedCall(toolName, arguments, output, trace(toolName, traceId, latencyMs, "REJECTED", arguments),
                     execution(toolName, traceId, latencyMs, "REJECTED", output, Map.of(), arguments), 0);
+        } catch (RuntimeException exception) {
+            long latencyMs = elapsedMs(startedAt);
+            aiToolCallAuditService.recordFailure(traceId, toolName, actor, actor.getId(), latencyMs,
+                    summarizeArguments(arguments), exception.getMessage());
+            throw exception;
+        }
+    }
+
+    private Map<String, Object> aggregateProviderUsage(List<Map<String, Object>> usages) {
+        long inputTokens = 0;
+        long outputTokens = 0;
+        long totalTokens = 0;
+        long cachedInputTokens = 0;
+        boolean reported = false;
+        for (Map<String, Object> usage : usages == null ? List.<Map<String, Object>>of() : usages) {
+            if (usage == null) continue;
+            reported |= Boolean.TRUE.equals(usage.get("reported"));
+            inputTokens += numberValue(usage.get("input_tokens"));
+            outputTokens += numberValue(usage.get("output_tokens"));
+            totalTokens += numberValue(usage.get("total_tokens"));
+            cachedInputTokens += numberValue(usage.get("cached_input_tokens"));
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("reported", reported);
+        result.put("model_round_count", usages == null ? 0 : usages.size());
+        result.put("input_tokens", inputTokens);
+        result.put("output_tokens", outputTokens);
+        result.put("total_tokens", totalTokens > 0 ? totalTokens : inputTokens + outputTokens);
+        result.put("cached_input_tokens", cachedInputTokens);
+        return result;
+    }
+
+    private long numberValue(Object value) {
+        if (value instanceof Number number) return Math.max(0L, number.longValue());
+        try {
+            return Math.max(0L, Long.parseLong(String.valueOf(value)));
+        } catch (Exception ignored) {
+            return 0L;
         }
     }
 
@@ -145,9 +190,18 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
         return question != null && !question.isBlank();
     }
 
-    private Map<String, Object> trace(String toolName, String traceId, long latencyMs, String result) {
-        return Map.of("tool_name", toolName, "tool_trace_id", traceId, "latency_ms", latencyMs,
-                "result", result, "protocol", "native_function_calling");
+    private Map<String, Object> trace(String toolName, String traceId, long latencyMs, String result,
+                                      Map<String, Object> arguments) {
+        Map<String, Object> trace = new LinkedHashMap<>();
+        trace.put("tool_name", toolName);
+        trace.put("tool_trace_id", traceId);
+        trace.put("latency_ms", latencyMs);
+        trace.put("result", result);
+        trace.put("protocol", "native_function_calling");
+        if (captureEvaluationArguments) {
+            trace.put("evaluation_arguments", sanitizeArguments(arguments));
+        }
+        return trace;
     }
 
     private AgentToolExecution execution(String toolName, String traceId, long latencyMs, String status,
@@ -164,7 +218,7 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
             detail.putIfAbsent("knowledge_status", String.valueOf(output.getOrDefault("status", "")));
         }
         if (captureEvaluationArguments) {
-            detail.put("evaluation_arguments", sanitizedEvaluationArguments(arguments));
+            detail.put("evaluation_arguments", sanitizeArguments(arguments));
         }
         return new AgentToolExecution(toolName, status, (int) Math.min(Integer.MAX_VALUE, latencyMs), traceId,
                 "native_function_calling", detail);
@@ -180,23 +234,85 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
         }
     }
 
-    private Map<String, Object> sanitizedEvaluationArguments(Map<String, Object> arguments) {
+    private Optional<Map<String, Object>> reservationDraftAction(String toolName, Map<String, Object> output) {
+        if (!"reservation_create_draft".equals(toolName) || output == null) {
+            return Optional.empty();
+        }
+        Object token = output.get("confirmationToken");
+        Object endpoint = output.get("confirmationEndpoint");
+        if (!(token instanceof String confirmationToken) || confirmationToken.isBlank()
+                || !(endpoint instanceof String confirmationEndpoint) || confirmationEndpoint.isBlank()) {
+            return Optional.empty();
+        }
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("type", "RESERVATION_CONFIRMATION");
+        action.put("label", "确认预约");
+        action.put("confirmationToken", confirmationToken);
+        action.put("confirmationEndpoint", confirmationEndpoint);
+        copyActionField(output, action, "resourceId");
+        copyActionField(output, action, "resourceName");
+        copyActionField(output, action, "location");
+        copyActionField(output, action, "slotId");
+        copyActionField(output, action, "startDatetime");
+        copyActionField(output, action, "endDatetime");
+        copyActionField(output, action, "remainQuota");
+        copyActionField(output, action, "expiresAt");
+        return Optional.of(action);
+    }
+
+    private void copyActionField(Map<String, Object> output, Map<String, Object> action, String field) {
+        Object value = output.get(field);
+        if (value != null) {
+            action.put(field, value);
+        }
+    }
+
+    private Map<String, Object> sanitizeArguments(Map<String, Object> arguments) {
         if (arguments == null || arguments.isEmpty()) {
             return Map.of();
         }
         Map<String, Object> safe = new LinkedHashMap<>();
-        arguments.forEach((key, value) -> {
-            String normalizedKey = key == null ? "" : key.toLowerCase();
-            if (normalizedKey.contains("password") || normalizedKey.contains("token") || normalizedKey.contains("secret")
-                    || normalizedKey.contains("authorization")) {
-                safe.put(key, "<redacted>");
-            } else if (value instanceof String text) {
-                safe.put(key, com.fragment.labbooking.common.util.TruncateUtil.truncate(text, 240));
-            } else {
-                safe.put(key, value);
-            }
-        });
+        arguments.forEach((key, value) -> safe.put(key, sanitizeArgumentValue(key, value)));
         return safe;
+    }
+
+    private Object sanitizeArgumentValue(String key, Object value) {
+        if (isSensitiveArgumentKey(key)) {
+            return "<redacted>";
+        }
+        if (value instanceof Map<?, ?> values) {
+            Map<String, Object> safe = new LinkedHashMap<>();
+            values.forEach((nestedKey, nestedValue) -> {
+                String normalizedKey = nestedKey == null ? "" : String.valueOf(nestedKey);
+                safe.put(normalizedKey, sanitizeArgumentValue(normalizedKey, nestedValue));
+            });
+            return safe;
+        }
+        if (value instanceof Iterable<?> values) {
+            List<Object> safe = new ArrayList<>();
+            values.forEach(item -> safe.add(sanitizeArgumentValue("", item)));
+            return safe;
+        }
+        if (value instanceof String text) {
+            return com.fragment.labbooking.common.util.TruncateUtil.truncate(text, 240);
+        }
+        if (value == null || value instanceof Number || value instanceof Boolean) {
+            return value;
+        }
+        return com.fragment.labbooking.common.util.TruncateUtil.truncate(String.valueOf(value), 240);
+    }
+
+    private boolean isSensitiveArgumentKey(String key) {
+        String normalizedKey = key == null ? "" : key.toLowerCase(Locale.ROOT)
+                .replace("_", "")
+                .replace("-", "");
+        return normalizedKey.contains("password")
+                || normalizedKey.contains("token")
+                || normalizedKey.contains("secret")
+                || normalizedKey.contains("authorization")
+                || normalizedKey.contains("credential")
+                || normalizedKey.contains("privatekey")
+                || normalizedKey.contains("accesskey");
     }
 
     private List<NativeToolCallingClient.ExecutedToolCall> resumeCandidateCalls(AgentState state) {
@@ -215,7 +331,7 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
         );
         return List.of(new NativeToolCallingClient.ExecutedToolCall(
                 "checkpoint-knowledge-search", "knowledge_search",
-                Map.of("query", "checkpoint-resume"), output
+                Map.of("query", "checkpoint-resume"), output, 0
         ));
     }
 
@@ -238,7 +354,9 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                 execution.toolTraceId(), execution.protocol(), detail);
     }
 
-    private String summarizeArguments(Map<String, Object> arguments) { return arguments.toString().substring(0, Math.min(arguments.toString().length(), 512)); }
+    private String summarizeArguments(Map<String, Object> arguments) {
+        return com.fragment.labbooking.common.util.TruncateUtil.truncate(String.valueOf(sanitizeArguments(arguments)), 512);
+    }
     private String safeCallId(String callId) { return callId == null || callId.isBlank() ? UUID.randomUUID().toString() : callId; }
     private long elapsedMs(long startedAt) { return (System.nanoTime() - startedAt) / 1_000_000; }
 

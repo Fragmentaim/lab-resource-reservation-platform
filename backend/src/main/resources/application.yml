@@ -89,6 +89,7 @@ app:
   knowledge:
     ai-service:
       base-url: ${AI_SERVICE_BASE_URL:http://127.0.0.1:8000}
+      service-token: ${AI_SERVICE_TOKEN:change-me-before-production}
       connect-timeout: 5000
       read-timeout: 180000
     storage:
@@ -124,8 +125,19 @@ app:
           max-output-tokens: 8000
           safety-margin-tokens: 4096
           compaction-target-ratio: 0.70
+        # Evaluation-only constrained profile. It exercises rolling memory
+        # without changing the production default or a provider's real limit.
+        context-eval-48k:
+          context-window-tokens: 48000
+          max-output-tokens: 4000
+          safety-margin-tokens: 2048
+          compaction-target-ratio: 0.70
     native-tool-calling:
       enabled: true
+    agent-reservation-confirmation:
+      # A draft is user-bound and short-lived. Confirmation always reuses the
+      # reservation service, which performs the authoritative business checks.
+      ttl-seconds: ${AGENT_RESERVATION_CONFIRMATION_TTL_SECONDS:600}
     agent-checkpoint:
       # Private runtime recovery state is short-lived and excludes raw prompts/tool payloads.
       ttl-seconds: ${AGENT_CHECKPOINT_TTL_SECONDS:900}

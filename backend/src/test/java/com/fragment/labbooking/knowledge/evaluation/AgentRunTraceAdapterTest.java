@@ -43,6 +43,23 @@ class AgentRunTraceAdapterTest {
         assertThat(trace.businessResult()).containsEntry("source_count", 1);
     }
 
+    @Test
+    void shouldInferBusinessOutcomeFromSafeToolStepDetail() {
+        AgentRunVO run = new AgentRunVO();
+        run.setSourceCount(2);
+        AgentStepVO search = step("TOOL_CALL", "knowledge_search", "SUCCESS", 10,
+                Map.of("knowledge_status", "OK"));
+        AgentStepVO preview = step("TOOL_CALL", "reservation_cancellation_preview", "SUCCESS", 10,
+                Map.of("result_type", "CANCELLATION_PREVIEW", "reservationId", 5001L, "writeExecuted", false));
+
+        assertThat(AgentRunTraceAdapter.inferBusinessResult(run, List.of(search, preview)))
+                .containsEntry("knowledge_status", "OK")
+                .containsEntry("result_type", "CANCELLATION_PREVIEW")
+                .containsEntry("reservationId", 5001L)
+                .containsEntry("writeExecuted", false)
+                .containsEntry("source_count", 2);
+    }
+
     private AgentStepVO step(String type, String name, String status, Integer latency, Map<String, Object> detail) {
         AgentStepVO value = new AgentStepVO();
         value.setStepType(type);

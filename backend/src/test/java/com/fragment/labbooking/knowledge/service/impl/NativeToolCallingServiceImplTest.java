@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -163,7 +164,10 @@ class NativeToolCallingServiceImplTest {
     void shouldCaptureSanitizedArgumentsOnlyWhenDedicatedEvaluationModeIsEnabled() {
         ReflectionTestUtils.setField(service, "captureEvaluationArguments", true);
         NativeToolCallingClient.PlannedToolCall searchCall = new NativeToolCallingClient.PlannedToolCall(
-                "call_eval_1", "knowledge_search", Map.of("query", "预约规则", "apiToken", "not-for-storage"));
+                "call_eval_1", "knowledge_search", Map.of(
+                "query", "预约规则",
+                "apiToken", "not-for-storage",
+                "metadata", Map.of("authorization", "Bearer nested-secret", "region", "cn")));
         when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
                 new NativeToolCallingClient.ToolRound(List.of(searchCall), null, "glm-5.1"),
                 new NativeToolCallingClient.ToolRound(List.of(), "已完成", "glm-5.1")
@@ -177,7 +181,35 @@ class NativeToolCallingServiceImplTest {
         ArgumentCaptor<AgentToolExecution> execution = ArgumentCaptor.forClass(AgentToolExecution.class);
         verify(agentRunService).recordToolExecution(eq("trace-eval"), execution.capture());
         assertThat(execution.getValue().safeDetail().get("evaluation_arguments"))
-                .isEqualTo(Map.of("query", "预约规则", "apiToken", "<redacted>"));
+                .isEqualTo(Map.of(
+                        "query", "预约规则",
+                        "apiToken", "<redacted>",
+                        "metadata", Map.of("authorization", "<redacted>", "region", "cn")));
+
+        ArgumentCaptor<String> auditSummary = ArgumentCaptor.forClass(String.class);
+        verify(auditService).recordSuccess(any(), eq("knowledge_search"), any(), any(),
+                eq("ACL_FILTERED_KNOWLEDGE"), anyLong(), auditSummary.capture());
+        assertThat(auditSummary.getValue())
+                .contains("apiToken=<redacted>", "authorization=<redacted>")
+                .doesNotContain("not-for-storage", "nested-secret");
+    }
+
+    @Test
+    void shouldPropagateUnexpectedToolFailureAfterAuditingIt() {
+        NativeToolCallingClient.PlannedToolCall toolCall = new NativeToolCallingClient.PlannedToolCall(
+                "call_context_failure", "reservation_context", Map.of());
+        when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
+                new NativeToolCallingClient.ToolRound(List.of(toolCall), null, "glm-5.1")
+        );
+        when(contextTool.getReservationContext(any(), any()))
+                .thenThrow(new IllegalStateException("database unavailable"));
+
+        assertThatThrownBy(() -> service.tryAnswer("我的预约还有哪些？", user()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("database unavailable");
+
+        verify(auditService).recordFailure(any(), eq("reservation_context"), any(), any(),
+                anyLong(), any(), eq("database unavailable"));
     }
 
     private LoginUser user() {

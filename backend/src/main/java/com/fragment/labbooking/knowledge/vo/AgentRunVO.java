@@ -16,6 +16,12 @@ public class AgentRunVO {
     private String status;
     private Integer totalLatencyMs;
     private Integer sourceCount;
+    private Boolean usageReported;
+    private Long inputTokens;
+    private Long outputTokens;
+    private Long cachedInputTokens;
+    private Long totalTokens;
+    private Integer modelCallCount;
     private Integer stepCount;
     private LocalDateTime createdAt;
     private LocalDateTime finishedAt;

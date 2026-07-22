@@ -1,4 +1,7 @@
-from fastapi import FastAPI
+import secrets
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
@@ -31,6 +34,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_service_token(request: Request, call_next):
+    """Only the Java backend may access internal AI operations."""
+    if request.url.path in {"/", "/api/v1/ai/health", "/docs", "/openapi.json"}:
+        return await call_next(request)
+    supplied = request.headers.get("X-AI-Service-Token", "")
+    if not supplied or not secrets.compare_digest(supplied, settings.ai_service_token):
+        return JSONResponse(status_code=401, content={"detail": "AI service token is required"})
+    return await call_next(request)
 
 app.include_router(documents.router, prefix="/api/v1/ai")
 app.include_router(qa.router, prefix="/api/v1/ai")

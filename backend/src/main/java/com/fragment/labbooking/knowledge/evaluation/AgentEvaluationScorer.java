@@ -14,6 +14,8 @@ public final class AgentEvaluationScorer {
 
     /** A dynamic chunk UID is valid only if the runtime also validates it against this run's ACL-scoped candidates. */
     public static final String ANY_AUTHORIZED_CANDIDATE = "$ANY_AUTHORIZED_CANDIDATE";
+    /** RAG query rewriting is valid when it keeps a non-blank retrieval query; IDs and dates remain exact-match fields. */
+    public static final String ANY_NON_BLANK_TEXT = "$ANY_NON_BLANK_TEXT";
 
     private AgentEvaluationScorer() {}
 
@@ -115,6 +117,9 @@ public final class AgentEvaluationScorer {
                     return false;
                 }
             } else if (!equivalent(expectedValue, actualValue)) {
+                if (ANY_NON_BLANK_TEXT.equals(expectedValue) && actualValue instanceof String text && !text.isBlank()) {
+                    continue;
+                }
                 return false;
             }
         }

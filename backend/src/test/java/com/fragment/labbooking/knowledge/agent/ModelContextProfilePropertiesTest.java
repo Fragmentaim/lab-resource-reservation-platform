@@ -23,7 +23,23 @@ class ModelContextProfilePropertiesTest {
         assertThat(active.getContextWindowTokens()).isEqualTo(256_000);
         assertThat(active.getMaxOutputTokens()).isEqualTo(8_000);
         assertThat(active.getSafetyMarginTokens()).isEqualTo(4_096);
-        assertThat(active.effectiveSummaryMaxTokens()).isEqualTo(8_000);
         assertThat(active.effectiveMaxSingleToolResultTokens()).isEqualTo(8_000);
+    }
+
+    @Test
+    void shouldAllowAConstrainedEvaluationProfileWithoutChangingTheDefault() {
+        ModelContextProfileProperties properties = new ModelContextProfileProperties();
+        ModelContextProfileProperties.Profile profile = new ModelContextProfileProperties.Profile();
+        profile.setContextWindowTokens(48_000);
+        profile.setMaxOutputTokens(4_000);
+        profile.setSafetyMarginTokens(2_048);
+        properties.setActiveProfile("context-eval-48k");
+        properties.setProfiles(Map.of("context-eval-48k", profile));
+
+        ModelContextProfileProperties.Profile active = properties.active();
+
+        assertThat(active.getContextWindowTokens()).isEqualTo(48_000);
+        assertThat(active.getMaxOutputTokens()).isEqualTo(4_000);
+        assertThat(active.getSafetyMarginTokens()).isEqualTo(2_048);
     }
 }

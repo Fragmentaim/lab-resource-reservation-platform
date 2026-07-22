@@ -7,12 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Applies a deterministic size guard before a tool result becomes a message in
- * the next native function-calling round. This is intentionally not an LLM
- * call: small results pass through unchanged and large results are trimmed in
- * a predictable, observable way.
- */
+/** Keeps tool results small enough for the next model round. */
 @Component
 public class ToolResultContextPacker {
 

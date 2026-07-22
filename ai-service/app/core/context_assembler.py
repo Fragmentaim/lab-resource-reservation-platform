@@ -16,10 +16,9 @@ def assemble_context(
 ) -> dict:
     options = _resolve_options(context_options)
 
-    summary_text, summary_tokens, summary_truncated = truncate_by_tokens(
-        session_summary or "",
-        options["summary_max_tokens"],
-    )
+    summary_text = session_summary or ""
+    summary_tokens = count_tokens(summary_text)
+    summary_truncated = False
 
     question_text = original_question
     if rewritten_question and rewritten_question != original_question:
@@ -115,8 +114,6 @@ def _resolve_options(options: Optional[dict]) -> dict:
         "max_output_tokens": int(raw.get("max_output_tokens") or raw.get("answer_reserve_tokens")
                                  or settings.max_output_tokens),
         "safety_margin_tokens": int(raw.get("safety_margin_tokens") or settings.safety_margin_tokens),
-        "summary_max_tokens": int(raw.get("summary_max_tokens") or raw.get("summary_budget_tokens")
-                                  or settings.summary_max_tokens),
     }
 
 

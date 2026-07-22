@@ -43,7 +43,13 @@ def candidate_limit(top_k: int) -> int:
 
 
 def is_configured() -> bool:
-    return bool(settings.enable_rerank and _api_key() and _base_url() and settings.rerank_model)
+    # Rerank endpoints use their own URL and credential.
+    return bool(
+        settings.enable_rerank
+        and settings.rerank_api_key
+        and settings.rerank_base_url
+        and settings.rerank_model
+    )
 
 
 def status() -> str:

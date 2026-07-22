@@ -42,6 +42,24 @@ public class AgentRun {
     @TableField("source_count")
     private Integer sourceCount;
 
+    @TableField("usage_reported")
+    private Boolean usageReported;
+
+    @TableField("input_tokens")
+    private Long inputTokens;
+
+    @TableField("output_tokens")
+    private Long outputTokens;
+
+    @TableField("cached_input_tokens")
+    private Long cachedInputTokens;
+
+    @TableField("total_tokens")
+    private Long totalTokens;
+
+    @TableField("model_call_count")
+    private Integer modelCallCount;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 

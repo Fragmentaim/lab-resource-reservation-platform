@@ -39,6 +39,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -86,6 +87,10 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     @Autowired private SessionEventService sessionEventService;
     @Autowired private ModelContextProfileProperties modelContextProfiles;
 
+    // Recent-turn-only baseline used by context evaluations.
+    @Value("${app.knowledge.model-context.compaction-strategy:SUMMARY}")
+    private String compactionStrategy;
+
     @Autowired
     private ObjectMapper objectMapper;
 
@@ -116,6 +121,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         }
         PreparedSessionContext prepared = prepareSessionContext(session, record.getQuestion());
         SessionContextPlan sessionPlan = prepared.plan();
+        agentRunService.recordProviderUsage(record.getTraceId(), prepared.summaryProviderUsage());
         agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
 
         long routeStartedAt = System.nanoTime();
@@ -131,11 +137,13 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         answer.setModelName(toolRouteModel(routed.get()));
         answer.setQuestionType("TOOL");
         answer.setSources(routed.get().sources());
+        answer.setClientActions(routed.get().clientActions());
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("route", "permission_scoped_tool_resume");
         stats.put("tool_calls", routed.get().toolCalls());
         stats.put("runtime_managed", routed.get().runtimeManaged());
         stats.put("selected_source_count", routed.get().sourceCount());
+        attachProviderUsage(stats, routed.get().providerUsage(), prepared.summaryProviderUsage());
         stats.put("session_context_plan", sessionPlan.safeDetail());
         answer.setContextStats(stats);
         finishToolAnswer(record, answer, record.getSessionId(), actor.getId(), record.getQuestion(), nextTurnNo(prepared.session()));
@@ -156,11 +164,12 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                     "traceId", answer.getTraceId()));
             sendEvent(emitter, event("meta",
                     "recordId", answer.getRecordId(), "sessionId", sessionId, "traceId", answer.getTraceId(),
-                    "contextStats", toolStats, "sources", answer.getSources(), "modelName", answer.getModelName()));
+                    "contextStats", toolStats, "sources", answer.getSources(), "clientActions", answer.getClientActions(),
+                    "modelName", answer.getModelName()));
             sendEvent(emitter, event("delta", "content", answer.getAnswer()));
             sendEvent(emitter, event("done",
                     "recordId", answer.getRecordId(), "sessionId", sessionId, "traceId", answer.getTraceId(),
-                    "contextStats", toolStats, "sources", answer.getSources(), "latencyMs", 0,
+                    "contextStats", toolStats, "sources", answer.getSources(), "clientActions", answer.getClientActions(), "latencyMs", 0,
                     "modelName", answer.getModelName()));
             emitter.complete();
         } catch (Exception e) {
@@ -179,10 +188,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         }
     }
 
-    /**
-     * Shared core logic for both ask() and askStream():
-     * resolve session → prepare context → save record → route to AI → build answer → finish.
-     */
+    // Shared by the normal and streaming endpoints.
     private RoutedAnswer routeAndBuildAnswer(QaAskDTO dto, LoginUser actor) {
         Long userId = actor.getId();
         QaSession session = resolveSession(dto.getSessionId(), userId, dto.getQuestion());
@@ -203,6 +209,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         record.setCreatedAt(LocalDateTime.now());
         save(record);
         agentRunService.start(record);
+        agentRunService.recordProviderUsage(record.getTraceId(), preparedContext.summaryProviderUsage());
         sessionEventService.appendUserInput(record, turnNo);
         agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
 
@@ -218,11 +225,13 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 answer.setModelName(toolRouteModel(routed.get()));
                 answer.setQuestionType("TOOL");
                 answer.setSources(routed.get().sources());
+                answer.setClientActions(routed.get().clientActions());
                 Map<String, Object> toolStats = new LinkedHashMap<>();
                 toolStats.put("route", "permission_scoped_tool");
                 toolStats.put("tool_calls", routed.get().toolCalls());
                 toolStats.put("runtime_managed", routed.get().runtimeManaged());
                 toolStats.put("selected_source_count", routed.get().sourceCount());
+                attachProviderUsage(toolStats, routed.get().providerUsage(), preparedContext.summaryProviderUsage());
                 toolStats.put("session_context_plan", sessionPlan.safeDetail());
                 answer.setContextStats(toolStats);
                 finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
@@ -424,7 +433,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         update.setLastMessageAt(now);
         update.setLastTraceId(traceId);
         update.setUpdatedAt(now);
-        // Summary fields are versioned separately by synchronous compaction.
+        // Summary updates use summaryTurnCount as their version.
         qaSessionMapper.update(update, new LambdaUpdateWrapper<QaSession>()
                 .eq(QaSession::getSessionId, sessionId)
                 .eq(QaSession::getUserId, userId));
@@ -466,19 +475,20 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         }
     }
 
-    /**
-     * A request never enters the Agent with old turns silently discarded. If
-     * the active model window is full, this method waits for one LLM memory
-     * update, atomically persists it, and only then returns the final context.
-     */
     private PreparedSessionContext prepareSessionContext(QaSession initialSession, String question) {
         QaSession session = initialSession;
+        List<Map<String, Object>> summaryUsages = new ArrayList<>();
         for (int attempt = 0; attempt < 3; attempt++) {
             SessionContextPlan plan = planSessionContext(session, question);
             if (!plan.compactionRecommended()) {
-                return new PreparedSessionContext(session, plan);
+                return new PreparedSessionContext(session, plan, aggregateSummaryUsage(summaryUsages));
             }
-            compactSessionSummary(session, plan);
+            if ("SLIDING_WINDOW".equalsIgnoreCase(compactionStrategy)) {
+                // Evaluation baseline: keep recent turns without creating memory.
+                return new PreparedSessionContext(session, plan, aggregateSummaryUsage(summaryUsages));
+            }
+            AiServiceClient.SummaryResult summaryResult = compactSessionSummary(session, plan);
+            summaryUsages.add(summaryResult.providerUsage());
             session = qaSessionMapper.selectById(session.getSessionId());
             if (session == null || Boolean.TRUE.equals(session.getDeleted())
                     || !initialSession.getUserId().equals(session.getUserId())) {
@@ -488,7 +498,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         throw new BusinessException("会话上下文正在更新，请稍后重试");
     }
 
-    private void compactSessionSummary(QaSession session, SessionContextPlan plan) {
+    private AiServiceClient.SummaryResult compactSessionSummary(QaSession session, SessionContextPlan plan) {
         if (plan.deferredTurns().isEmpty()) {
             throw new BusinessException("会话上下文无法安全压缩");
         }
@@ -496,10 +506,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         List<AiServiceClient.ChatMessage> deferredMessages = plan.deferredTurns().stream()
                 .flatMap(turn -> turn.messages().stream())
                 .toList();
-        AiServiceClient.SummaryResult result = aiServiceClient.summarizeSession(
-                session.getSummary(), deferredMessages,
-                modelContextProfiles.active().effectiveSummaryMaxTokens()
-        );
+        AiServiceClient.SummaryResult result = aiServiceClient.summarizeSession(session.getSummary(), deferredMessages);
         QaSession update = new QaSession();
         update.setSummary(result.summary());
         update.setSummaryTurnCount(coveredTurnCount + plan.deferredTurns().size());
@@ -511,9 +518,73 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         if (updated == 0) {
             log.info("Session summary changed concurrently; recalculating context for {}", session.getSessionId());
         }
+        return result;
     }
 
-    private record PreparedSessionContext(QaSession session, SessionContextPlan plan) {
+    private void attachProviderUsage(Map<String, Object> stats, Map<String, Object> agentUsage,
+                                     Map<String, Object> summaryUsage) {
+        stats.put("agent_provider_usage", agentUsage == null ? Map.of("reported", false) : agentUsage);
+        stats.put("summary_provider_usage", summaryUsage);
+        stats.put("provider_usage", mergeProviderUsage(agentUsage, summaryUsage));
+    }
+
+    private Map<String, Object> aggregateSummaryUsage(List<Map<String, Object>> usages) {
+        Map<String, Object> total = new LinkedHashMap<>();
+        long inputTokens = 0;
+        long outputTokens = 0;
+        long totalTokens = 0;
+        long cachedInputTokens = 0;
+        long summaryCallCount = 0;
+        boolean reported = false;
+        for (Map<String, Object> usage : usages == null ? List.<Map<String, Object>>of() : usages) {
+            if (usage == null) continue;
+            reported |= Boolean.TRUE.equals(usage.get("reported"));
+            inputTokens += longValue(usage.get("input_tokens"));
+            outputTokens += longValue(usage.get("output_tokens"));
+            totalTokens += longValue(usage.get("total_tokens"));
+            cachedInputTokens += longValue(usage.get("cached_input_tokens"));
+            summaryCallCount += Math.max(0, longValue(usage.get("model_call_count")));
+        }
+        total.put("reported", reported);
+        total.put("input_tokens", inputTokens);
+        total.put("output_tokens", outputTokens);
+        total.put("total_tokens", totalTokens > 0 ? totalTokens : inputTokens + outputTokens);
+        total.put("cached_input_tokens", cachedInputTokens);
+        total.put("summary_call_count", summaryCallCount);
+        return total;
+    }
+
+    private Map<String, Object> mergeProviderUsage(Map<String, Object> agentUsage, Map<String, Object> summaryUsage) {
+        Map<String, Object> agent = agentUsage == null ? Map.of() : agentUsage;
+        Map<String, Object> summary = summaryUsage == null ? Map.of() : summaryUsage;
+        long inputTokens = longValue(agent.get("input_tokens")) + longValue(summary.get("input_tokens"));
+        long outputTokens = longValue(agent.get("output_tokens")) + longValue(summary.get("output_tokens"));
+        long totalTokens = longValue(agent.get("total_tokens")) + longValue(summary.get("total_tokens"));
+        Map<String, Object> total = new LinkedHashMap<>();
+        total.put("reported", Boolean.TRUE.equals(agent.get("reported")) || Boolean.TRUE.equals(summary.get("reported")));
+        total.put("input_tokens", inputTokens);
+        total.put("output_tokens", outputTokens);
+        total.put("total_tokens", totalTokens > 0 ? totalTokens : inputTokens + outputTokens);
+        total.put("cached_input_tokens", longValue(agent.get("cached_input_tokens"))
+                + longValue(summary.get("cached_input_tokens")));
+        total.put("agent_model_round_count", longValue(agent.get("model_round_count")));
+        total.put("summary_call_count", longValue(summary.get("summary_call_count")));
+        total.put("model_round_count", longValue(agent.get("model_round_count"))
+                + longValue(summary.get("summary_call_count")));
+        return total;
+    }
+
+    private long longValue(Object value) {
+        if (value instanceof Number number) return Math.max(0L, number.longValue());
+        try {
+            return Math.max(0L, Long.parseLong(String.valueOf(value)));
+        } catch (Exception ignored) {
+            return 0L;
+        }
+    }
+
+    private record PreparedSessionContext(QaSession session, SessionContextPlan plan,
+                                          Map<String, Object> summaryProviderUsage) {
     }
 
     private void attachSources(List<QaRecordVO> records) {

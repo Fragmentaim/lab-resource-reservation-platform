@@ -50,7 +50,7 @@ public class KnowledgeOpenChunksAgentTool implements AgentTool {
             return new AgentToolResult(Map.of("status", "NO_AUTHORIZED_CANDIDATES", "chunks", List.of()), 0,
                     Map.of("knowledge_status", "NO_AUTHORIZED_CANDIDATES", "candidate_count", 0, "opened_chunk_count", 0));
         }
-        // Re-evaluate document ACL at read time; Python applies the same list to the vector-store filter.
+        // Recheck ACL before reading chunk content.
         List<Long> documentIds = kbDocumentService.listAccessibleReadyDocumentIds(invocation.actor());
         if (documentIds.isEmpty()) {
             return new AgentToolResult(Map.of("status", "NO_ACCESSIBLE_DOCUMENTS", "chunks", List.of()), 0,

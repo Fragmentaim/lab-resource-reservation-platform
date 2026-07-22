@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from app.models.schemas import HealthResponse
 from app.config import settings
-from app.core import vectorstore, reranker
+from app.core import vectorstore, reranker, model_gateway
 import httpx
 
 router = APIRouter(tags=["health"])
@@ -55,3 +55,9 @@ def _openai_base_url() -> str:
     if base_url.endswith("/v1"):
         return base_url
     return f"{base_url}/v1"
+
+
+@router.get("/models")
+async def model_health():
+    """Internal route health; protected by the service-token middleware."""
+    return {"routes": model_gateway.health_snapshot()}

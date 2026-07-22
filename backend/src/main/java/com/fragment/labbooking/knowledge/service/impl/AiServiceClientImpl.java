@@ -2,6 +2,7 @@ package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import lombok.extern.slf4j.Slf4j;
@@ -289,12 +290,11 @@ public class AiServiceClientImpl implements AiServiceClient {
     }
 
     @Override
-    public SummaryResult summarizeSession(String existingSummary, List<ChatMessage> newTurns, Integer maxSummaryTokens) {
+    public SummaryResult summarizeSession(String existingSummary, List<ChatMessage> newTurns) {
         try {
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("existing_summary", existingSummary);
             request.put("new_turns", newTurns == null ? Collections.emptyList() : newTurns);
-            request.put("max_summary_tokens", maxSummaryTokens);
 
             String response = restClient.post()
                     .uri("/api/v1/ai/qa/sessions/summarize")
@@ -306,7 +306,10 @@ public class AiServiceClientImpl implements AiServiceClient {
             JsonNode node = objectMapper.readTree(response);
             return new SummaryResult(
                     node.path("summary").asText(""),
-                    node.path("summary_tokens").asInt(0)
+                    node.path("summary_tokens").asInt(0),
+                    node.path("provider_usage").isObject()
+                            ? objectMapper.convertValue(node.path("provider_usage"), new TypeReference<Map<String, Object>>() {})
+                            : Map.of()
             );
         } catch (Exception e) {
             log.warn("Failed to summarize session via AI service: {}", e.getMessage());

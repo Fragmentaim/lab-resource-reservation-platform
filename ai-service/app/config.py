@@ -20,6 +20,20 @@ class Settings(BaseSettings):
     tool_calling_model: str = ""
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 1
+    # Provider-neutral API clients do not expose reasoning controls directly.
+    # These values are forwarded through the OpenAI-compatible ``extra_body``
+    # only when explicitly configured. MiniMax-M3 accepts ``adaptive`` for
+    # thinking; some gateways additionally understand effort values such as
+    # ``max``.
+    llm_thinking_mode: str = ""
+    llm_reasoning_effort: str = ""
+    llm_fallback_base_url: str = ""
+    llm_fallback_api_key: str = ""
+    llm_fallback_chat_model: str = ""
+    llm_fallback_tool_calling_model: str = ""
+    llm_circuit_failure_threshold: int = 3
+    llm_circuit_reset_seconds: int = 30
+    ai_service_token: str = "change-me-before-production"
     mcp_backend_base_url: str = "http://127.0.0.1:8082"
     mcp_access_token: str = ""
     mcp_request_timeout_seconds: float = 30.0
@@ -34,6 +48,8 @@ class Settings(BaseSettings):
     hybrid_rrf_k: int = 60
     hybrid_vector_weight: float = 1.0
     hybrid_keyword_weight: float = 1.0
+    bm25_k1: float = 1.5
+    bm25_b: float = 0.75
 
     # Rerank configuration. An API is preferred when configured; the local
     # CrossEncoder is opt-in so a normal service process does not load a GPU model.
@@ -54,7 +70,6 @@ class Settings(BaseSettings):
     context_window_tokens: int = 12000
     max_output_tokens: int = 2000
     safety_margin_tokens: int = 512
-    summary_max_tokens: int = 1000
     enable_query_rewrite: bool = True
 
     # 本地 Embedding 模型配置

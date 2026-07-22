@@ -3,7 +3,10 @@ package com.fragment.labbooking.knowledge.service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public interface AiServiceClient {
 
@@ -24,7 +27,7 @@ public interface AiServiceClient {
 
     List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, List<Long> documentIds);
 
-    SummaryResult summarizeSession(String existingSummary, List<ChatMessage> newTurns, Integer maxSummaryTokens);
+    SummaryResult summarizeSession(String existingSummary, List<ChatMessage> newTurns);
 
     int deleteDocumentVectors(Long documentId);
 
@@ -73,7 +76,12 @@ public interface AiServiceClient {
 
     record ChatMessage(String role, String content) {}
 
-    record SummaryResult(String summary, Integer summaryTokens) {}
+    record SummaryResult(String summary, Integer summaryTokens, Map<String, Object> providerUsage) {
+        public SummaryResult {
+            providerUsage = providerUsage == null ? Map.of()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(providerUsage));
+        }
+    }
 
     record KnowledgeSearchResult(String query, List<KnowledgeCandidate> candidates) {}
 

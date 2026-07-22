@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any
 
 from app.core import context_assembler, llm, rag_pipeline
-from bootstrap_golden_from_mcq import OpenAICompatibleJudge, read_jsonl, write_json, write_jsonl
+try:
+    from .bootstrap_golden_from_mcq import OpenAICompatibleJudge, read_jsonl, write_json, write_jsonl
+except ImportError:  # Supports ``python evals/run_rag_benchmark.py`` as well.
+    from bootstrap_golden_from_mcq import OpenAICompatibleJudge, read_jsonl, write_json, write_jsonl
 
 
 ANSWER_RE = re.compile(r'"answer"\s*:\s*"([ABCD])"|(?:答案|answer)\s*[:：]?\s*([ABCD])', re.IGNORECASE)
@@ -86,9 +89,10 @@ def run_retrieval_mode(cases: list[dict[str, Any]], top_ks: list[int], apply_rer
     max_k = max(top_ks)
     records = []
     for case in cases:
+        retrieval_query = render_multiple_choice(case)
         started = time.perf_counter()
         results = rag_pipeline.retrieve_candidates(
-            question=case["question"],
+            question=retrieval_query,
             document_ids=case["runtime_document_ids"],
             top_k=max_k,
             apply_rerank=apply_rerank,
@@ -99,6 +103,7 @@ def run_retrieval_mode(cases: list[dict[str, Any]], top_ks: list[int], apply_rer
             "question_id": case["question_id"],
             "question": case["question"],
             "options": case["options"],
+            "retrieval_query": retrieval_query,
             "answer": case["answer"],
             "expected_content_hashes": sorted(case["expected_content_hashes"]),
             "runtime_document_ids": case["runtime_document_ids"],

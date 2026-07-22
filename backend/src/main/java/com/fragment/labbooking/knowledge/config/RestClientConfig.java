@@ -21,6 +21,9 @@ public class RestClientConfig {
     @Value("${app.knowledge.ai-service.read-timeout:120000}")
     private int readTimeout;
 
+    @Value("${app.knowledge.ai-service.service-token:change-me-before-production}")
+    private String serviceToken;
+
     @Bean
     public RestClient.Builder restClientBuilder() {
         HttpClient httpClient = HttpClient.newBuilder()
@@ -36,6 +39,7 @@ public class RestClientConfig {
     public RestClient aiServiceRestClient(RestClient.Builder builder) {
         return builder
                 .baseUrl(baseUrl)
+                .defaultHeader("X-AI-Service-Token", serviceToken)
                 .build();
     }
 }

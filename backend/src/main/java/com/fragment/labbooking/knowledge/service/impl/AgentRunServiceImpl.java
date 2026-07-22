@@ -37,11 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * Persists a privacy-safe execution view for one QA record. Raw questions,
- * answers and tool outputs stay in their domain tables instead of being copied
- * into the observability tables.
- */
+/** Stores sanitized run metadata; raw content remains in domain tables. */
 @Service
 @Slf4j
 public class AgentRunServiceImpl implements AgentRunService {
@@ -81,6 +77,12 @@ public class AgentRunServiceImpl implements AgentRunService {
             run.setRoute("PENDING");
             run.setStatus(RUNNING);
             run.setSourceCount(0);
+            run.setUsageReported(false);
+            run.setInputTokens(0L);
+            run.setOutputTokens(0L);
+            run.setCachedInputTokens(0L);
+            run.setTotalTokens(0L);
+            run.setModelCallCount(0);
             run.setCreatedAt(LocalDateTime.now());
             agentRunMapper.insert(run);
             insertStep(run.getId(), 1, "REQUEST", "qa_request", SUCCEEDED, 0, null,
@@ -142,6 +144,8 @@ public class AgentRunServiceImpl implements AgentRunService {
         safely(traceId, () -> {
             AgentRun run = findRun(traceId);
             if (run != null) {
+                addProviderUsage(run, plan.providerUsage(), 1);
+                agentRunMapper.updateById(run);
                 insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "model_tool_plan", SUCCEEDED, 0, null,
                         plan.safeDetail());
             }
@@ -155,6 +159,22 @@ public class AgentRunServiceImpl implements AgentRunService {
             if (run != null) {
                 insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "session_context_plan", SUCCEEDED, 0, null,
                         plan.safeDetail());
+            }
+        });
+    }
+
+    @Override
+    public void recordProviderUsage(String traceId, Map<String, Object> providerUsage) {
+        if (!StringUtils.hasText(traceId) || providerUsage == null || providerUsage.isEmpty()) {
+            return;
+        }
+        safely(traceId, () -> {
+            AgentRun run = findRun(traceId);
+            if (run != null) {
+                addProviderUsage(run, providerUsage, 0);
+                agentRunMapper.updateById(run);
+                insertStep(run.getId(), nextStepNo(run.getId()), "USAGE", "provider_usage", SUCCEEDED, 0, null,
+                        Map.of("provider_usage", providerUsage));
             }
         });
     }
@@ -270,6 +290,7 @@ public class AgentRunServiceImpl implements AgentRunService {
         run.setStatus(SUCCEEDED);
         run.setTotalLatencyMs(safeLatency(answer.getLatencyMs()));
         run.setSourceCount(sourceCount);
+        applyProviderUsageSnapshot(run, mapValue(safeStats(answer.getContextStats()).get("provider_usage")));
         run.setFinishedAt(LocalDateTime.now());
         agentRunMapper.updateById(run);
         clearCheckpoint(record.getTraceId());
@@ -451,6 +472,74 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     private Map<String, Object> safeStats(Map<String, Object> stats) {
         return stats == null ? Collections.emptyMap() : stats;
+    }
+
+    private void addProviderUsage(AgentRun run, Map<String, Object> usage, int defaultCallCount) {
+        Map<String, Object> safeUsage = usage == null ? Map.of() : usage;
+        run.setUsageReported(Boolean.TRUE.equals(run.getUsageReported())
+                || Boolean.TRUE.equals(safeUsage.get("reported")));
+        run.setInputTokens(safeLong(run.getInputTokens()) + safeLongValue(safeUsage.get("input_tokens")));
+        run.setOutputTokens(safeLong(run.getOutputTokens()) + safeLongValue(safeUsage.get("output_tokens")));
+        run.setCachedInputTokens(safeLong(run.getCachedInputTokens())
+                + safeLongValue(safeUsage.get("cached_input_tokens")));
+        long reportedTotal = safeLongValue(safeUsage.get("total_tokens"));
+        if (reportedTotal <= 0) {
+            reportedTotal = safeLongValue(safeUsage.get("input_tokens"))
+                    + safeLongValue(safeUsage.get("output_tokens"));
+        }
+        run.setTotalTokens(safeLong(run.getTotalTokens()) + reportedTotal);
+        int callCount = usageCallCount(safeUsage, defaultCallCount);
+        run.setModelCallCount(safeMetric(run.getModelCallCount()) + callCount);
+    }
+
+    private void applyProviderUsageSnapshot(AgentRun run, Map<String, Object> usage) {
+        if (usage.isEmpty()) {
+            return;
+        }
+        long inputTokens = safeLongValue(usage.get("input_tokens"));
+        long outputTokens = safeLongValue(usage.get("output_tokens"));
+        long totalTokens = safeLongValue(usage.get("total_tokens"));
+        run.setUsageReported(Boolean.TRUE.equals(usage.get("reported")));
+        run.setInputTokens(inputTokens);
+        run.setOutputTokens(outputTokens);
+        run.setCachedInputTokens(safeLongValue(usage.get("cached_input_tokens")));
+        run.setTotalTokens(totalTokens > 0 ? totalTokens : inputTokens + outputTokens);
+        run.setModelCallCount(usageCallCount(usage, safeMetric(run.getModelCallCount())));
+    }
+
+    private int usageCallCount(Map<String, Object> usage, int fallback) {
+        long count = safeLongValue(usage.get("model_call_count"));
+        if (count <= 0) {
+            count = safeLongValue(usage.get("model_round_count"));
+        }
+        if (count <= 0) {
+            count = safeLongValue(usage.get("summary_call_count"));
+        }
+        return count <= 0 ? Math.max(0, fallback) : (int) Math.min(Integer.MAX_VALUE, count);
+    }
+
+    private Map<String, Object> mapValue(Object value) {
+        if (!(value instanceof Map<?, ?> raw)) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        raw.forEach((key, item) -> result.put(String.valueOf(key), item));
+        return result;
+    }
+
+    private long safeLong(Long value) {
+        return value == null ? 0L : Math.max(0L, value);
+    }
+
+    private long safeLongValue(Object value) {
+        if (value instanceof Number number) {
+            return Math.max(0L, number.longValue());
+        }
+        try {
+            return Math.max(0L, Long.parseLong(String.valueOf(value)));
+        } catch (Exception ignored) {
+            return 0L;
+        }
     }
 
     private Map<String, Object> parseDetail(String json) {

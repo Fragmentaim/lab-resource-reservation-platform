@@ -41,11 +41,14 @@ RAG 不是固定前置步骤，而是 Agent 可按需调用的工具。当前工
 | --- | --- | --- |
 | `reservation_context` | 查询当前用户的预约摘要 | 默认只能读取本人数据 |
 | `resource_availability` | 查询资源和未来可预约时段 | 只读、限制返回字段和数量 |
+| `reservation_create_draft` | 基于确定的资源与时段生成预约草案 | 不扣减库存、不落库，必须等待界面显式确认 |
 | `reservation_cancellation_preview` | 预检预约是否可取消 | 不直接执行取消写操作 |
 | `knowledge_search` | 在有权限的文档范围内召回候选片段 | 返回候选定位信息 |
 | `knowledge_open_chunks` | 打开已召回候选的完整正文 | 只能读取本轮候选 chunk |
 
 模型通过 OpenAI-compatible `tools/tool_calls` 协议选择工具；Java 运行时负责工具白名单、参数校验、权限检查、调用执行和结果回传。知识库回答采用“先检索候选、再打开证据”的两阶段读取，减少无关文本进入上下文并保留引用来源。
+
+预约写操作采用两阶段确认：Agent 只能用 `reservation_create_draft` 生成一个绑定当前用户、默认 10 分钟有效的确认令牌；前端展示资源、时段与余量后，用户点击确认并调用 `POST /knowledge/tools/reservation-drafts/{confirmationToken}/confirm`（请求体为 `{"confirmed": true}`）。确认接口会校验令牌归属、保证同一令牌不重复执行，并重新进入 `ReservationService.createReservation`，由原有的权限、余量、限流、Redis 预占和 MQ 异步链路作最终裁决。
 
 ### 3. 会话上下文与可观测性
 

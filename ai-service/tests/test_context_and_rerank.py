@@ -13,7 +13,7 @@ def _result(chunk_id: str, content: str, score: float = 0.8) -> dict:
     }
 
 
-def test_context_assembler_trims_evidence_and_keeps_complete_history_turns():
+def test_context_assembler_keeps_summary_and_complete_history_turns():
     result = assemble_context(
         original_question="我能预约什么时段？",
         rewritten_question="",
@@ -30,17 +30,16 @@ def test_context_assembler_trims_evidence_and_keeps_complete_history_turns():
         ],
         top_k=2,
         context_options={
-            "context_window_tokens": 900,
+            "context_window_tokens": 1_500,
             "max_output_tokens": 100,
             "safety_margin_tokens": 100,
-            "summary_max_tokens": 30,
         },
     )
 
     stats = result["context_stats"]
     assert stats["total_prompt_tokens"] <= stats["prompt_budget_tokens"]
     assert stats["selected_source_count"] >= 1
-    assert stats["summary_truncated"] is True
+    assert stats["summary_truncated"] is False
     for index, message in enumerate(result["history"]):
         if message["role"] == "assistant":
             assert index > 0
@@ -111,8 +110,8 @@ def test_hybrid_retrieval_uses_rrf_to_fuse_duplicate_candidates_and_preserves_ac
     results = rag_pipeline.retrieve_candidates("取消预约规则", document_ids=[12], top_k=3)
 
     assert [item["chunk_id"] for item in results] == ["shared", "vector-only", "keyword-only"]
-    assert results[0]["retrieval_source"] == "keyword,vector"
+    assert results[0]["retrieval_source"] == "bm25,vector"
     assert results[0]["fusion_method"] == "weighted_rrf"
-    assert results[0]["retrieval_ranks"] == {"vector": 2, "keyword": 1}
+    assert results[0]["retrieval_ranks"] == {"vector": 2, "bm25": 1}
     assert len({item["chunk_id"] for item in results}) == 3
     assert calls == [("vector", [12]), ("keyword", [12])]

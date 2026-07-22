@@ -385,8 +385,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     }
 
     private void enqueueDocumentProcess(Long documentId, String traceId) {
-        // 本地开发未启动 RocketMQ 时，仍允许通过异步任务完成端到端验收。
-        // 生产环境开启 outbox 与文档处理消费者后，始终走可靠消息链路。
+        // 本地无 MQ 时使用异步任务；生产环境走 Outbox 消息链路。
         if (!outboxProperties.isEnabled() || !documentProcessProperties.isEnabled()) {
             Runnable processTask = () -> processDocumentMessage(documentId, traceId);
             if (TransactionSynchronizationManager.isSynchronizationActive()) {

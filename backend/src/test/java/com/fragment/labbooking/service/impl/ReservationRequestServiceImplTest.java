@@ -83,6 +83,37 @@ class ReservationRequestServiceImplTest {
     }
 
     @Test
+    void processPendingHotRequestShouldIgnoreDuplicateMqDeliveryAfterAtomicClaim() {
+        ReservationRequestMapper reservationRequestMapper = mock(ReservationRequestMapper.class);
+        ResourceService resourceService = mock(ResourceService.class);
+        ReservationRequestServiceImpl service = buildService(
+                reservationRequestMapper,
+                mock(ReservationMapper.class),
+                resourceService,
+                mock(ResourceSlotService.class),
+                mock(ReservationReminderTaskService.class),
+                mock(HotReservationRedisService.class),
+                mock(ResourceRedisCacheService.class),
+                mock(ReservationNoGenerator.class),
+                mock(MessageOutboxService.class),
+                false
+        );
+
+        ReservationRequest request = pendingRequest();
+        // The first delivery atomically claims PENDING -> PROCESSING. Its
+        // business lookup then fails, while the redelivered message cannot
+        // claim the already progressed request and must not enter business code.
+        when(reservationRequestMapper.update(isNull(), any())).thenReturn(1, 0);
+        when(reservationRequestMapper.selectOne(any())).thenReturn(request);
+        when(resourceService.getById(1L)).thenReturn(null);
+
+        service.processPendingHotRequest("REQ-8");
+        service.processPendingHotRequest("REQ-8");
+
+        verify(resourceService).getById(1L);
+    }
+
+    @Test
     void createPendingHotRequestShouldEnqueueCreateAndTimeoutMessages() {
         ReservationRequestMapper reservationRequestMapper = mock(ReservationRequestMapper.class);
         ReservationNoGenerator reservationNoGenerator = mock(ReservationNoGenerator.class);

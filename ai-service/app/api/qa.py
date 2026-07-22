@@ -71,6 +71,5 @@ async def summarize_session(request: SessionSummaryRequest):
         session_summarizer.summarize_session,
         existing_summary=request.existing_summary,
         new_turns=turns,
-        max_summary_tokens=request.max_summary_tokens,
     )
     return SessionSummaryResponse(**result)

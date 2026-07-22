@@ -14,6 +14,7 @@ public class QaAnswerVO {
     private String rewrittenQuestion;
     private Boolean rewriteApplied;
     private Map<String, Object> contextStats;
+    private List<Map<String, Object>> clientActions;
     private String answer;
     private String questionType;
     private Integer latencyMs;

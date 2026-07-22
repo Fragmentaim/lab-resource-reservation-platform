@@ -5,12 +5,20 @@ import com.fragment.labbooking.common.auth.UserContext;
 import com.fragment.labbooking.common.result.Result;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
 import com.fragment.labbooking.knowledge.service.ReservationCancellationPreviewToolService;
+import com.fragment.labbooking.knowledge.service.ReservationDraftToolService;
 import com.fragment.labbooking.knowledge.service.ResourceAvailabilityToolService;
+import com.fragment.labbooking.knowledge.dto.ReservationDraftConfirmDTO;
+import com.fragment.labbooking.knowledge.dto.ReservationDraftCreateDTO;
 import com.fragment.labbooking.knowledge.vo.ReservationCancellationPreviewVO;
+import com.fragment.labbooking.knowledge.vo.ReservationDraftVO;
 import com.fragment.labbooking.knowledge.vo.ResourceAvailabilityToolVO;
+import com.fragment.labbooking.vo.ReservationSubmitVO;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -26,6 +34,9 @@ public class ReservationAssistantToolController {
 
     @Autowired
     private ReservationCancellationPreviewToolService cancellationPreviewToolService;
+
+    @Autowired
+    private ReservationDraftToolService reservationDraftToolService;
 
     @Autowired
     private AiToolCallAuditService aiToolCallAuditService;
@@ -46,13 +57,35 @@ public class ReservationAssistantToolController {
                 () -> cancellationPreviewToolService.preview(actor, reservationId)));
     }
 
+    @PostMapping("/reservation-drafts")
+    public Result<ReservationDraftVO> createReservationDraft(@Valid @RequestBody ReservationDraftCreateDTO dto) {
+        LoginUser actor = UserContext.requireUser();
+        return Result.success(invoke("reservation_create_draft", actor,
+                "resourceId=" + dto.getResourceId() + ",slotId=" + dto.getSlotId(), "SELF_WRITE_DRAFT",
+                () -> reservationDraftToolService.createDraft(actor, dto.getResourceId(), dto.getSlotId())));
+    }
+
+    @PostMapping("/reservation-drafts/{confirmationToken}/confirm")
+    public Result<ReservationSubmitVO> confirmReservationDraft(@PathVariable String confirmationToken,
+                                                                @Valid @RequestBody ReservationDraftConfirmDTO dto) {
+        LoginUser actor = UserContext.requireUser();
+        return Result.success(invoke("reservation_confirm", actor,
+                "confirmationToken=" + safeToken(confirmationToken) + ",confirmed=" + dto.getConfirmed(), "SELF_WRITE",
+                () -> reservationDraftToolService.confirmDraft(actor, confirmationToken)));
+    }
+
     private <T> T invoke(String toolName, LoginUser actor, String parameterSummary, ToolInvocation<T> invocation) {
+        return invoke(toolName, actor, parameterSummary, "SELF_READ", invocation);
+    }
+
+    private <T> T invoke(String toolName, LoginUser actor, String parameterSummary, String accessScope,
+                         ToolInvocation<T> invocation) {
         String traceId = UUID.randomUUID().toString();
         long startedAt = System.nanoTime();
         try {
             T result = invocation.call();
             setTraceId(result, traceId);
-            aiToolCallAuditService.recordSuccess(traceId, toolName, actor, actor.getId(), "SELF_READ",
+            aiToolCallAuditService.recordSuccess(traceId, toolName, actor, actor.getId(), accessScope,
                     elapsedMs(startedAt), parameterSummary);
             return result;
         } catch (RuntimeException exception) {
@@ -72,6 +105,14 @@ public class ReservationAssistantToolController {
 
     private String safe(String value) {
         return value == null ? "" : value.replaceAll("[\\r\\n]", " ").trim();
+    }
+
+    private String safeToken(String token) {
+        if (token == null) {
+            return "";
+        }
+        String normalized = token.replaceAll("[^0-9a-fA-F]", "");
+        return normalized.substring(0, Math.min(8, normalized.length()));
     }
 
     private long elapsedMs(long startedAt) {

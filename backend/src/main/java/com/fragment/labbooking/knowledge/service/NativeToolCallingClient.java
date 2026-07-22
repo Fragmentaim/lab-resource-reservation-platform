@@ -35,5 +35,9 @@ public interface NativeToolCallingClient {
     record PlannedToolCall(@JsonProperty("call_id") String callId, String name, Map<String, Object> arguments) {}
 
     record ExecutedToolCall(@JsonProperty("call_id") String callId, String name,
-                            Map<String, Object> arguments, Map<String, Object> output) {}
+                            Map<String, Object> arguments, Map<String, Object> output, int round) {
+        public ExecutedToolCall(String callId, String name, Map<String, Object> arguments, Map<String, Object> output) {
+            this(callId, name, arguments, output, 0);
+        }
+    }
 }

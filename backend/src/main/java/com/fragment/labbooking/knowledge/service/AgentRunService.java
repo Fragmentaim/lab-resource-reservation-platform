@@ -13,6 +13,7 @@ import com.fragment.labbooking.knowledge.vo.ContextTraceVO;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public interface AgentRunService {
@@ -28,6 +29,8 @@ public interface AgentRunService {
     void recordContextPlan(String traceId, ContextPlan plan);
 
     void recordSessionContextPlan(String traceId, SessionContextPlan plan);
+
+    void recordProviderUsage(String traceId, Map<String, Object> providerUsage);
 
     void recordToolExecution(String traceId, AgentToolExecution execution);
 

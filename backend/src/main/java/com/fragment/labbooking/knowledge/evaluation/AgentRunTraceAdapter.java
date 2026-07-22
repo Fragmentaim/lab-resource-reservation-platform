@@ -13,6 +13,16 @@ public final class AgentRunTraceAdapter {
 
     private AgentRunTraceAdapter() {}
 
+    /**
+     * Builds a trace using only persisted, privacy-safe Step detail.  Evaluation
+     * harnesses may still pass a stricter expected-result projection through the
+     * overload below, but must not re-query mutable business tables after a run.
+     */
+    public static AgentEvaluationTrace toTaskTrace(String caseId, AgentRunVO run, List<AgentStepVO> steps,
+                                                   double modelCost) {
+        return toTaskTrace(caseId, run, steps, inferBusinessResult(run, steps), modelCost);
+    }
+
     public static AgentEvaluationTrace toTaskTrace(String caseId, AgentRunVO run, List<AgentStepVO> steps,
                                                    Map<String, Object> finalBusinessResult, double modelCost) {
         List<AgentStepVO> safeSteps = steps == null ? List.of() : steps;
@@ -54,6 +64,34 @@ public final class AgentRunTraceAdapter {
                 run == null ? 0 : safeLatency(run.getStepCount()),
                 new AgentEvaluationTrace.Timing(total, firstDecision, retrieval, businessTools, finalGeneration, databaseAndNetwork),
                 new AgentEvaluationTrace.Usage(inputTokens, outputTokens, cachedTokens, Math.max(0D, modelCost)));
+    }
+
+    /** Reconstructs stable tool outcome fields that are deliberately persisted in AgentStep.detail. */
+    public static Map<String, Object> inferBusinessResult(AgentRunVO run, List<AgentStepVO> steps) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        List<AgentStepVO> safeSteps = steps == null ? List.of() : steps;
+        for (AgentStepVO step : safeSteps) {
+            if (!"TOOL_CALL".equals(step.getStepType()) || !"SUCCESS".equals(step.getStatus())) {
+                continue;
+            }
+            Map<String, Object> detail = step.getDetail() == null ? Map.of() : step.getDetail();
+            copyIfPresent(detail, result, "result_type");
+            copyIfPresent(detail, result, "actor_user_id");
+            copyIfPresent(detail, result, "reservationId");
+            copyIfPresent(detail, result, "writeExecuted");
+            copyIfPresent(detail, result, "keyword");
+            copyIfPresent(detail, result, "knowledge_status");
+        }
+        if (run != null) {
+            result.put("source_count", safeLatency(run.getSourceCount()));
+        }
+        return Map.copyOf(result);
+    }
+
+    private static void copyIfPresent(Map<String, Object> source, Map<String, Object> target, String key) {
+        if (source.containsKey(key)) {
+            target.put(key, source.get(key));
+        }
     }
 
     @SuppressWarnings("unchecked")

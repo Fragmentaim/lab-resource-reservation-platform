@@ -152,6 +152,56 @@ class AgentRunServiceImplTest {
     }
 
     @Test
+    void shouldAccumulateUsageDuringRunAndCalibrateFinalTotals() {
+        when(runMapper.selectOne(any())).thenReturn(persistedRun);
+        when(stepMapper.selectCount(any())).thenReturn(1L);
+
+        service.recordProviderUsage("qa-trace-1", Map.of(
+                "reported", true,
+                "input_tokens", 10,
+                "output_tokens", 2,
+                "cached_input_tokens", 1,
+                "total_tokens", 12,
+                "summary_call_count", 1));
+        service.recordContextPlan("qa-trace-1", new ContextPlan(
+                1, "glm-5.1", List.of("knowledge_search"), Map.of(
+                "reported", true,
+                "input_tokens", 20,
+                "output_tokens", 3,
+                "cached_input_tokens", 5,
+                "total_tokens", 23), 15));
+
+        assertThat(persistedRun.getInputTokens()).isEqualTo(30L);
+        assertThat(persistedRun.getOutputTokens()).isEqualTo(5L);
+        assertThat(persistedRun.getCachedInputTokens()).isEqualTo(6L);
+        assertThat(persistedRun.getTotalTokens()).isEqualTo(35L);
+        assertThat(persistedRun.getModelCallCount()).isEqualTo(2);
+
+        QaAnswerVO answer = new QaAnswerVO();
+        answer.setModelName("glm-5.1");
+        answer.setLatencyMs(80);
+        answer.setContextStats(Map.of(
+                "runtime_managed", true,
+                "selected_source_count", 0,
+                "provider_usage", Map.of(
+                        "reported", true,
+                        "input_tokens", 35,
+                        "output_tokens", 7,
+                        "cached_input_tokens", 6,
+                        "total_tokens", 42,
+                        "model_round_count", 3)));
+
+        service.finishTool(record(), answer);
+
+        assertThat(persistedRun.getUsageReported()).isTrue();
+        assertThat(persistedRun.getInputTokens()).isEqualTo(35L);
+        assertThat(persistedRun.getOutputTokens()).isEqualTo(7L);
+        assertThat(persistedRun.getCachedInputTokens()).isEqualTo(6L);
+        assertThat(persistedRun.getTotalTokens()).isEqualTo(42L);
+        assertThat(persistedRun.getModelCallCount()).isEqualTo(3);
+    }
+
+    @Test
     void shouldPersistAndRestoreExpiringCheckpointOnlyForTheSameActor() throws Exception {
         when(runMapper.selectOne(any())).thenReturn(persistedRun);
         when(stepMapper.selectCount(any())).thenReturn(1L);

@@ -2,16 +2,18 @@
 
 本协议评测的是 Java Agent 的真实执行结果，而非仅评估模型是否生成了一个工具名。所有结果必须从 `AgentRun`、`AgentStep`、工具输出和向量检索返回的文档 ID 聚合产生。
 
-## 固定套件
+## 正式评测数据集
 
 | 套件 | 数量 | 核心检查 |
 | --- | ---: | --- |
-| Agent 任务 | 120 | 工具选择、参数、业务结果、多步完成、误调用、调用步数 |
 | 多轮会话 | 30 组 × 8 轮 | 约束保留、指代解析、摘要压缩前后任务准确率 |
 | ACL 检索 | 50 | 原始返回 document ID、合法召回、越权拦截、错误拒绝 |
 | 故障注入 | 24 | 超时/429/500/参数错误/工具超时/重复调用/MQ 重投/重启恢复 |
+| RoboMaster RAG Golden Set | 19 | Recall@K、Hit Rate、MRR、引用命中和有据回答 |
 
-`AgentEvaluationFixtures`、`ConversationEvaluationFixtures`、`AclEvaluationFixtures` 和 `FaultEvaluationFixtures` 是版本化、确定性的测试输入。修改任何输入都必须升级套件版本，不能删掉失败样例后直接比较指标。
+RAG Golden Set 必须绑定真实文档名、页码、content hash 和标注答案。候选题先经过证据审计，只有证据足以支持答案的题目才能进入正式 Recall 报告；不能用通用的预约问题或人工假设的文档 ID 代替真实语料。
+
+多轮会话、ACL 和故障注入仍使用版本化的确定性 fixture。修改这些输入时必须升级套件版本，不能删掉失败样例后直接比较指标。
 
 ## 如何执行正式评测
 
@@ -25,32 +27,8 @@
 
 ## 当前可验证状态
 
-本仓库已具备评测数据模型、固定套件、评分器、从 Run/Step 聚合 Trace 的适配器，以及针对这些规则的单元测试。它们保证口径与数据规模正确，但**不代表已经产生真实模型成功率**。
+本仓库已具备评测数据模型、从 Run/Step 聚合 Trace 的适配器，以及针对会话、ACL、故障和 RAG 指标的测试工具。它们保证口径与数据规模正确，但**不代表已经产生真实模型成功率**。
 
 正式报告只能写入实际运行生成的 trace；在未运行隔离环境前，不得把任何示例数据或单测通过数写进简历。
 
-## 规划器契约冒烟（不等同正式评测）
-
-`AgentEvaluationFixtureExporter` 会从 Java 的固定套件导出 JSON；
-`ai-service/evals/run_agent_planner_benchmark.py` 再把这些输入交给运行中的
-FastAPI `/tool-calling/round`。模型调用是真实的，工具输出是确定性模拟值，目的仅是快速定位
-Function Calling 的工具选择、参数格式和多轮工具衔接问题。
-
-```powershell
-cd backend
-& 'D:\tools\apache-maven-3.9.11\bin\mvn.cmd' -q exec:java `
-  '-Dexec.mainClass=com.fragment.labbooking.knowledge.evaluation.AgentEvaluationFixtureExporter' `
-  '-Dexec.args=D:\agent-eval-runtime\agent-suite-v1.json'
-
-cd ..
-& '.\ai-service\.venv\Scripts\python.exe' .\ai-service\evals\run_agent_planner_benchmark.py `
-  --suite D:\agent-eval-runtime\agent-suite-v1.json `
-  --output D:\agent-eval-runtime\planner-contract-v1.json `
-  --endpoint http://127.0.0.1:8005/api/v1/ai/tool-calling/round `
-  --token $env:AI_SERVICE_TOKEN --model glm-5.1 --concurrency 10
-```
-
-不要把 API Key 写入命令、报告或仓库。先由操作者在当前进程环境中设置 `LLM_API_KEY`、
-`LLM_BASE_URL`、`AI_SERVICE_TOKEN` 后启动隔离端口的 FastAPI。输出中的
-`benchmark_type=real_model_planner_contract` 明确表示它**不是**真实预约成功率、ACL 数据库
-泄漏率或端到端任务成功率；这三项仍必须通过上面的正式隔离环境和 `AgentRun/Step` trace 生成。
+不要把 API Key 写入命令、报告或仓库。所有模型、检索和业务评测都必须记录实际运行配置，并使用真实的 AgentRun/AgentStep 或 RAG Golden Set 结果。
