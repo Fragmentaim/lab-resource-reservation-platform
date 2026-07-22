@@ -22,5 +22,8 @@ public class MessageOutboxProperties {
     public static class Outbox {
         private long relayDelayMillis = 1000L;
         private int batchSize = 20;
+        private int maxRetryCount = 10;
+        private long initialRetryDelayMillis = 1000L;
+        private long maxRetryDelayMillis = 300000L;
     }
 }

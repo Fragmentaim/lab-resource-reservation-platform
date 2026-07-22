@@ -21,6 +21,7 @@ public class MessageOutboxService {
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_SENDING = "SENDING";
     public static final String STATUS_SENT = "SENT";
+    public static final String STATUS_FAILED = "FAILED";
 
     private final MessageOutboxMapper outboxMapper;
     private final ObjectMapper objectMapper;
@@ -115,14 +116,36 @@ public class MessageOutboxService {
             return;
         }
         LocalDateTime now = LocalDateTime.now();
-        outboxMapper.update(null, new LambdaUpdateWrapper<MessageOutbox>()
+        int retryCount = outbox.getRetryCount() == null ? 1 : outbox.getRetryCount() + 1;
+        int maxRetryCount = Math.max(1, properties.getOutbox().getMaxRetryCount());
+        LambdaUpdateWrapper<MessageOutbox> update = new LambdaUpdateWrapper<MessageOutbox>()
                 .eq(MessageOutbox::getId, outbox.getId())
                 .eq(MessageOutbox::getStatus, STATUS_SENDING)
-                .set(MessageOutbox::getStatus, STATUS_PENDING)
-                .set(MessageOutbox::getRetryCount, outbox.getRetryCount() == null ? 1 : outbox.getRetryCount() + 1)
+                .set(MessageOutbox::getRetryCount, retryCount)
                 .set(MessageOutbox::getLockedUntil, null)
                 .set(MessageOutbox::getLastErrorMessage, TruncateUtil.truncate(errorMessage, 512))
-                .set(MessageOutbox::getUpdatedAt, now));
+                .set(MessageOutbox::getUpdatedAt, now);
+
+        if (retryCount >= maxRetryCount) {
+            update.set(MessageOutbox::getStatus, STATUS_FAILED);
+            log.error("Message outbox retry exhausted. eventId={}, retryCount={}, lastError={}",
+                    outbox.getEventId(), retryCount, TruncateUtil.truncate(errorMessage, 512));
+        } else {
+            update.set(MessageOutbox::getStatus, STATUS_PENDING)
+                    .set(MessageOutbox::getAvailableAt,
+                            now.plusNanos(calculateRetryDelayMillis(retryCount) * 1_000_000L));
+        }
+        outboxMapper.update(null, update);
+    }
+
+    long calculateRetryDelayMillis(int retryCount) {
+        long initialDelayMillis = Math.max(1L, properties.getOutbox().getInitialRetryDelayMillis());
+        long maxDelayMillis = Math.max(initialDelayMillis, properties.getOutbox().getMaxRetryDelayMillis());
+        int exponent = Math.max(0, retryCount - 1);
+        if (exponent >= 63 || initialDelayMillis > (maxDelayMillis >> exponent)) {
+            return maxDelayMillis;
+        }
+        return Math.min(maxDelayMillis, initialDelayMillis << exponent);
     }
 
     public MessageOutboxEnvelope toEnvelope(MessageOutbox outbox) {

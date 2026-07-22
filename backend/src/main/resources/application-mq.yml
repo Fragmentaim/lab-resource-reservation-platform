@@ -19,6 +19,9 @@ app:
     outbox:
       relay-delay-millis: 1000
       batch-size: 20
+      max-retry-count: 10
+      initial-retry-delay-millis: 1000
+      max-retry-delay-millis: 300000
   knowledge:
     storage:
       type: ${KNOWLEDGE_STORAGE_TYPE:minio}

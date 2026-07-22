@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS message_outbox (
     tag                VARCHAR(64)  NULL,
     message_key        VARCHAR(128) NULL,
     payload            TEXT         NOT NULL,
-    status             VARCHAR(16)  NOT NULL DEFAULT 'PENDING',
+    status             VARCHAR(16)  NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/SENDING/SENT/FAILED',
     available_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     retry_count        INT          NOT NULL DEFAULT 0,
     locked_until       DATETIME     NULL,
