@@ -33,6 +33,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.time.LocalDateTime;
 
@@ -42,6 +45,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -71,6 +75,8 @@ class ReservationServiceImplTest {
     private ReservationRequestService reservationRequestService;
     @Mock
     private ReservationMapper reservationMapper;
+    @Mock
+    private PlatformTransactionManager transactionManager;
 
     private ReservationServiceImpl reservationService;
 
@@ -79,6 +85,8 @@ class ReservationServiceImplTest {
         initTableInfo(Reservation.class);
         ReservationPersistenceHelper reservationPersistenceHelper =
                 new ReservationPersistenceHelper(reservationNoGenerator, reservationMapper, reservationAutoCancelService);
+        lenient().when(transactionManager.getTransaction(any(TransactionDefinition.class)))
+                .thenReturn(new SimpleTransactionStatus());
         reservationService = new ReservationServiceImpl(
                 resourceService,
                 resourceSlotService,
@@ -90,6 +98,7 @@ class ReservationServiceImplTest {
                 reservationReminderTaskService,
                 reservationAutoCancelService,
                 reservationRequestService,
+                transactionManager,
                 true,
                 30L
         );
@@ -176,7 +185,7 @@ class ReservationServiceImplTest {
                 .hasMessage("热门时段余量不足");
 
         verify(reservationRateLimiter).checkCreateReservationLimit(3L, ResourceSlotTypeConstants.HOT);
-        verifyNoInteractions(resourceService, resourceSlotService, reservationMapper);
+        verifyNoInteractions(transactionManager, resourceService, resourceSlotService, reservationMapper);
     }
 
     @Test
@@ -200,6 +209,7 @@ class ReservationServiceImplTest {
 
         assertThat(submitVO.getAsync()).isTrue();
         verify(reservationRateLimiter).checkCreateReservationLimit(3L, ResourceSlotTypeConstants.HOT);
+        verify(hotReservationRedisService).registerPreheatedReservationRollback(12L, 3L);
         verify(hotReservationRedisService, never()).reserveAndRegisterRollback(slot, 3L);
         verify(reservationRequestService).createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT);
     }

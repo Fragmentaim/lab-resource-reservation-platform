@@ -98,7 +98,6 @@ public class HotReservationRedisService {
             throw new BusinessException("热门时段预约失败，请重试");
         }
         if (result == LUA_RESERVE_SUCCESS) {
-            registerHotRollbackCompensation(slotId, userId);
             return true;
         }
         if (result == LUA_FAST_PATH_NOT_LOADED) {
@@ -165,6 +164,17 @@ public class HotReservationRedisService {
         }
 
         registerHotRollbackCompensation(slot.getId(), userId);
+    }
+
+    /**
+     * Registers compensation after the caller has entered the persistence transaction.
+     * The Redis fast path itself intentionally runs before a JDBC transaction is opened.
+     */
+    public void registerPreheatedReservationRollback(Long slotId, Long userId) {
+        if (!enabled || slotId == null || userId == null) {
+            return;
+        }
+        registerHotRollbackCompensation(slotId, userId);
     }
 
     private void registerHotRollbackCompensation(Long slotId, Long userId) {

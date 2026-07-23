@@ -37,6 +37,8 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -65,6 +67,7 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
     private final ReservationReminderTaskService reservationReminderTaskService;
     private final ReservationAutoCancelService reservationAutoCancelService;
     private final ReservationRequestService reservationRequestService;
+    private final TransactionTemplate reservationTransactionTemplate;
     private final boolean asyncReservationEnabled;
     private final long checkInBeforeStartMinutes;
 
@@ -79,6 +82,7 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
             ReservationReminderTaskService reservationReminderTaskService,
             ReservationAutoCancelService reservationAutoCancelService,
             ReservationRequestService reservationRequestService,
+            PlatformTransactionManager transactionManager,
             @Value("${app.reservation.async.enabled:true}") boolean asyncReservationEnabled,
             @Value("${app.reservation.auto-cancel.check-in-before-start-minutes:30}") long checkInBeforeStartMinutes) {
         this.resourceService = resourceService;
@@ -91,6 +95,7 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
         this.reservationReminderTaskService = reservationReminderTaskService;
         this.reservationAutoCancelService = reservationAutoCancelService;
         this.reservationRequestService = reservationRequestService;
+        this.reservationTransactionTemplate = new TransactionTemplate(transactionManager);
         this.asyncReservationEnabled = asyncReservationEnabled;
         this.checkInBeforeStartMinutes = checkInBeforeStartMinutes;
     }
@@ -105,7 +110,6 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public ReservationSubmitVO createReservation(Long userId, ReservationCreateDTO dto) {
         boolean preheatedHotSlot = hotReservationRedisService.isPreheatedHotSlot(dto.getSlotId());
         if (preheatedHotSlot) {
@@ -114,6 +118,19 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
 
         boolean reservedByRedisFastPath = hotReservationRedisService.reserveIfPreheated(
                 dto.getResourceId(), dto.getSlotId(), userId);
+
+        return Objects.requireNonNull(reservationTransactionTemplate.execute(status ->
+                createReservationInTransaction(userId, dto, preheatedHotSlot, reservedByRedisFastPath)
+        ));
+    }
+
+    private ReservationSubmitVO createReservationInTransaction(Long userId,
+                                                                 ReservationCreateDTO dto,
+                                                                 boolean preheatedHotSlot,
+                                                                 boolean reservedByRedisFastPath) {
+        if (reservedByRedisFastPath) {
+            hotReservationRedisService.registerPreheatedReservationRollback(dto.getSlotId(), userId);
+        }
 
         Resource resource = resourceService.getById(dto.getResourceId());
         if (resource == null) {
