@@ -140,6 +140,35 @@ class NativeToolCallingServiceImplTest {
     }
 
     @Test
+    void shouldOnlyExposeEvidenceOpenToolAfterSearchReturnsCandidates() {
+        NativeToolCallingClient.PlannedToolCall searchCall = new NativeToolCallingClient.PlannedToolCall(
+                "call_search", "knowledge_search", Map.of("query", "取消预约规则"));
+        NativeToolCallingClient.PlannedToolCall openCall = new NativeToolCallingClient.PlannedToolCall(
+                "call_open", "knowledge_open_chunks", Map.of("chunkUids", List.of("chunk-12-3")));
+        when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
+                new NativeToolCallingClient.ToolRound(List.of(searchCall), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(openCall), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(), "已读取证据。", "glm-5.1")
+        );
+        when(kbDocumentService.listAccessibleReadyDocumentIds(any())).thenReturn(List.of(12L));
+        AiServiceClient.KnowledgeCandidate candidate = new AiServiceClient.KnowledgeCandidate(
+                "chunk-12-3", 12L, "v1", 3, 2, "取消规则", List.of("预约管理制度"),
+                "hash", 120, 0.96D, 0.90D, 0.95D, "local", "hybrid", "提前取消的要求");
+        when(aiServiceClient.retrieveKnowledge(any(), eq(List.of(12L))))
+                .thenReturn(new AiServiceClient.KnowledgeSearchResult("取消预约规则", List.of(candidate)));
+        when(aiServiceClient.openKnowledgeChunks(List.of("chunk-12-3"), List.of(12L))).thenReturn(List.of());
+
+        service.tryAnswer("取消预约有什么规则？", user()).orElseThrow();
+
+        ArgumentCaptor<List<Map<String, Object>>> tools = ArgumentCaptor.forClass(List.class);
+        verify(nativeClient, atLeastOnce()).nextRound(any(), tools.capture(), any(), any());
+        assertThat(tools.getAllValues().get(1).stream()
+                .map(definition -> String.valueOf(((Map<?, ?>) definition.get("function")).get("name")))
+                .toList())
+                .containsExactly("knowledge_open_chunks");
+    }
+
+    @Test
     void shouldReuseSameActorCheckpointBeforePlanningAResumedToolRound() {
         AgentState checkpoint = new AgentState("trace-1", "session-1", new PolicyContext(7L, "USER", false));
         checkpoint.registerKnowledgeCandidates(List.of(Map.entry("chunk-12-3", 12L)));

@@ -76,7 +76,7 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                 observeState(runtimeManaged, traceId, state);
                 long planningStartedAt = System.nanoTime();
                 NativeToolCallingClient.ToolRound plan = nativeToolCallingClient.nextRound(
-                        question, agentToolRegistry.definitionsFor(policy), executed,
+                        question, definitionsForCurrentState(policy, state), executed,
                         conversationContext == null ? AgentConversationContext.empty() : conversationContext);
                 providerUsages.add(plan.providerUsage());
                 observePlan(runtimeManaged, traceId, ContextPlan.from(round + 1, plan,
@@ -188,6 +188,32 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
 
     private boolean isToolEligible(String question) {
         return question != null && !question.isBlank();
+    }
+
+    /**
+     * Candidate locators are not evidence. Once a search has produced them,
+     * keep the next model turn focused on selecting and opening the candidate
+     * chunks instead of allowing it to spend the remaining round budget on a
+     * duplicate search.
+     */
+    private List<Map<String, Object>> definitionsForCurrentState(PolicyContext policy, AgentState state) {
+        List<Map<String, Object>> definitions = agentToolRegistry.definitionsFor(policy);
+        if (!state.hasPendingKnowledgeEvidence()) {
+            return definitions;
+        }
+        return definitions.stream()
+                .filter(this::isKnowledgeOpenDefinition)
+                .toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean isKnowledgeOpenDefinition(Map<String, Object> definition) {
+        Object function = definition.get("function");
+        if (!(function instanceof Map<?, ?> rawFunction)) {
+            return false;
+        }
+        Object name = ((Map<String, Object>) rawFunction).get("name");
+        return "knowledge_open_chunks".equals(name);
     }
 
     private Map<String, Object> trace(String toolName, String traceId, long latencyMs, String result,

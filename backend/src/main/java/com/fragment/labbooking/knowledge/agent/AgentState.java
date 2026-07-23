@@ -74,6 +74,15 @@ public final class AgentState {
         }
     }
 
+    /**
+     * A successful knowledge search yields only opaque candidate locators.
+     * Until at least one locator is opened, the next planning turn must stay
+     * on the evidence-reading path rather than starting another broad search.
+     */
+    public boolean hasPendingKnowledgeEvidence() {
+        return !searchableChunkDocumentIds.isEmpty() && openedChunkUids.isEmpty();
+    }
+
     public void answering() {
         this.phase = Phase.ANSWERING;
     }

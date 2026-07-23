@@ -10,7 +10,6 @@ from typing import List, Optional
 import re
 import threading
 import uuid
-import tempfile
 from rank_bm25 import BM25Okapi
 from app.config import settings
 
@@ -33,16 +32,16 @@ class _Bm25Index:
 def get_client() -> QdrantClient:
     global _client
     if _client is None:
-        try:
+        if settings.qdrant_local_path:
+            local_path = Path(settings.qdrant_local_path)
+            local_path.mkdir(parents=True, exist_ok=True)
+            _client = QdrantClient(path=str(local_path))
+        else:
+            if not settings.qdrant_url:
+                raise RuntimeError("QDRANT_URL is required when QDRANT_LOCAL_PATH is not configured")
             remote_client = QdrantClient(url=settings.qdrant_url)
             remote_client.get_collections()
             _client = remote_client
-        except Exception:
-            local_path = Path(settings.qdrant_local_path) if settings.qdrant_local_path else (
-                Path(tempfile.gettempdir()) / "qdrant_lab_knowledge"
-            )
-            local_path.mkdir(exist_ok=True)
-            _client = QdrantClient(path=str(local_path))
     return _client
 
 
@@ -143,7 +142,7 @@ def search(
             query_vector=query_vector,
             query_filter=query_filter,
             limit=top_k or settings.top_k,
-            score_threshold=score_threshold or settings.score_threshold,
+            score_threshold=settings.score_threshold if score_threshold is None else score_threshold,
             with_payload=True,
         )
     else:
@@ -152,7 +151,7 @@ def search(
             query=query_vector,
             query_filter=query_filter,
             limit=top_k or settings.top_k,
-            score_threshold=score_threshold or settings.score_threshold,
+            score_threshold=settings.score_threshold if score_threshold is None else score_threshold,
             with_payload=True,
         )
         results = response.points
