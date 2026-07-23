@@ -12,7 +12,6 @@ import com.fragment.labbooking.common.redis.ReservationRateLimiter;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
-import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
 import com.fragment.labbooking.dto.ReservationCreateDTO;
 import com.fragment.labbooking.entity.Reservation;
@@ -44,6 +43,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -77,21 +77,22 @@ class ReservationServiceImplTest {
     @BeforeEach
     void setUp() {
         initTableInfo(Reservation.class);
-        reservationService = new ReservationServiceImpl();
         ReservationPersistenceHelper reservationPersistenceHelper =
                 new ReservationPersistenceHelper(reservationNoGenerator, reservationMapper, reservationAutoCancelService);
-        ReflectionTestUtils.setField(reservationService, "resourceService", resourceService);
-        ReflectionTestUtils.setField(reservationService, "resourceSlotService", resourceSlotService);
-        ReflectionTestUtils.setField(reservationService, "sysUserService", sysUserService);
-        ReflectionTestUtils.setField(reservationService, "hotReservationRedisService", hotReservationRedisService);
-        ReflectionTestUtils.setField(reservationService, "reservationRateLimiter", reservationRateLimiter);
-        ReflectionTestUtils.setField(reservationService, "resourceRedisCacheService", resourceRedisCacheService);
-        ReflectionTestUtils.setField(reservationService, "reservationPersistenceHelper", reservationPersistenceHelper);
-        ReflectionTestUtils.setField(reservationService, "reservationReminderTaskService", reservationReminderTaskService);
-        ReflectionTestUtils.setField(reservationService, "reservationAutoCancelService", reservationAutoCancelService);
-        ReflectionTestUtils.setField(reservationService, "reservationRequestService", reservationRequestService);
-        ReflectionTestUtils.setField(reservationService, "asyncReservationEnabled", true);
-        ReflectionTestUtils.setField(reservationService, "checkInBeforeStartMinutes", 30L);
+        reservationService = new ReservationServiceImpl(
+                resourceService,
+                resourceSlotService,
+                sysUserService,
+                hotReservationRedisService,
+                reservationRateLimiter,
+                resourceRedisCacheService,
+                reservationPersistenceHelper,
+                reservationReminderTaskService,
+                reservationAutoCancelService,
+                reservationRequestService,
+                true,
+                30L
+        );
         ReflectionTestUtils.setField(reservationService, "baseMapper", reservationMapper);
     }
 
@@ -160,6 +161,47 @@ class ReservationServiceImplTest {
         verify(reservationRequestService).createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT);
         verify(resourceSlotService, never()).deductQuotaIfAvailable(anyLong());
         verify(reservationMapper, never()).insert(any(Reservation.class));
+    }
+
+    @Test
+    void createReservationShouldRejectSoldOutPreheatedHotSlotBeforeDatabaseLookup() {
+        ReservationCreateDTO dto = buildCreateDto(1L, 12L);
+
+        when(hotReservationRedisService.isPreheatedHotSlot(12L)).thenReturn(true);
+        when(hotReservationRedisService.reserveIfPreheated(1L, 12L, 3L))
+                .thenThrow(new BusinessException(409, "热门时段余量不足"));
+
+        assertThatThrownBy(() -> reservationService.createReservation(3L, dto))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("热门时段余量不足");
+
+        verify(reservationRateLimiter).checkCreateReservationLimit(3L, ResourceSlotTypeConstants.HOT);
+        verifyNoInteractions(resourceService, resourceSlotService, reservationMapper);
+    }
+
+    @Test
+    void createReservationShouldUseRedisReservationForPreheatedHotSlot() {
+        Resource resource = buildResource(1L, "TC-01", "1号靶车");
+        ResourceSlot slot = buildSlot(12L, 1L, ResourceSlotTypeConstants.HOT);
+        ReservationCreateDTO dto = buildCreateDto(1L, 12L);
+        ReservationRequest request = new ReservationRequest();
+        request.setRequestNo("REQ-FAST-1");
+        request.setStatus(ReservationRequestStatusConstants.PENDING);
+
+        when(hotReservationRedisService.isPreheatedHotSlot(12L)).thenReturn(true);
+        when(hotReservationRedisService.reserveIfPreheated(1L, 12L, 3L)).thenReturn(true);
+        when(resourceService.getById(1L)).thenReturn(resource);
+        when(resourceSlotService.getById(12L)).thenReturn(slot);
+        when(reservationMapper.selectCount(any())).thenReturn(0L);
+        when(reservationRequestService.createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT))
+                .thenReturn(request);
+
+        ReservationSubmitVO submitVO = reservationService.createReservation(3L, dto);
+
+        assertThat(submitVO.getAsync()).isTrue();
+        verify(reservationRateLimiter).checkCreateReservationLimit(3L, ResourceSlotTypeConstants.HOT);
+        verify(hotReservationRedisService, never()).reserveAndRegisterRollback(slot, 3L);
+        verify(reservationRequestService).createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT);
     }
 
     @Test

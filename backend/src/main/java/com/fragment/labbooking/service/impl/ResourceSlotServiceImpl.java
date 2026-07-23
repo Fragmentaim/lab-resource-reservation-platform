@@ -243,7 +243,7 @@ public class ResourceSlotServiceImpl extends ServiceImpl<ResourceSlotMapper, Res
 
         boolean updated = this.update(updateWrapper);
         if (!updated) {
-            throw new BusinessException("时段不可预约或余量不足");
+            throw new BusinessException(409, "时段不可预约或余量不足");
         }
     }
 

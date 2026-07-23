@@ -70,7 +70,7 @@ public class ReservationPersistenceHelper {
                 return;
             } catch (DuplicateKeyException exception) {
                 if (hasActiveReservation(reservation.getUserId(), reservation.getSlotId())) {
-                    throw new BusinessException("当前用户已预约该时段");
+                    throw new BusinessException(409, "当前用户已预约该时段");
                 }
                 // The active-reservation key did not conflict, so retry with a new reservation number.
             }

@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SLOT_ID="${1:?usage: reset-hot-reservation-pts.sh SLOT_ID}"
+ENV_FILE="${ENV_FILE:-/etc/lab-booking/loadtest.env}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[[ "$SLOT_ID" =~ ^[1-9][0-9]*$ ]] || { echo "slot id must be a positive integer" >&2; exit 2; }
+
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+db_name="lab_booking_loadtest"
+db_host="${LOADTEST_MYSQL_HOST:-127.0.0.1}"
+db_port="${LOADTEST_MYSQL_PORT:-3306}"
+mysql_exec() {
+  MYSQL_PWD="$LOADTEST_DB_PASSWORD" mysql --protocol=TCP --host="$db_host" --port="$db_port" \
+    --user="$LOADTEST_DB_USERNAME" --database="$db_name" --batch --skip-column-names "$@"
+}
+
+slot_row="$(mysql_exec -e "SELECT CONCAT(r.resource_code, '|', s.slot_type, '|', s.total_quota, '|', s.remain_quota) FROM resource_slot s JOIN resource r ON r.id = s.resource_id WHERE s.id = $SLOT_ID;")"
+IFS='|' read -r resource_code slot_type total_quota remain_quota <<< "$slot_row"
+if [[ "$resource_code" != PTS-HOT-* || "$slot_type" != "HOT" || ! "$total_quota" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Safety stop: slot $SLOT_ID is not a PTS HOT test slot." >&2
+  exit 1
+fi
+
+before_booked="$(mysql_exec -e "SELECT COUNT(*) FROM reservation WHERE slot_id = $SLOT_ID AND status = 'BOOKED';")"
+before_requests="$(mysql_exec -e "SELECT COUNT(*) FROM reservation_request WHERE slot_id = $SLOT_ID;")"
+
+mysql_exec -e "
+START TRANSACTION;
+DELETE n
+  FROM user_notification n
+  JOIN reservation r ON n.related_reservation_id = r.id
+ WHERE r.slot_id = $SLOT_ID;
+DELETE n
+  FROM user_notification n
+  JOIN reservation_reminder_task t ON n.reminder_task_id = t.id
+ WHERE t.slot_id = $SLOT_ID;
+DELETE mo
+  FROM message_outbox mo
+  JOIN reservation r ON mo.aggregate_type = 'RESERVATION' AND CAST(mo.aggregate_id AS UNSIGNED) = r.id
+ WHERE r.slot_id = $SLOT_ID;
+DELETE FROM reservation_reminder_task WHERE slot_id = $SLOT_ID;
+DELETE FROM reservation_request WHERE slot_id = $SLOT_ID;
+DELETE FROM reservation WHERE slot_id = $SLOT_ID;
+UPDATE resource_slot SET remain_quota = total_quota, updated_at = NOW() WHERE id = $SLOT_ID;
+COMMIT;"
+
+"$SCRIPT_DIR/preheat-hot-reservation-redis.sh" "$SLOT_ID"
+echo "Reset complete: slot=$SLOT_ID removedBooked=$before_booked removedRequests=$before_requests restoredQuota=$total_quota"

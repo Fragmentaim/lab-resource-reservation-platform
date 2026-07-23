@@ -34,7 +34,6 @@ import com.fragment.labbooking.vo.ReservationVO;
 import com.fragment.labbooking.vo.UserReservationOverviewVO;
 import com.fragment.labbooking.vo.UserVO;
 import org.springframework.beans.BeanUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,41 +55,45 @@ import java.util.stream.Collectors;
 public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reservation>
         implements ReservationService {
 
-    @Autowired
-    private ResourceService resourceService;
+    private final ResourceService resourceService;
+    private final ResourceSlotService resourceSlotService;
+    private final SysUserService sysUserService;
+    private final HotReservationRedisService hotReservationRedisService;
+    private final ReservationRateLimiter reservationRateLimiter;
+    private final ResourceRedisCacheService resourceRedisCacheService;
+    private final ReservationPersistenceHelper reservationPersistenceHelper;
+    private final ReservationReminderTaskService reservationReminderTaskService;
+    private final ReservationAutoCancelService reservationAutoCancelService;
+    private final ReservationRequestService reservationRequestService;
+    private final boolean asyncReservationEnabled;
+    private final long checkInBeforeStartMinutes;
 
-    @Autowired
-    private ResourceSlotService resourceSlotService;
-
-    @Autowired
-    private SysUserService sysUserService;
-
-    @Autowired
-    private HotReservationRedisService hotReservationRedisService;
-
-    @Autowired
-    private ReservationRateLimiter reservationRateLimiter;
-
-    @Autowired
-    private ResourceRedisCacheService resourceRedisCacheService;
-
-    @Autowired
-    private ReservationPersistenceHelper reservationPersistenceHelper;
-
-    @Autowired
-    private ReservationReminderTaskService reservationReminderTaskService;
-
-    @Autowired
-    private ReservationAutoCancelService reservationAutoCancelService;
-
-    @Autowired
-    private ReservationRequestService reservationRequestService;
-
-    @Value("${app.reservation.async.enabled:true}")
-    private boolean asyncReservationEnabled;
-
-    @Value("${app.reservation.auto-cancel.check-in-before-start-minutes:30}")
-    private long checkInBeforeStartMinutes;
+    public ReservationServiceImpl(
+            ResourceService resourceService,
+            ResourceSlotService resourceSlotService,
+            SysUserService sysUserService,
+            HotReservationRedisService hotReservationRedisService,
+            ReservationRateLimiter reservationRateLimiter,
+            ResourceRedisCacheService resourceRedisCacheService,
+            ReservationPersistenceHelper reservationPersistenceHelper,
+            ReservationReminderTaskService reservationReminderTaskService,
+            ReservationAutoCancelService reservationAutoCancelService,
+            ReservationRequestService reservationRequestService,
+            @Value("${app.reservation.async.enabled:true}") boolean asyncReservationEnabled,
+            @Value("${app.reservation.auto-cancel.check-in-before-start-minutes:30}") long checkInBeforeStartMinutes) {
+        this.resourceService = resourceService;
+        this.resourceSlotService = resourceSlotService;
+        this.sysUserService = sysUserService;
+        this.hotReservationRedisService = hotReservationRedisService;
+        this.reservationRateLimiter = reservationRateLimiter;
+        this.resourceRedisCacheService = resourceRedisCacheService;
+        this.reservationPersistenceHelper = reservationPersistenceHelper;
+        this.reservationReminderTaskService = reservationReminderTaskService;
+        this.reservationAutoCancelService = reservationAutoCancelService;
+        this.reservationRequestService = reservationRequestService;
+        this.asyncReservationEnabled = asyncReservationEnabled;
+        this.checkInBeforeStartMinutes = checkInBeforeStartMinutes;
+    }
 
     @Override
     public List<ReservationVO> getReservationByUserId(Long userId) {
@@ -104,6 +107,14 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ReservationSubmitVO createReservation(Long userId, ReservationCreateDTO dto) {
+        boolean preheatedHotSlot = hotReservationRedisService.isPreheatedHotSlot(dto.getSlotId());
+        if (preheatedHotSlot) {
+            reservationRateLimiter.checkCreateReservationLimit(userId, ResourceSlotTypeConstants.HOT);
+        }
+
+        boolean reservedByRedisFastPath = hotReservationRedisService.reserveIfPreheated(
+                dto.getResourceId(), dto.getSlotId(), userId);
+
         Resource resource = resourceService.getById(dto.getResourceId());
         if (resource == null) {
             throw new BusinessException("资源不存在");
@@ -119,9 +130,12 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
         }
 
         validateSlotBookable(slot);
-        reservationRateLimiter.checkCreateReservationLimit(userId, slot.getSlotType());
-
-        hotReservationRedisService.reserveAndRegisterRollback(slot, userId);
+        if (!preheatedHotSlot) {
+            reservationRateLimiter.checkCreateReservationLimit(userId, slot.getSlotType());
+        }
+        if (!reservedByRedisFastPath) {
+            hotReservationRedisService.reserveAndRegisterRollback(slot, userId);
+        }
         checkDuplicateReservation(userId, dto.getSlotId());
 
         if (shouldUseAsyncHotReservation(slot)) {
@@ -444,7 +458,7 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
                 .eq(Reservation::getSlotId, slotId)
                 .eq(Reservation::getStatus, ReservationStatusConstants.BOOKED));
         if (duplicateCount > 0) {
-            throw new BusinessException("当前用户已预约该时段");
+            throw new BusinessException(409, "当前用户已预约该时段");
         }
     }
 
