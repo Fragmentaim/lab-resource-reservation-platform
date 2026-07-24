@@ -6,7 +6,7 @@ from qdrant_client.models import (
     Filter, FieldCondition, MatchValue, MatchAny,
     DeletePayload, PointsSelector, PointIdsList,
 )
-from typing import List, Optional
+from typing import List, Optional, Sequence
 import re
 import threading
 import uuid
@@ -191,8 +191,15 @@ def search_by_bm25(query: str, top_k: int = None, document_ids: Optional[List[in
     return ranked[:k]
 
 
-def search_by_keywords(keywords: list, top_k: int = None, document_ids: Optional[List[int]] = None) -> list:
-    return search_by_bm25(" ".join(str(keyword) for keyword in keywords if keyword), top_k, document_ids)
+def search_by_keywords(
+    keywords: str | Sequence[str],
+    top_k: int = None,
+    document_ids: Optional[List[int]] = None,
+) -> list:
+    query = keywords if isinstance(keywords, str) else " ".join(
+        str(keyword) for keyword in keywords if keyword
+    )
+    return search_by_bm25(query, top_k, document_ids)
 
 
 def invalidate_bm25_index() -> None:

@@ -53,7 +53,6 @@ def chat_with_usage(
             max_tokens=max(1, settings.max_output_tokens),
             system=system,
             messages=to_anthropic_messages(messages),
-            temperature=0.1,
             **model_gateway.anthropic_message_options(),
         ))
         return response_text(response), _usage_snapshot(getattr(response, "usage", None), route)
@@ -61,7 +60,6 @@ def chat_with_usage(
     response, route = model_gateway.invoke("chat", model, lambda client, resolved_model: client.chat.completions.create(
         model=resolved_model,
         messages=messages,
-        temperature=0.1,
         **model_gateway.chat_completion_options(),
     ))
     return response.choices[0].message.content or "", _usage_snapshot(getattr(response, "usage", None), route)
@@ -121,7 +119,6 @@ def chat_stream(
     stream, _ = model_gateway.invoke("chat", model, lambda client, resolved_model: client.chat.completions.create(
         model=resolved_model,
         messages=messages,
-        temperature=0.1,
         stream=True,
         **model_gateway.chat_completion_options(),
     ))

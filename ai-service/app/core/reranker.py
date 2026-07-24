@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 import threading
@@ -8,6 +9,7 @@ import httpx
 from app.config import settings
 
 
+logger = logging.getLogger(__name__)
 _CHINESE_RE = re.compile(r"[\u4e00-\u9fff]+|[a-zA-Z0-9]+")
 _local_cross_encoder = None
 _local_cross_encoder_lock = threading.Lock()
@@ -84,8 +86,8 @@ def _rerank_by_api(question: str, results: List[dict], top_k: int) -> List[dict]
             )
             response.raise_for_status()
             data = response.json()
-    except Exception as exc:
-        print(f"[Rerank] API failed, fallback to local scoring: {exc}")
+    except Exception:
+        logger.warning("Rerank API failed, fallback to local scoring", exc_info=True)
         return []
 
     ranked = []
@@ -147,8 +149,8 @@ def _rerank_by_local_cross_encoder(question: str, results: List[dict], top_k: in
             batch_size=max(1, settings.local_reranker_batch_size),
             show_progress_bar=False,
         )
-    except Exception as exc:
-        print(f"[Rerank] Local CrossEncoder failed, fallback to local scoring: {exc}")
+    except Exception:
+        logger.warning("Local CrossEncoder failed, fallback to local scoring", exc_info=True)
         return []
 
     ranked = []

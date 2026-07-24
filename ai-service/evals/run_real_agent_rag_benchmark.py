@@ -25,6 +25,7 @@ ANSWER_RE = re.compile(
     r"(?:答案|answer|正确选项|选项)\s*(?:是|为)?\s*[:：]?\s*[（(【\[]?\s*([ABCD])\b",
     re.IGNORECASE,
 )
+FINAL_ANSWER_RE = re.compile(r"(?:^|\n)\s*FINAL\s*[:：]\s*([ABCD])\b", re.IGNORECASE)
 
 
 def main() -> int:
@@ -186,7 +187,11 @@ def run_case(
 def render_question(case: dict[str, Any]) -> str:
     options = case.get("options") or {}
     option_text = "；".join(f"{key}. {value}" for key, value in options.items())
-    return f"{case.get('question', '')}\n选项：{option_text}\n请检索知识库后，给出正确选项字母并简短说明依据。"
+    return (
+        f"{case.get('question', '')}\n选项：{option_text}"
+        "\n请检索知识库后，给出正确选项字母并简短说明依据。"
+        "最后单独一行严格输出 FINAL: X（X 为 A/B/C/D 之一），且 FINAL 行之后不要再输出内容。"
+    )
 
 
 def sanitized_tool_calls(raw_calls: Any) -> list[dict[str, Any]]:
@@ -208,6 +213,9 @@ def extract_answer_letter(answer: str) -> str | None:
     # Tool answers are Markdown in the public API, so normalize decoration
     # before extracting a single-choice label (e.g. ``**D**``).
     normalized = re.sub(r"[*`_#]", " ", answer)
+    final_marks = FINAL_ANSWER_RE.findall(normalized)
+    if final_marks:
+        return final_marks[-1].upper()
     labeled_multiple = re.search(
         r"(?:答案|answer|正确选项|选项)\s*(?:是|为)?\s*[:：]?\s*[（(【\[]?\s*[ABCD]"
         r"\s*(?:、|,|，|和|及)\s*[ABCD]",
@@ -216,9 +224,9 @@ def extract_answer_letter(answer: str) -> str | None:
     )
     if labeled_multiple:
         return None
-    match = ANSWER_RE.search(normalized)
-    if match:
-        return match.group(1).upper()
+    labeled = ANSWER_RE.findall(normalized)
+    if labeled:
+        return labeled[-1].upper()
     standalone = re.findall(r"(?<![A-Za-z])([ABCD])(?![A-Za-z])", normalized.upper())
     return standalone[0] if len(standalone) == 1 else None
 

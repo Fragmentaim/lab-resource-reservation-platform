@@ -293,15 +293,3 @@ def _result_key(result: dict) -> str:
 def _mark_retrieval_source(results: List[dict], source: str) -> None:
     for result in results:
         result["retrieval_source"] = source
-
-
-def _format_source_header(index: int, result: dict) -> str:
-    parts = [
-        f"文档ID: {result.get('document_id')}",
-        f"页码: {result.get('page_no', 'N/A')}",
-    ]
-    if result.get("section_title"):
-        parts.append(f"章节: {result['section_title']}")
-    if result.get("chunk_id"):
-        parts.append(f"chunkId: {result['chunk_id']}")
-    return f"[来源 {index}] ({', '.join(parts)})"

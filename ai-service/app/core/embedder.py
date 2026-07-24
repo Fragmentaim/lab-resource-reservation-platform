@@ -1,13 +1,18 @@
 from app.config import settings
 from typing import List
 from openai import OpenAI
+import logging
 import os
 import site
 import sys
+import threading
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # 本地模型缓存
 _local_model = None
+_local_model_lock = threading.Lock()
 
 
 def get_client() -> OpenAI:
@@ -47,31 +52,34 @@ def _get_local_model():
     """获取本地 Embedding 模型"""
     global _local_model
     if _local_model is None:
-        if settings.hf_hub_cache:
-            cache_root = Path(settings.hf_hub_cache).resolve()
-            cache_root.mkdir(parents=True, exist_ok=True)
-            os.environ["HF_HOME"] = str(cache_root.parent)
-            os.environ["HF_HUB_CACHE"] = str(cache_root)
-            os.environ["HF_XET_CACHE"] = str(cache_root.parent / "xet")
+        with _local_model_lock:
+            if _local_model is None:
+                if settings.hf_hub_cache:
+                    cache_root = Path(settings.hf_hub_cache).resolve()
+                    cache_root.mkdir(parents=True, exist_ok=True)
+                    os.environ["HF_HOME"] = str(cache_root.parent)
+                    os.environ["HF_HUB_CACHE"] = str(cache_root)
+                    os.environ["HF_XET_CACHE"] = str(cache_root.parent / "xet")
 
-        user_site = site.getusersitepackages()
-        sys.path = [p for p in sys.path if os.path.normcase(p) != os.path.normcase(user_site)]
+                user_site = site.getusersitepackages()
+                sys.path = [p for p in sys.path if os.path.normcase(p) != os.path.normcase(user_site)]
 
-        from sentence_transformers import SentenceTransformer
-        import torch
-        import time
+                from sentence_transformers import SentenceTransformer
+                import torch
+                import time
 
-        print(f"正在加载本地 Embedding 模型: {settings.local_embedding_model}")
-        start = time.time()
+                logger.info("正在加载本地 Embedding 模型: %s", settings.local_embedding_model)
+                start = time.time()
 
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        _local_model = SentenceTransformer(
-            settings.local_embedding_model,
-            device=device,
-            cache_folder=settings.hf_hub_cache or None,
-        )
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                _local_model = SentenceTransformer(
+                    settings.local_embedding_model,
+                    device=device,
+                    cache_folder=settings.hf_hub_cache or None,
+                )
 
-        print(f"模型加载完成！耗时: {time.time() - start:.1f} 秒，设备: {device}")
+                logger.info("本地 Embedding 模型加载完成，耗时 %.1f 秒，设备: %s",
+                            time.time() - start, device)
 
     return _local_model
 

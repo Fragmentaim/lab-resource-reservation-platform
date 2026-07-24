@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import List, Optional
 
@@ -5,6 +6,7 @@ from app.config import settings
 from app.core import llm
 
 
+logger = logging.getLogger(__name__)
 _FOLLOW_UP_PATTERNS = [
     r"^(那|这个|这个呢|它|它呢|上面|刚才|继续|还有|再说|详细|限制|任务|规则)",
     r"(它|这个|上述|前面|刚才|这些|那些)",
@@ -45,8 +47,8 @@ def rewrite_question(
         if rewritten == question:
             return question, False
         return rewritten[:200], True
-    except Exception as exc:
-        print(f"[QueryRewrite] failed, fallback to original question: {exc}")
+    except Exception:
+        logger.warning("Query rewrite failed, fallback to original question", exc_info=True)
         return question, False
 
 
