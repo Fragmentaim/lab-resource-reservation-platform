@@ -11,12 +11,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -29,23 +29,24 @@ class ResourceAvailabilityToolServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        toolService = new ResourceAvailabilityToolServiceImpl();
-        ReflectionTestUtils.setField(toolService, "resourceService", resourceService);
-        ReflectionTestUtils.setField(toolService, "resourceSlotService", resourceSlotService);
+        toolService = new ResourceAvailabilityToolServiceImpl(resourceService, resourceSlotService);
     }
 
     @Test
-    void shouldOnlyReturnFutureSlotsWithRemainingQuota() {
+    void shouldQueryAvailableSlotsInOneBatch() {
         ResourceVO resource = new ResourceVO();
         resource.setId(3L);
         resource.setResourceName("机器人实验室");
         resource.setResourceType("LAB");
         resource.setLocation("A-301");
-        when(resourceService.search(org.mockito.ArgumentMatchers.any())).thenReturn(List.of(resource));
-        when(resourceSlotService.getSlotsByResourceId(3L)).thenReturn(List.of(
-                slot(11L, LocalDateTime.now().plusHours(2), 1),
-                slot(12L, LocalDateTime.now().minusHours(1), 2),
-                slot(13L, LocalDateTime.now().plusHours(3), 0)
+        ResourceVO secondResource = new ResourceVO();
+        secondResource.setId(4L);
+        secondResource.setResourceName("视觉实验室");
+        when(resourceService.search(any())).thenReturn(List.of(resource, secondResource));
+        when(resourceSlotService.list(
+                org.mockito.ArgumentMatchers.<com.baomidou.mybatisplus.core.conditions.Wrapper<ResourceSlot>>any()
+        )).thenReturn(List.of(
+                slot(11L, 3L, LocalDateTime.now().plusHours(2), 1)
         ));
 
         ResourceAvailabilityToolVO result = toolService.findAvailableSlots(" 机器人 ", 99);
@@ -61,11 +62,15 @@ class ResourceAvailabilityToolServiceImplTest {
         ArgumentCaptor<com.fragment.labbooking.dto.ResourceQueryDTO> query = ArgumentCaptor.forClass(com.fragment.labbooking.dto.ResourceQueryDTO.class);
         verify(resourceService).search(query.capture());
         assertThat(query.getValue().getStatus()).isEqualTo("AVAILABLE");
+        verify(resourceSlotService).list(
+                org.mockito.ArgumentMatchers.<com.baomidou.mybatisplus.core.conditions.Wrapper<ResourceSlot>>any()
+        );
     }
 
-    private ResourceSlot slot(Long id, LocalDateTime start, int remainQuota) {
+    private ResourceSlot slot(Long id, Long resourceId, LocalDateTime start, int remainQuota) {
         ResourceSlot slot = new ResourceSlot();
         slot.setId(id);
+        slot.setResourceId(resourceId);
         slot.setStartDatetime(start);
         slot.setEndDatetime(start.plusHours(1));
         slot.setRemainQuota(remainQuota);

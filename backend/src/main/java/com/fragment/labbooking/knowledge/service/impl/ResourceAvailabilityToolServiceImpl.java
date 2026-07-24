@@ -1,5 +1,7 @@
 package com.fragment.labbooking.knowledge.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.dto.ResourceQueryDTO;
 import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.knowledge.service.ResourceAvailabilityToolService;
@@ -9,12 +11,13 @@ import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
 import com.fragment.labbooking.vo.ResourceVO;
 import org.springframework.beans.BeanUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class ResourceAvailabilityToolServiceImpl implements ResourceAvailabilityToolService {
@@ -22,11 +25,14 @@ public class ResourceAvailabilityToolServiceImpl implements ResourceAvailability
     private static final int DEFAULT_LIMIT = 5;
     private static final int MAX_LIMIT = 10;
 
-    @Autowired
-    private ResourceService resourceService;
+    private final ResourceService resourceService;
+    private final ResourceSlotService resourceSlotService;
 
-    @Autowired
-    private ResourceSlotService resourceSlotService;
+    public ResourceAvailabilityToolServiceImpl(ResourceService resourceService,
+                                               ResourceSlotService resourceSlotService) {
+        this.resourceService = resourceService;
+        this.resourceSlotService = resourceSlotService;
+    }
 
     @Override
     public ResourceAvailabilityToolVO findAvailableSlots(String keyword, int limit) {
@@ -36,15 +42,30 @@ public class ResourceAvailabilityToolServiceImpl implements ResourceAvailability
         query.setStatus("AVAILABLE");
         int actualLimit = Math.min(Math.max(limit, 1), MAX_LIMIT);
 
-        LocalDateTime now = LocalDateTime.now();
-        List<AvailableResourceSlotVO> slots = resourceService.search(query).stream()
-                .flatMap(resource -> resourceSlotService.getSlotsByResourceId(resource.getId()).stream()
-                        .filter(slot -> slot.getStartDatetime() != null && slot.getStartDatetime().isAfter(now))
-                        .filter(slot -> slot.getRemainQuota() != null && slot.getRemainQuota() > 0)
-                        .map(slot -> toVO(resource, slot)))
-                .sorted(java.util.Comparator.comparing(AvailableResourceSlotVO::getStartDatetime))
-                .limit(actualLimit)
-                .toList();
+        List<ResourceVO> resources = resourceService.search(query);
+        Map<Long, ResourceVO> resourceById = new HashMap<>();
+        for (ResourceVO resource : resources) {
+            if (resource.getId() != null) {
+                resourceById.put(resource.getId(), resource);
+            }
+        }
+
+        List<AvailableResourceSlotVO> slots = List.of();
+        if (!resourceById.isEmpty()) {
+            LocalDateTime now = LocalDateTime.now();
+            slots = resourceSlotService.list(new LambdaQueryWrapper<ResourceSlot>()
+                            .in(ResourceSlot::getResourceId, resourceById.keySet())
+                            .eq(ResourceSlot::getStatus, ResourceSlotStatusConstants.OPEN)
+                            .gt(ResourceSlot::getStartDatetime, now)
+                            .gt(ResourceSlot::getRemainQuota, 0)
+                            .orderByAsc(ResourceSlot::getStartDatetime)
+                            .orderByAsc(ResourceSlot::getId)
+                            .last("LIMIT " + actualLimit))
+                    .stream()
+                    .filter(slot -> resourceById.containsKey(slot.getResourceId()))
+                    .map(slot -> toVO(resourceById.get(slot.getResourceId()), slot))
+                    .toList();
+        }
 
         ResourceAvailabilityToolVO result = new ResourceAvailabilityToolVO();
         result.setToolName("resource_availability");

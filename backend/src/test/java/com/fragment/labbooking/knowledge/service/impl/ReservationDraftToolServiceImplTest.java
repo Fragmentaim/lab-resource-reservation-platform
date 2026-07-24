@@ -10,6 +10,8 @@ import com.fragment.labbooking.service.ReservationService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -35,6 +37,8 @@ class ReservationDraftToolServiceImplTest {
 
     @Mock private StringRedisTemplate redisTemplate;
     @Mock private ValueOperations<String, String> valueOperations;
+    @Mock private RedissonClient redissonClient;
+    @Mock private RLock confirmLock;
     @Mock private ResourceService resourceService;
     @Mock private ResourceSlotService resourceSlotService;
     @Mock private ReservationService reservationService;
@@ -46,7 +50,7 @@ class ReservationDraftToolServiceImplTest {
     void setUp() {
         objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        draftToolService = new ReservationDraftToolServiceImpl(redisTemplate, objectMapper, resourceService,
+        draftToolService = new ReservationDraftToolServiceImpl(redisTemplate, redissonClient, objectMapper, resourceService,
                 resourceSlotService, reservationService, 600);
     }
 
@@ -72,7 +76,9 @@ class ReservationDraftToolServiceImplTest {
                 LocalDateTime.now().minusMinutes(1), LocalDateTime.now().plusMinutes(5)));
         when(valueOperations.get("agent:reservation:confirm-result:" + token)).thenReturn(null);
         when(valueOperations.get("agent:reservation:draft:" + token)).thenReturn(draftJson);
-        when(valueOperations.setIfAbsent(eq("agent:reservation:confirm-lock:" + token), eq("1"), any())).thenReturn(true);
+        when(redissonClient.getLock("agent:reservation:confirm-lock:" + token)).thenReturn(confirmLock);
+        when(confirmLock.tryLock()).thenReturn(true);
+        when(confirmLock.isHeldByCurrentThread()).thenReturn(true);
         ReservationSubmitVO submit = new ReservationSubmitVO();
         submit.setStatus("SUCCESS");
         submit.setReservationNo("RES-100");
@@ -87,7 +93,7 @@ class ReservationDraftToolServiceImplTest {
         assertThat(dto.getValue().getResourceId()).isEqualTo(11L);
         assertThat(dto.getValue().getSlotId()).isEqualTo(22L);
         verify(redisTemplate).delete("agent:reservation:draft:" + token);
-        verify(redisTemplate).delete("agent:reservation:confirm-lock:" + token);
+        verify(confirmLock).unlock();
     }
 
     @Test

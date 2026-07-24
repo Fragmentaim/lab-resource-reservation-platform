@@ -14,6 +14,8 @@ import com.fragment.labbooking.service.ReservationService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -31,6 +33,7 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
     private static final String CONFIRM_RESULT_KEY_PREFIX = "agent:reservation:confirm-result:";
 
     private final StringRedisTemplate redisTemplate;
+    private final RedissonClient redissonClient;
     private final ObjectMapper objectMapper;
     private final ResourceService resourceService;
     private final ResourceSlotService resourceSlotService;
@@ -38,12 +41,14 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
     private final Duration ttl;
 
     public ReservationDraftToolServiceImpl(StringRedisTemplate redisTemplate,
+                                           RedissonClient redissonClient,
                                            ObjectMapper objectMapper,
                                            ResourceService resourceService,
                                            ResourceSlotService resourceSlotService,
                                            ReservationService reservationService,
                                            @Value("${app.knowledge.agent-reservation-confirmation.ttl-seconds:600}") long ttlSeconds) {
         this.redisTemplate = redisTemplate;
+        this.redissonClient = redissonClient;
         this.objectMapper = objectMapper;
         this.resourceService = resourceService;
         this.resourceSlotService = resourceSlotService;
@@ -95,8 +100,9 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
         }
         assertOwner(userId, draft.userId());
 
-        Boolean locked = redisTemplate.opsForValue().setIfAbsent(CONFIRM_LOCK_KEY_PREFIX + token, "1", ttl);
-        if (!Boolean.TRUE.equals(locked)) {
+        RLock confirmLock = redissonClient.getLock(CONFIRM_LOCK_KEY_PREFIX + token);
+        // Omitting leaseTime lets Redisson's watchdog renew the lock until this thread unlocks it.
+        if (!confirmLock.tryLock()) {
             completed = read(CONFIRM_RESULT_KEY_PREFIX + token, ConfirmedPayload.class);
             if (completed != null) {
                 assertOwner(userId, completed.userId());
@@ -114,7 +120,9 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
             redisTemplate.delete(DRAFT_KEY_PREFIX + token);
             return submit;
         } finally {
-            redisTemplate.delete(CONFIRM_LOCK_KEY_PREFIX + token);
+            if (confirmLock.isHeldByCurrentThread()) {
+                confirmLock.unlock();
+            }
         }
     }
 
