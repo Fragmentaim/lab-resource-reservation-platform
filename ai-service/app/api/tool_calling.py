@@ -6,6 +6,8 @@ business credentials or executes a tool: Java validates and executes every call.
 
 import json
 import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
@@ -72,18 +74,56 @@ knowledge_search 仅返回候选 chunk 的定位信息，不能作为事实依�
 工作记忆中的“可访问文档 ID 范围”是不可扩大的权限边界；范围为空或用户明确要求越权、管理员/保密/其他实验室受限资料时，直接拒绝提供受限内容，不得调用 knowledge_search 或 knowledge_open_chunks。"""
 
 
+def _declared_tool_names(tools: List[Dict[str, Any]]) -> set[str]:
+    return {
+        str((tool.get("function") or {}).get("name"))
+        for tool in tools
+        if isinstance(tool, dict) and (tool.get("function") or {}).get("name")
+    }
+
+
+def _required_tool_name(request: ToolCallingRoundRequest) -> Optional[str]:
+    declared = _declared_tool_names(request.tools)
+    if not declared:
+        return None
+
+    executed_names = [call.name for call in request.executed_calls]
+    if (
+        "knowledge_search" in executed_names
+        and "knowledge_open_chunks" not in executed_names
+        and "knowledge_open_chunks" in declared
+    ):
+        latest_search = next(
+            (call for call in reversed(request.executed_calls) if call.name == "knowledge_search"),
+            None,
+        )
+        if latest_search and latest_search.output.get("candidates"):
+            return "knowledge_open_chunks"
+
+    if request.executed_calls:
+        return None
+
+    question = request.question.lower()
+    explicitly_named = [name for name in declared if name.lower() in question]
+    if "knowledge_search" in explicitly_named:
+        return "knowledge_search"
+    return explicitly_named[0] if len(explicitly_named) == 1 else None
+
+
 @router.post("/round", response_model=ToolCallingRoundResponse)
 async def tool_calling_round(request: ToolCallingRoundRequest):
     try:
         capability = model_gateway.require_native_tool_calling(request.model)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if not request.tools:
-        raise HTTPException(status_code=400, detail="At least one tool definition is required")
-
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
     ]
+    if not request.tools:
+        messages.append({
+            "role": "system",
+            "content": "当前回合工具已关闭：请仅基于已打开的受控证据直接回答，不要输出 tool_call、invoke 或任何工具标记。",
+        })
     if request.conversation_context.working_memory.strip():
         messages.append({
             "role": "system",
@@ -122,44 +162,64 @@ async def tool_calling_round(request: ToolCallingRoundRequest):
                 })
 
     try:
+        required_tool = _required_tool_name(request)
         if settings.llm_api_mode == "anthropic":
             system = "\n\n".join(message["content"] for message in messages if message["role"] == "system")
+
+            def invoke_anthropic(client, resolved_model):
+                options: Dict[str, Any] = {
+                    "model": resolved_model,
+                    "max_tokens": max(1, settings.max_output_tokens),
+                    "system": system,
+                    "messages": to_anthropic_messages(messages),
+                    **model_gateway.anthropic_message_options(),
+                }
+                if request.tools:
+                    options["tools"] = to_anthropic_tools(request.tools)
+                    options["tool_choice"] = (
+                        {"type": "tool", "name": required_tool}
+                        if required_tool
+                        else {"type": "auto"}
+                    )
+                return client.messages.create(**options)
+
             response, route = await asyncio.to_thread(
                 model_gateway.invoke,
                 "tool",
                 request.model,
-                lambda client, resolved_model: client.messages.create(
-                    model=resolved_model,
-                    max_tokens=max(1, settings.max_output_tokens),
-                    system=system,
-                    messages=to_anthropic_messages(messages),
-                    tools=to_anthropic_tools(request.tools),
-                    tool_choice={"type": "auto"},
-                    temperature=0.1,
-                    **model_gateway.anthropic_message_options(),
-                ),
+                invoke_anthropic,
             )
         else:
+            def invoke_chat(client, resolved_model):
+                options: Dict[str, Any] = {
+                    "model": resolved_model,
+                    "messages": messages,
+                    **model_gateway.chat_completion_options(),
+                }
+                if request.tools:
+                    options["tools"] = request.tools
+                    options["tool_choice"] = (
+                        {"type": "function", "function": {"name": required_tool}}
+                        if required_tool
+                        else "auto"
+                    )
+                return client.chat.completions.create(**options)
+
             response, route = await asyncio.to_thread(
                 model_gateway.invoke,
                 "tool",
                 request.model,
-                lambda client, resolved_model: client.chat.completions.create(
-                    model=resolved_model,
-                    messages=messages,
-                    tools=request.tools,
-                    tool_choice="auto",
-                    temperature=0,
-                    **model_gateway.chat_completion_options(),
-                ),
+                invoke_chat,
             )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Tool planning request failed: {exc}") from exc
 
     planned_calls = []
     if settings.llm_api_mode == "anthropic":
-        planned_calls = [PlannedToolCall(call_id=call["id"], name=call["name"], arguments=call["input"])
-                         for call in response_tool_uses(response)]
+        planned_calls = [] if not request.tools else [
+            PlannedToolCall(call_id=call["id"], name=call["name"], arguments=call["input"])
+            for call in response_tool_uses(response)
+        ]
         answer = None if planned_calls else response_text(response)
     else:
         message = response.choices[0].message
@@ -174,12 +234,37 @@ async def tool_calling_round(request: ToolCallingRoundRequest):
                 arguments=arguments if isinstance(arguments, dict) else {},
             ))
         answer = None if planned_calls else (message.content or "")
+    _capture_debug_exchange(request.model, messages, request.tools, response)
     return ToolCallingRoundResponse(
         tool_calls=planned_calls,
         answer=answer,
         model=route["model"],
         provider_usage=_usage_snapshot(getattr(response, "usage", None), route),
     )
+
+
+def _capture_debug_exchange(model: Optional[str], messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], response: Any) -> None:
+    """Append one local-only planner exchange when explicit evaluation capture is enabled."""
+    configured_path = settings.llm_debug_capture_path.strip()
+    if not configured_path:
+        return
+    try:
+        target = Path(configured_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        raw_response = response.model_dump(mode="json") if hasattr(response, "model_dump") else str(response)
+        entry = {
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "api_mode": settings.llm_api_mode,
+            "model": model or settings.tool_calling_model or settings.chat_model,
+            "messages": messages,
+            "tools": tools,
+            "response": raw_response,
+        }
+        with target.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        # A local diagnostic capture must never fail the user-facing tool round.
+        return
 
 
 @router.post("/round/stream")

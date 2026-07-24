@@ -25,6 +25,7 @@ def _invoke_with(fake_client, captured=None):
 
             def create(**kwargs):
                 captured["messages"] = kwargs["messages"]
+                captured["options"] = kwargs
                 return original(**kwargs)
 
             fake_client.chat.completions.create = create
@@ -67,6 +68,61 @@ def test_tool_calling_preserves_assistant_tool_turn_boundaries(monkeypatch):
     assert len(assistant_calls) == 2
     assert assistant_calls[0]["tool_calls"][0]["function"]["name"] == "knowledge_search"
     assert assistant_calls[1]["tool_calls"][0]["function"]["name"] == "knowledge_open_chunks"
+
+
+def test_explicitly_named_tool_is_required_on_the_first_round(monkeypatch):
+    captured = {}
+    request = tool_calling.ToolCallingRoundRequest(
+        question="请调用 knowledge_search 查询设备规范",
+        tools=[
+            {"type": "function", "function": {"name": "knowledge_search"}},
+            {"type": "function", "function": {"name": "knowledge_open_chunks"}},
+        ],
+    )
+    monkeypatch.setattr(
+        tool_calling.model_gateway,
+        "invoke",
+        _invoke_with(_fake_tool_response('{"query":"设备规范"}'), captured),
+    )
+
+    asyncio.run(tool_calling.tool_calling_round(request))
+
+    assert captured["options"]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "knowledge_search"},
+    }
+
+
+def test_open_chunks_is_required_after_search_returns_candidates(monkeypatch):
+    captured = {}
+    request = tool_calling.ToolCallingRoundRequest(
+        question="查询设备规范",
+        tools=[
+            {"type": "function", "function": {"name": "knowledge_search"}},
+            {"type": "function", "function": {"name": "knowledge_open_chunks"}},
+        ],
+        executed_calls=[
+            tool_calling.ExecutedToolCall(
+                call_id="call-1",
+                name="knowledge_search",
+                round=1,
+                arguments={"query": "设备规范"},
+                output={"status": "OK", "candidates": [{"chunkUid": "candidate-1"}]},
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        tool_calling.model_gateway,
+        "invoke",
+        _invoke_with(_fake_tool_response('{"chunkUids":["candidate-1"]}'), captured),
+    )
+
+    asyncio.run(tool_calling.tool_calling_round(request))
+
+    assert captured["options"]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "knowledge_open_chunks"},
+    }
 
 
 def test_tool_calling_sse_emits_heartbeats_and_completion(monkeypatch):

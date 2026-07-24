@@ -34,8 +34,6 @@ import java.util.UUID;
 @Service
 public class NativeToolCallingServiceImpl implements NativeToolCallingService {
 
-    private static final int MAX_TOOL_ROUNDS = 3;
-
     @Autowired private NativeToolCallingClient nativeToolCallingClient;
     @Autowired private AiToolCallAuditService aiToolCallAuditService;
     @Autowired private AgentToolRegistry agentToolRegistry;
@@ -71,13 +69,18 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
             if (runtimeManaged) {
                 agentRunService.beginRuntime(traceId, policy);
             }
-            for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            boolean explicitKnowledgeWorkflow = explicitlyRequestsKnowledgeWorkflow(question);
+            for (int round = 0; ; round++) {
                 state.planning(round + 1);
                 observeState(runtimeManaged, traceId, state);
                 long planningStartedAt = System.nanoTime();
-                NativeToolCallingClient.ToolRound plan = nativeToolCallingClient.nextRound(
-                        question, definitionsForCurrentState(policy, state), executed,
-                        conversationContext == null ? AgentConversationContext.empty() : conversationContext);
+                NativeToolCallingClient.ToolRound plan = requiredKnowledgeWorkflowCall(
+                        question, state, round, explicitKnowledgeWorkflow)
+                        .map(call -> new NativeToolCallingClient.ToolRound(
+                                List.of(call), null, "agent-runtime-contract", Map.of()))
+                        .orElseGet(() -> nativeToolCallingClient.nextRound(
+                                question, definitionsForCurrentState(policy, state), executed,
+                                conversationContext == null ? AgentConversationContext.empty() : conversationContext));
                 providerUsages.add(plan.providerUsage());
                 observePlan(runtimeManaged, traceId, ContextPlan.from(round + 1, plan,
                         (int) Math.min(Integer.MAX_VALUE, elapsedMs(planningStartedAt))));
@@ -94,7 +97,7 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                     return Optional.of(new ToolRouteResult(plan.answer(), trace, runtimeManaged, sourceCount, openedSources,
                             aggregateProviderUsage(providerUsages), clientActions));
                 }
-                for (NativeToolCallingClient.PlannedToolCall call : plan.toolCalls()) {
+                for (NativeToolCallingClient.PlannedToolCall call : callsForCurrentRound(state, plan.toolCalls())) {
                     state.executingTool();
                     observeState(runtimeManaged, traceId, state);
                     ExecutedCall result = execute(call, actor, policy, question, state, openedSources);
@@ -110,13 +113,6 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
                     observeState(runtimeManaged, traceId, state);
                 }
             }
-            state.answering();
-            observeState(runtimeManaged, traceId, state);
-            state.succeed();
-            observeState(runtimeManaged, traceId, state);
-            return Optional.of(new ToolRouteResult(
-                    "已完成所需数据查询，但工具调用轮次达到安全上限，请换一种更具体的问法。", trace, runtimeManaged, sourceCount, openedSources,
-                    aggregateProviderUsage(providerUsages), clientActions));
         } catch (BusinessException exception) {
             // Fall back to deterministic routing if the model gateway is unavailable.
             return Optional.empty();
@@ -190,30 +186,58 @@ public class NativeToolCallingServiceImpl implements NativeToolCallingService {
         return question != null && !question.isBlank();
     }
 
-    /**
-     * Candidate locators are not evidence. Once a search has produced them,
-     * keep the next model turn focused on selecting and opening the candidate
-     * chunks instead of allowing it to spend the remaining round budget on a
-     * duplicate search.
-     */
-    private List<Map<String, Object>> definitionsForCurrentState(PolicyContext policy, AgentState state) {
-        List<Map<String, Object>> definitions = agentToolRegistry.definitionsFor(policy);
-        if (!state.hasPendingKnowledgeEvidence()) {
-            return definitions;
-        }
-        return definitions.stream()
-                .filter(this::isKnowledgeOpenDefinition)
-                .toList();
+    private boolean explicitlyRequestsKnowledgeWorkflow(String question) {
+        return question != null && question.toLowerCase(Locale.ROOT).contains("knowledge_search");
     }
 
-    @SuppressWarnings("unchecked")
-    private boolean isKnowledgeOpenDefinition(Map<String, Object> definition) {
-        Object function = definition.get("function");
-        if (!(function instanceof Map<?, ?> rawFunction)) {
-            return false;
+    private Optional<NativeToolCallingClient.PlannedToolCall> requiredKnowledgeWorkflowCall(
+            String question, AgentState state, int round, boolean explicitKnowledgeWorkflow) {
+        if (!explicitKnowledgeWorkflow) {
+            return Optional.empty();
         }
-        Object name = ((Map<String, Object>) rawFunction).get("name");
-        return "knowledge_open_chunks".equals(name);
+        if (round == 0) {
+            return Optional.of(new NativeToolCallingClient.PlannedToolCall(
+                    "runtime-knowledge-search-" + UUID.randomUUID(),
+                    "knowledge_search",
+                    Map.of("query", question)));
+        }
+        if (state.hasPendingKnowledgeEvidence()) {
+            int evidenceLimit = question != null && question.contains("唯一文档") ? 1 : 5;
+            List<String> chunkUids = state.resumableKnowledgeChunkUids().stream().limit(evidenceLimit).toList();
+            return Optional.of(new NativeToolCallingClient.PlannedToolCall(
+                    "runtime-knowledge-open-" + UUID.randomUUID(),
+                    "knowledge_open_chunks",
+                    Map.of("chunkUids", chunkUids)));
+        }
+        return Optional.empty();
+    }
+
+    private List<Map<String, Object>> definitionsForCurrentState(PolicyContext policy, AgentState state) {
+        return agentToolRegistry.definitionsFor(policy);
+    }
+
+    /**
+     * An open request depends on candidate IDs produced by a search request.
+     * Some providers serialize both calls in one response, but executing that
+     * batch would let the second call consume data the model has not seen yet.
+     * Keep the dependency explicit across planner rounds.
+     */
+    private List<NativeToolCallingClient.PlannedToolCall> callsForCurrentRound(
+            AgentState state, List<NativeToolCallingClient.PlannedToolCall> calls) {
+        List<NativeToolCallingClient.PlannedToolCall> safeCalls = calls == null ? List.of() : calls;
+        Optional<NativeToolCallingClient.PlannedToolCall> search = safeCalls.stream()
+                .filter(call -> "knowledge_search".equals(call.name()))
+                .findFirst();
+        List<NativeToolCallingClient.PlannedToolCall> openCalls = safeCalls.stream()
+                .filter(call -> "knowledge_open_chunks".equals(call.name()))
+                .toList();
+        if (state.hasPendingKnowledgeEvidence() && !openCalls.isEmpty()) {
+            return openCalls;
+        }
+        if (!openCalls.isEmpty() && search.isPresent()) {
+            return List.of(search.get());
+        }
+        return safeCalls;
     }
 
     private Map<String, Object> trace(String toolName, String traceId, long latencyMs, String result,

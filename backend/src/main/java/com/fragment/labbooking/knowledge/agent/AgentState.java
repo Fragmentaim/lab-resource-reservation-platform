@@ -83,6 +83,15 @@ public final class AgentState {
         return !searchableChunkDocumentIds.isEmpty() && openedChunkUids.isEmpty();
     }
 
+    /**
+     * Opened chunks are the evidence boundary for the current knowledge task.
+     * The following model turn should synthesize an answer, not start a new
+     * tool loop against the same question.
+     */
+    public boolean hasOpenedKnowledgeEvidence() {
+        return !openedChunkUids.isEmpty();
+    }
+
     public void answering() {
         this.phase = Phase.ANSWERING;
     }

@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # ``max``.
     llm_thinking_mode: str = ""
     llm_reasoning_effort: str = ""
+    # Evaluation-only local capture. Never enable this in a shared deployment:
+    # it may contain user prompts and tool-result evidence.
+    llm_debug_capture_path: str = ""
     llm_fallback_base_url: str = ""
     llm_fallback_api_key: str = ""
     llm_fallback_chat_model: str = ""

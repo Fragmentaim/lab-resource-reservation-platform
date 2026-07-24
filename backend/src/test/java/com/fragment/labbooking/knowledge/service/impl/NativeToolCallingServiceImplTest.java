@@ -42,6 +42,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -101,6 +102,32 @@ class NativeToolCallingServiceImplTest {
     }
 
     @Test
+    void shouldContinueToolCallingBeyondThreeRoundsUntilModelAnswers() {
+        NativeToolCallingClient.PlannedToolCall first = new NativeToolCallingClient.PlannedToolCall(
+                "call_context_1", "reservation_context", Map.of());
+        NativeToolCallingClient.PlannedToolCall second = new NativeToolCallingClient.PlannedToolCall(
+                "call_context_2", "reservation_context", Map.of());
+        NativeToolCallingClient.PlannedToolCall third = new NativeToolCallingClient.PlannedToolCall(
+                "call_context_3", "reservation_context", Map.of());
+        NativeToolCallingClient.PlannedToolCall fourth = new NativeToolCallingClient.PlannedToolCall(
+                "call_context_4", "reservation_context", Map.of());
+        when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
+                new NativeToolCallingClient.ToolRound(List.of(first), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(second), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(third), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(fourth), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(), "四轮工具调用后完成。", "glm-5.1")
+        );
+        when(contextTool.getReservationContext(any(), any())).thenReturn(new ReservationAssistantContextVO());
+
+        ToolRouteResult result = service.tryAnswer("继续查询直到完成", user()).orElseThrow();
+
+        assertThat(result.answer()).isEqualTo("四轮工具调用后完成。");
+        assertThat(result.toolCalls()).hasSize(4);
+        verify(nativeClient, times(5)).nextRound(any(), any(), any(), any());
+    }
+
+    @Test
     void shouldExposeAclFilteredKnowledgeAsAnOptionalNativeTool() {
         NativeToolCallingClient.PlannedToolCall searchCall = new NativeToolCallingClient.PlannedToolCall(
                 "call_knowledge_1", "knowledge_search", Map.of("query", "取消预约的规则"));
@@ -140,13 +167,44 @@ class NativeToolCallingServiceImplTest {
     }
 
     @Test
-    void shouldOnlyExposeEvidenceOpenToolAfterSearchReturnsCandidates() {
+    void shouldEnforceExplicitSearchThenOpenAsARuntimeWorkflowContract() {
+        when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
+                new NativeToolCallingClient.ToolRound(List.of(), "诊断定位符已读取。", "glm-5.1")
+        );
+        when(kbDocumentService.listAccessibleReadyDocumentIds(any())).thenReturn(List.of(36L));
+        AiServiceClient.KnowledgeCandidate candidate = new AiServiceClient.KnowledgeCandidate(
+                "chunk-36-0", 36L, "v1", 0, 1, "诊断", List.of("诊断文档"),
+                "hash", 80, 0.99D, 63.8D, 9.0D, "local_cross_encoder", "bm25", "定位符");
+        AiServiceClient.KnowledgeCandidate secondCandidate = new AiServiceClient.KnowledgeCandidate(
+                "chunk-36-1", 36L, "v1", 1, 2, "附录", List.of("诊断文档"),
+                "hash-2", 80, 0.20D, 2.0D, -4.0D, "local_cross_encoder", "bm25", "无关附录");
+        when(aiServiceClient.retrieveKnowledge(any(), eq(List.of(36L))))
+                .thenReturn(new AiServiceClient.KnowledgeSearchResult("诊断", List.of(candidate, secondCandidate)));
+        AiServiceClient.KnowledgeChunk chunk = new AiServiceClient.KnowledgeChunk(
+                "chunk-36-0", 36L, "v1", 0, 1, "诊断", List.of("诊断文档"),
+                "hash", 80, "诊断定位符正文");
+        when(aiServiceClient.openKnowledgeChunks(List.of("chunk-36-0"), List.of(36L))).thenReturn(List.of(chunk));
+
+        ToolRouteResult result = service.tryAnswer(
+                "请调用 knowledge_search 检索唯一文档，再调用 knowledge_open_chunks 读取诊断定位符。",
+                user()).orElseThrow();
+
+        assertThat(result.answer()).isEqualTo("诊断定位符已读取。");
+        assertThat(result.toolCalls()).extracting(trace -> trace.get("tool_name"))
+                .containsExactly("knowledge_search", "knowledge_open_chunks");
+        assertThat(result.sources()).singleElement().satisfies(source ->
+                assertThat(source.getDocumentId()).isEqualTo(36L));
+        verify(nativeClient, times(1)).nextRound(any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldKeepAllToolsAvailableWhileSchedulingEvidenceReadBeforeAnotherSearch() {
         NativeToolCallingClient.PlannedToolCall searchCall = new NativeToolCallingClient.PlannedToolCall(
                 "call_search", "knowledge_search", Map.of("query", "取消预约规则"));
         NativeToolCallingClient.PlannedToolCall openCall = new NativeToolCallingClient.PlannedToolCall(
                 "call_open", "knowledge_open_chunks", Map.of("chunkUids", List.of("chunk-12-3")));
         when(nativeClient.nextRound(any(), any(), any(), any())).thenReturn(
-                new NativeToolCallingClient.ToolRound(List.of(searchCall), null, "glm-5.1"),
+                new NativeToolCallingClient.ToolRound(List.of(searchCall, openCall), null, "glm-5.1"),
                 new NativeToolCallingClient.ToolRound(List.of(openCall), null, "glm-5.1"),
                 new NativeToolCallingClient.ToolRound(List.of(), "已读取证据。", "glm-5.1")
         );
@@ -156,7 +214,10 @@ class NativeToolCallingServiceImplTest {
                 "hash", 120, 0.96D, 0.90D, 0.95D, "local", "hybrid", "提前取消的要求");
         when(aiServiceClient.retrieveKnowledge(any(), eq(List.of(12L))))
                 .thenReturn(new AiServiceClient.KnowledgeSearchResult("取消预约规则", List.of(candidate)));
-        when(aiServiceClient.openKnowledgeChunks(List.of("chunk-12-3"), List.of(12L))).thenReturn(List.of());
+        AiServiceClient.KnowledgeChunk chunk = new AiServiceClient.KnowledgeChunk(
+                "chunk-12-3", 12L, "v1", 3, 2, "取消规则", List.of("预约管理制度"),
+                "hash", 120, "取消预约需要在开始前完成。");
+        when(aiServiceClient.openKnowledgeChunks(List.of("chunk-12-3"), List.of(12L))).thenReturn(List.of(chunk));
 
         service.tryAnswer("取消预约有什么规则？", user()).orElseThrow();
 
@@ -165,7 +226,11 @@ class NativeToolCallingServiceImplTest {
         assertThat(tools.getAllValues().get(1).stream()
                 .map(definition -> String.valueOf(((Map<?, ?>) definition.get("function")).get("name")))
                 .toList())
-                .containsExactly("knowledge_open_chunks");
+                .contains("knowledge_search", "knowledge_open_chunks");
+        assertThat(tools.getAllValues().get(2).stream()
+                .map(definition -> String.valueOf(((Map<?, ?>) definition.get("function")).get("name")))
+                .toList())
+                .contains("knowledge_search", "knowledge_open_chunks");
     }
 
     @Test
