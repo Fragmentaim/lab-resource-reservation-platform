@@ -32,15 +32,15 @@
 
 ```powershell
 $env:QDRANT_COLLECTION = "robomaster_benchmark_v1"
-$env:QDRANT_LOCAL_PATH = "D:\RoboMaster_RAG\qdrant"
+$env:QDRANT_LOCAL_PATH = ".\eval-data\qdrant"
 $env:QDRANT_VECTOR_SIZE = "1024"
 $env:USE_LOCAL_EMBEDDING = "true"
-$env:LOCAL_EMBEDDING_MODEL = "D:\AI-Models\models\Qwen3-Embedding-0.6B"
+$env:LOCAL_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 
 python evals\run_rag_benchmark.py `
-  --golden D:\RoboMaster_RAG\robomaster_golden_v1.jsonl `
+  --golden .\eval-data\robomaster_golden_v1.jsonl `
   --document-id D1=9001 --document-id D2=9002 --document-id D3=9003 `
-  --output-dir D:\RoboMaster_RAG\benchmark-output
+  --output-dir .\eval-data\benchmark-output
 ```
 
 不要把“模型交叉答对”直接当作 Golden 标注。若证据审计显示原文不完整、解析遗漏或题目来自缺失附件，应从量化集排除并单独维护为语料缺口样例。
