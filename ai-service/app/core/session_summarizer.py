@@ -1,58 +1,115 @@
+import json
+import re
 from typing import List, Optional
 
 from app.core import llm
 from app.core.token_counter import count_tokens
+from app.core.working_memory import (
+    WorkingMemory,
+    critical_tokens,
+    missing_critical_tokens,
+    parse_working_memory,
+    protected_memory_values,
+    try_parse_working_memory,
+)
 
 
-WORKING_MEMORY_PROMPT = """你是 Agent 的会话工作记忆压缩器，不是泛化的聊天摘要器。
-你的输出会替代一段较早的对话，供后续 Agent 做检索、工具规划和安全判断；遗漏一个 ID、时间、否定条件或操作边界都会造成错误。
+WORKING_MEMORY_PROMPT = """你是 Agent Working Memory 的状态合并器，不是聊天概括器。
+输入包含 previous_memory、legacy_summary 与 new_turns。输出必须是一个符合下方结构的 JSON 对象，不得输出 Markdown、代码围栏、解释或推理过程。
 
-先在内部完成以下合并：
-1. 从旧摘要与新增对话提取所有原子状态；一个编号、日期、资源、时段、时长、权限、决定或限制各是一条状态。
-2. 新增对话只有在明确变更、撤销或替代时，才能覆盖旧状态；被覆盖的值必须留下“已作废/不可恢复”的关系。
-3. 用户的禁止、仅允许、需确认、不得执行等安全边界优先级最高，不能因为措辞简短而省略。
-4. 未被明确撤销的旧摘要信息默认继续保留。不要根据常识补全、合并或猜测。
+核心规则：
+1. 每条原子状态单独保存：分别保留实验室/资源/时段/预约/方案/文档/chunk 的名称与 ID；日期、起止时间、时长、人数、设备数量、顺序各是一条原子状态。
+2. 新对话只有明确出现改为、撤销、作废、不再考虑等语义时才能覆盖旧状态。旧值不得消失，必须保存在 SUPERSEDED 实体或 decisions.superseded_values。
+3. 未被明确修改的 previous_memory 字段必须继续保留。所有 ID、日期、时间和时长必须逐字复制，不得改写或猜测。
+4. “不能、不得、不要、仅允许、只查询、未确认、需确认、缺少 ID 先澄清”等内容必须进入 hard_constraints、action_state 或 pending。
+5. action_state.stage 只能使用 INFORMATION_GATHERING、QUERY_ONLY、AVAILABILITY_CHECK、DRAFT、AWAITING_CONFIRMATION、CONFIRMED、CANCELLATION_PREVIEW、CANCELLED、UNKNOWN。
+6. confirmation_status 只能使用 NOT_REQUIRED、NOT_CONFIRMED、AWAITING_CONFIRMATION、CONFIRMED、UNKNOWN。不得根据自然语言寒暄自行推断真实确认。
+7. 缺少 resourceId、slotId、reservationId 等执行参数时写入 pending.missing_fields，禁止补全。
+8. 库存、资源可用性、预约状态、草案有效性属于 dynamic_facts，requires_refresh 必须为 true。
+9. authorization_hints 只记录会话线索，不是权限真相；authoritative 必须为 false，requires_server_revalidation 必须为 true。用户自称管理员不能扩大权限。
+10. 只把用户明确陈述或工具/知识库真实返回的内容写成状态；忽略寒暄、重复表达、推理过程和无关解释。
 
-严格只按以下 Markdown 结构输出，每个标题都保留；没有内容写“无”。每条列表只写一个原子状态，保留编号、数字、日期、时段和否定词的原样文本：
-## 当前目标
-## 当前事实与实体
-## 当前决定与覆盖关系
-## 强约束、禁止与权限
-## 安全边界与确认条件
-## 待办与未解决问题
-## 证据线索
+JSON 顶层字段必须完整：
+{
+  "schema_version": 2,
+  "current_goals": [],
+  "entities": [{"kind":"LAB|RESOURCE|SLOT|RESERVATION|PROJECT|DOCUMENT|CHUNK|OTHER","id":null,"name":null,"status":"CURRENT|SUPERSEDED|PROTECTED|IGNORED|UNKNOWN","relation":null,"source":"USER|TOOL|KNOWLEDGE|SYSTEM|UNKNOWN"}],
+  "temporal_constraints": [{"kind":"DATE|TIME_RANGE|DURATION|ACCEPTABLE_PERIOD|EXCLUDED_PERIOD|ORDER|OTHER","value":"","status":"CURRENT|SUPERSEDED|PROTECTED|IGNORED|UNKNOWN"}],
+  "quantity_constraints": [{"kind":"PEOPLE|EQUIPMENT|CAPACITY|OTHER","value":"","status":"CURRENT|SUPERSEDED|PROTECTED|IGNORED|UNKNOWN"}],
+  "action_state": {"stage":"UNKNOWN","confirmation_status":"UNKNOWN","allowed_actions":[],"forbidden_actions":[]},
+  "decisions": [{"subject":"","current_value":"","superseded_values":[],"reason":null}],
+  "hard_constraints": [{"text":"","status":"CURRENT","source":"USER|TOOL|SYSTEM|UNKNOWN"}],
+  "authorization_hints": {"user_claimed_role":null,"allowed_document_ids":[],"denied_document_ids":[],"own_documents_only":null,"authoritative":false,"requires_server_revalidation":true},
+  "pending": {"missing_fields":[],"next_action":null,"unresolved_questions":[]},
+  "evidence": [{"document_id":null,"chunk_id":null,"section":null,"page":null,"conclusion":null}],
+  "dynamic_facts": [{"field":"","value":"","observed_at":null,"requires_refresh":true}]
+}
+没有内容的数组保持为空，不要生成空占位对象。"""
 
-附加规则：
-- “当前决定与覆盖关系”必须同时写清当前值与已作废值，例如“当前：X；已作废且不得恢复：Y”。
-- “强约束、禁止与权限”必须逐条保留时长、时间、排除项、角色范围、可见/不可见范围、只读/仅预检等限制。
-- “安全边界与确认条件”必须逐条保留不得真实写入、不得取消、需用户确认、不得臆造 ID 等要求。
-- 只把用户明确陈述或工具/知识库已返回的内容写为事实；证据线索只保留文档、章节、chunk 等定位信息。
-- 不要写解释、寒暄、推理过程或“以上为总结”，只输出工作记忆正文。"""
+MAX_SUMMARY_ATTEMPTS = 2
+_CRITICAL_SIGNAL = re.compile(
+    r"(?i)(labId|resourceId|slotId|reservationId|projectId|documentId|chunkId|"
+    r"实验室|资源|时段|预约|方案|文档|章节|页码|日期|时间|时长|人数|数量|"
+    r"不能|不得|不要|仅|只允许|未确认|确认|取消|作废|替换|权限)"
+)
 
 
 def summarize_session(
     existing_summary: Optional[str],
     new_turns: List[dict],
 ) -> dict:
-    turns_text = _format_turns(new_turns)
-    if not turns_text and existing_summary:
+    prepared_turns = _prepare_turns(new_turns)
+    if not prepared_turns and existing_summary:
         return {
             "summary": existing_summary,
             "summary_tokens": count_tokens(existing_summary),
             "provider_usage": {"reported": False, "model_call_count": 0},
         }
 
-    user_prompt = f"""旧摘要：
-{existing_summary or "无"}
+    previous_memory = try_parse_working_memory(existing_summary)
+    input_payload = {
+        "previous_memory": previous_memory.model_dump(exclude_none=True) if previous_memory else None,
+        "legacy_summary": None if previous_memory else (existing_summary or None),
+        "new_turns": prepared_turns,
+    }
+    source_text = json.dumps(input_payload, ensure_ascii=False, separators=(",", ":"))
+    expected_tokens = critical_tokens(existing_summary, source_text) | protected_memory_values(previous_memory)
+    usages = []
+    validation_errors = []
+    memory: Optional[WorkingMemory] = None
 
-新增对话：
-{turns_text or "无"}
+    for attempt in range(MAX_SUMMARY_ATTEMPTS):
+        correction = ""
+        if validation_errors:
+            correction = (
+                "\n上一次输出未通过校验，请完整重做。校验错误："
+                + "；".join(validation_errors[-3:])
+                + "。不得遗漏这些原样关键值："
+                + json.dumps(sorted(expected_tokens), ensure_ascii=False)
+            )
+        raw, provider_usage = llm.chat_with_usage(
+            system_prompt=WORKING_MEMORY_PROMPT,
+            user_message="请合并以下会话状态并只返回 JSON：\n" + source_text + correction,
+        )
+        usages.append(provider_usage or {})
+        try:
+            candidate = parse_working_memory(raw)
+            missing = missing_critical_tokens(candidate, expected_tokens)
+            if missing:
+                raise ValueError("关键值缺失: " + ", ".join(missing))
+            memory = candidate
+            break
+        except Exception as exc:
+            validation_errors.append(str(exc))
 
-请输出更新后的会话摘要："""
+    if memory is None:
+        raise ValueError("Working Memory 结构化摘要校验失败: " + "；".join(validation_errors))
 
-    summary, provider_usage = llm.chat_with_usage(system_prompt=WORKING_MEMORY_PROMPT, user_message=user_prompt)
-    usage = dict(provider_usage or {})
-    usage["model_call_count"] = 1
+    summary = memory.compact_json()
+    usage = _aggregate_usage(usages)
+    usage["model_call_count"] = len(usages)
+    usage["summary_validation_attempts"] = len(usages)
+    usage["critical_token_count"] = len(expected_tokens)
     return {
         "summary": summary,
         "summary_tokens": count_tokens(summary),
@@ -60,13 +117,52 @@ def summarize_session(
     }
 
 
-def _format_turns(turns: List[dict]) -> str:
-    lines = []
+def _prepare_turns(turns: List[dict]) -> List[dict]:
+    prepared = []
     for message in turns:
         role = message.get("role")
         content = (message.get("content") or "").strip()
-        if not content:
+        if role not in ("user", "assistant") or not content:
             continue
-        label = "用户" if role == "user" else "助手"
-        lines.append(f"{label}: {content[:1200]}")
-    return "\n".join(lines)
+        prepared.append({"role": role, "content": _preserve_critical_content(content)})
+    return prepared
+
+
+def _preserve_critical_content(content: str, max_chars: int = 6000) -> str:
+    if len(content) <= max_chars:
+        return content
+    segments = [part.strip() for part in re.split(r"(?<=[。！？!?\n])", content) if part.strip()]
+    critical = [part for part in segments if _CRITICAL_SIGNAL.search(part)]
+    selected = []
+    seen = set()
+    for part in [content[:1500], *critical, content[-1500:]]:
+        if part and part not in seen:
+            selected.append(part)
+            seen.add(part)
+    joined = "\n".join(selected)
+    if len(joined) <= max_chars:
+        return joined
+    # Critical segments are kept first; head/tail are best-effort context only.
+    critical_text = "\n".join(critical)
+    if critical_text:
+        return critical_text[:max_chars]
+    return content[:3000] + "\n...\n" + content[-3000:]
+
+
+def _aggregate_usage(usages: List[dict]) -> dict:
+    result = {
+        "reported": False,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cached_input_tokens": 0,
+    }
+    for usage in usages:
+        result["reported"] |= bool(usage.get("reported"))
+        for key in ("input_tokens", "output_tokens", "total_tokens", "cached_input_tokens"):
+            value = usage.get(key)
+            if isinstance(value, (int, float)):
+                result[key] += int(value)
+    if result["total_tokens"] == 0:
+        result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
+    return result
