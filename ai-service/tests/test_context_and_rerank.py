@@ -115,3 +115,34 @@ def test_hybrid_retrieval_uses_rrf_to_fuse_duplicate_candidates_and_preserves_ac
     assert results[0]["retrieval_ranks"] == {"vector": 2, "bm25": 1}
     assert len({item["chunk_id"] for item in results}) == 3
     assert calls == [("vector", [12]), ("keyword", [12])]
+
+
+def test_retrieval_uses_large_candidate_pool_but_returns_requested_top_k(monkeypatch):
+    monkeypatch.setattr(rag_pipeline.settings, "retrieval_mode", "keyword")
+    monkeypatch.setattr(rag_pipeline.settings, "enable_hybrid_search", False)
+    monkeypatch.setattr(rag_pipeline.settings, "enable_embedding", False)
+    monkeypatch.setattr(rag_pipeline.reranker, "candidate_limit", lambda _top_k: 20)
+
+    candidates = [
+        _result(f"chunk-{index}", f"候选证据 {index}", 20 - index)
+        for index in range(20)
+    ]
+    monkeypatch.setattr(
+        rag_pipeline.vectorstore,
+        "search_by_keywords",
+        lambda *_args, **_kwargs: candidates,
+    )
+
+    captured = {}
+
+    def fake_rerank(_question, results, _keywords, top_k):
+        captured["candidate_count"] = len(results)
+        captured["top_k"] = top_k
+        return results[:top_k]
+
+    monkeypatch.setattr(rag_pipeline.reranker, "rerank", fake_rerank)
+
+    results = rag_pipeline.retrieve_candidates("预约规则", document_ids=[12], top_k=5)
+
+    assert captured == {"candidate_count": 20, "top_k": 5}
+    assert len(results) == 5

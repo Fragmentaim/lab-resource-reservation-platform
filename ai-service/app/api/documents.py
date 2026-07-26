@@ -10,7 +10,7 @@ from app.models.schemas import (
     ProcessTaskResponse,
     DeleteVectorsResponse,
 )
-from app.core import parser, chunker, embedder, vectorstore
+from app.core import parser, chunker, embedder, vectorstore, elasticsearch_store
 from app.config import settings
 import tempfile
 import os
@@ -72,8 +72,9 @@ async def get_process_task(task_id: str):
 
 @router.delete("/{document_id}/vectors", response_model=DeleteVectorsResponse)
 async def delete_document_vectors(document_id: int):
-    """Delete all vectors for a document."""
+    """Delete all dense and lexical indexes for a document."""
     count = vectorstore.delete_by_document(document_id)
+    elasticsearch_store.delete_by_document(document_id)
     return DeleteVectorsResponse(deleted_count=count)
 
 
@@ -130,6 +131,11 @@ def _process_file(
         chunks=chunks,
         vectors=vectors,
         doc_version=doc_version,
+    )
+    elasticsearch_store.index_chunks(
+        document_id=document_id,
+        doc_version=doc_version,
+        chunks=chunks,
     )
     chunk_results = [
         ChunkResult(

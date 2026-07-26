@@ -51,8 +51,16 @@ class Settings(BaseSettings):
     hybrid_rrf_k: int = 60
     hybrid_vector_weight: float = 1.0
     hybrid_keyword_weight: float = 1.0
-    bm25_k1: float = 1.5
-    bm25_b: float = 0.75
+    elasticsearch_url: str = "http://localhost:9200"
+    elasticsearch_index: str = "lab_knowledge_chunks"
+    elasticsearch_username: str = ""
+    elasticsearch_password: str = ""
+    elasticsearch_verify_certs: bool = False
+    elasticsearch_request_timeout_seconds: float = 10.0
+    # Built-in "cjk" works without plugins. After installing analysis-ik,
+    # these may be changed to ik_max_word / ik_smart without code changes.
+    elasticsearch_index_analyzer: str = "cjk"
+    elasticsearch_search_analyzer: str = "cjk"
 
     # Rerank configuration. An API is preferred when configured; the local
     # CrossEncoder is opt-in so a normal service process does not load a GPU model.

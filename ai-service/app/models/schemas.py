@@ -156,6 +156,7 @@ class SessionSummaryResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     qdrant: str
+    lexical_search: str
     llm: str
     chat_model: str
     embedding_model: str

@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from app.config import settings
 from app.core.vectorstore import ensure_collection
+from app.core import elasticsearch_store
 from app.api import documents, qa, health, tool_calling
 
 
@@ -18,6 +19,11 @@ async def lifespan(app: FastAPI):
         print(f"[Startup] Qdrant collection '{settings.qdrant_collection}' ready")
     except Exception as e:
         print(f"[Startup] Warning: Could not connect to Qdrant: {e}")
+    try:
+        elasticsearch_store.ensure_index()
+        print(f"[Startup] Elasticsearch index '{settings.elasticsearch_index}' ready")
+    except Exception as e:
+        print(f"[Startup] Warning: Could not connect to Elasticsearch: {e}")
     yield
 
 

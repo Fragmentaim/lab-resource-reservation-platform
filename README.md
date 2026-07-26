@@ -13,12 +13,13 @@ flowchart LR
     Agent --> Tools[Business and RAG Tools]
     Tools --> AI[FastAPI AI Service]
     AI --> Parser[Parser / Chunker / OCR]
-    AI --> Retrieval[Embedding / Qdrant / Rerank]
+    AI --> Retrieval[Vector + BM25 / RRF / Rerank]
     Java --> MySQL[(MySQL)]
     Java --> Redis[(Redis)]
     Java --> MQ[RocketMQ]
     Java --> MinIO[(MinIO)]
     AI --> Qdrant[(Qdrant)]
+    AI --> ES[(Elasticsearch)]
 ```
 
 Java 服务负责身份、权限、预约业务、文档元数据、工具执行与审计；Python 服务负责文档解析、切片、向量检索、重排、上下文摘要和模型调用。业务权限始终由 Java 侧校验，模型不能绕过服务层直接访问数据库。
@@ -63,12 +64,13 @@ RAG 不是固定前置步骤，而是 Agent 可按需调用的工具。当前工
 - PDF 按页执行 Native / Hybrid / OCR 路由：文本页直接解析，图文混排页仅 OCR 图片区域，扫描页执行整页 OCR。
 - PaddleOCR 按需加载，可配置 GPU/CPU；解析结果记录路由、字符数、图片数、置信度和警告信息。
 - 文档访问范围支持公开、管理员、上传者和指定用户；向量检索前先计算可访问文档集合并下推过滤条件。
+- 检索采用 Qdrant 向量召回与 Elasticsearch BM25 双路召回，将文档 ACL 过滤同时下推到两条检索链路；候选结果经加权 RRF 融合后统一 Rerank，最终只向 Agent 返回配置的 TopK 证据。
 - 文档上传、解析、切片和索引构建通过 RocketMQ + Outbox 异步执行，失败任务保留重试次数与处理轨迹。
 
 ## 技术栈
 
 - Java 17、Spring Boot 4、MyBatis-Plus、MySQL、Redis、RocketMQ、JWT
-- Python 3.11+、FastAPI、Qdrant、PaddleOCR、Sentence Transformers
+- Python 3.11+、FastAPI、Qdrant、Elasticsearch、PaddleOCR、Sentence Transformers
 - MinIO、Maven、Docker、Git
 
 ## 仓库结构
@@ -86,20 +88,20 @@ RAG 不是固定前置步骤，而是 Agent 可按需调用的工具。当前工
 
 ### 1. Docker Compose（推荐）
 
-仓库提供 MySQL、Redis、RocketMQ 4.9、MinIO、Qdrant、Spring Boot 与 FastAPI 的本地运行编排。复制环境变量模板后启动：
+仓库提供 MySQL、Redis、RocketMQ 4.9、MinIO、Qdrant、Elasticsearch、Spring Boot 与 FastAPI 的本地运行编排。复制环境变量模板后启动：
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-首次启动会初始化演示数据库。默认端口为：后端 `8081`、AI 服务 `8000`、MinIO Console `9001`、Qdrant `6333`；可在根目录 `.env` 覆盖。后端健康检查为 `GET /system/health`，AI 服务健康检查为 `GET /api/v1/ai/health`。
+首次启动会初始化演示数据库。默认端口为：后端 `8081`、AI 服务 `8000`、MinIO Console `9001`、Qdrant `6333`、Elasticsearch `9200`；可在根目录 `.env` 覆盖。后端健康检查为 `GET /system/health`，AI 服务健康检查为 `GET /api/v1/ai/health`。
 
 `.env.example` 中是仅供本地演示的默认值，部署前必须替换数据库密码、MinIO 密码和 JWT 密钥。LLM/Embedding 可填写任意 OpenAI-compatible 服务；未配置模型时，文档及基础设施服务仍可启动，但模型相关接口会处于降级状态。
 
 ### 2. 手动启动基础设施
 
-准备 MySQL 8、Redis、RocketMQ 4.9.x、MinIO 和 Qdrant。首次初始化时按顺序执行：
+准备 MySQL 8、Redis、RocketMQ 4.9.x、MinIO、Qdrant 和 Elasticsearch 8.19.x。首次初始化时按顺序执行：
 
 ```sql
 source backend/src/main/resources/sql/lab-booking-rebuild-init.sql;
@@ -143,7 +145,18 @@ cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-在 `.env` 中配置 OpenAI-compatible 模型接口、Embedding、Rerank、Qdrant 和 OCR。密钥及本地模型目录不会提交到仓库。
+在 `.env` 中配置 OpenAI-compatible 模型接口、Embedding、Rerank、Qdrant、Elasticsearch 和 OCR。密钥及本地模型目录不会提交到仓库。
+
+关键词检索默认使用 Elasticsearch 内置 `cjk` analyzer，无须安装插件即可运行。若部署环境已安装与 Elasticsearch **完全同版本**的 IK Analysis 插件，可将 `ELASTICSEARCH_INDEX_ANALYZER` / `ELASTICSEARCH_SEARCH_ANALYZER` 分别改为 `ik_max_word` / `ik_smart`；分析器变更后需要重建索引。
+
+从只使用 Qdrant 的旧环境升级时，先启动 Qdrant 与 Elasticsearch，再执行一次回填：
+
+```bash
+cd ai-service
+python -m app.cli.rebuild_elasticsearch
+```
+
+该命令流式读取 Qdrant 中已有的 chunk payload，以稳定 `chunkId` 写入 Elasticsearch，不需要重新上传原始文档。新文档入库和文档删除会同时维护 Qdrant 与 Elasticsearch；任一索引写入失败时，本次异步文档任务保持失败状态并进入原有重试流程。项目不再保留进程内 BM25 旁路，避免多实例索引不一致和全量扫描 Qdrant。
 
 ## 测试
 
@@ -193,7 +206,7 @@ Agent Run 在规划和每次工具执行状态变化后写入短时 checkpoint�
 - 会话上下文：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/`
 - 文档权限与知识库：`backend/src/main/java/com/fragment/labbooking/knowledge/`
 - 文档解析与 OCR：`ai-service/app/core/parser.py`、`ai-service/app/core/ocr_engine.py`
-- 检索与切片：`ai-service/app/core/chunker.py`、`ai-service/app/core/rag_pipeline.py`、`ai-service/app/core/reranker.py`
+- 检索与切片：`ai-service/app/core/chunker.py`、`ai-service/app/core/rag_pipeline.py`、`ai-service/app/core/elasticsearch_store.py`、`ai-service/app/core/reranker.py`
 - 检索质量门槛：`ai-service/app/core/retrieval_eval.py`、`ai-service/evals/`
 - 数据库脚本：`sql/`
 

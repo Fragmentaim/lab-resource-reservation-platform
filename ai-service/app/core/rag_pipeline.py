@@ -229,10 +229,9 @@ def _retrieve_ranked_candidates(
         first_stage = _fuse_hybrid_results(vector_results, keyword_results, candidate_k)
     else:
         first_stage = _dedupe_results(vector_results + keyword_results)
-    ranked_limit = min(len(first_stage), max(k, candidate_k))
     if not apply_rerank:
-        return first_stage[:ranked_limit]
-    return reranker.rerank(question, first_stage, _extract_keywords(question), ranked_limit)
+        return first_stage[:min(len(first_stage), candidate_k)]
+    return reranker.rerank(question, first_stage, _extract_keywords(question), k)
 
 
 def _fuse_hybrid_results(vector_results: List[dict], keyword_results: List[dict], limit: int) -> List[dict]:

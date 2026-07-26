@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from app.models.schemas import HealthResponse
 from app.config import settings
-from app.core import vectorstore, reranker, model_gateway
+from app.core import vectorstore, elasticsearch_store, reranker, model_gateway
 import httpx
 
 router = APIRouter(tags=["health"])
@@ -15,6 +15,7 @@ async def health_check():
         vectorstore.get_client().get_collections()
     except Exception:
         qdrant_status = "disconnected"
+    lexical_status = elasticsearch_store.status()
 
     # Some OpenAI-compatible providers support chat completions but do not expose
     # a reliable /v1/models endpoint, so treat that probe as advisory only.
@@ -39,8 +40,14 @@ async def health_check():
             llm_status = "models_unverified"
 
     return HealthResponse(
-        status="ok" if qdrant_status == "connected" and llm_configured and not llm_status.startswith("auth_error") else "degraded",
+        status="ok" if (
+            qdrant_status == "connected"
+            and lexical_status != "disconnected"
+            and llm_configured
+            and not llm_status.startswith("auth_error")
+        ) else "degraded",
         qdrant=qdrant_status,
+        lexical_search=lexical_status,
         llm=llm_status,
         chat_model=settings.chat_model,
         embedding_model=settings.local_embedding_model if settings.use_local_embedding else settings.embedding_model,

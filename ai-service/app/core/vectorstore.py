@@ -1,32 +1,19 @@
 from pathlib import Path
-from dataclasses import dataclass
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
     Filter, FieldCondition, MatchValue, MatchAny,
-    DeletePayload, PointsSelector, PointIdsList,
+    PointIdsList,
 )
-from typing import List, Optional, Sequence
-import re
+from typing import Iterator, List, Optional, Sequence
 import threading
 import uuid
-from rank_bm25 import BM25Okapi
 from app.config import settings
 
 
 _client = None
-_bm25_index = None
-_bm25_lock = threading.Lock()
 # Embedded Qdrant writes are serialized; reads remain concurrent.
 _mutation_lock = threading.RLock()
-
-
-@dataclass(frozen=True)
-class _Bm25Index:
-    """A process-local lexical index rebuilt lazily from the active collection."""
-
-    corpus: list[dict]
-    scorer: Optional[BM25Okapi]
 
 
 def get_client() -> QdrantClient:
@@ -103,7 +90,6 @@ def upsert_chunks(
             collection_name=settings.qdrant_collection,
             points=points,
         )
-        invalidate_bm25_index()
 
     return [p.id for p in points]
 
@@ -162,78 +148,32 @@ def search(
     ]
 
 
-def search_by_bm25(query: str, top_k: int = None, document_ids: Optional[List[int]] = None) -> list:
-    """Run BM25 over active chunks after applying the document ACL filter."""
-    if document_ids is not None and not document_ids:
-        return []
-
-    k = top_k or settings.top_k
-    query_tokens = _bm25_tokens(query)
-    if not query_tokens:
-        return []
-
-    index = _get_bm25_index()
-    if not index.scorer:
-        return []
-    allowed_ids = set(document_ids) if document_ids is not None else None
-    scores = index.scorer.get_scores(query_tokens)
-    ranked = []
-    for corpus_index, (payload, score) in enumerate(zip(index.corpus, scores)):
-        if allowed_ids is not None and payload.get("document_id") not in allowed_ids:
-            continue
-        if float(score) <= 0:
-            continue
-        result = _result_from_payload(str(payload.get("point_id") or ""), float(score), payload)
-        result["lexical_score"] = float(score)
-        result["bm25_corpus_index"] = corpus_index
-        ranked.append(result)
-    ranked.sort(key=lambda item: (-item["score"], _stable_chunk_key(item)))
-    return ranked[:k]
-
-
 def search_by_keywords(
     keywords: str | Sequence[str],
     top_k: int = None,
     document_ids: Optional[List[int]] = None,
 ) -> list:
+    """Search the Elasticsearch BM25 index with the caller's ACL document IDs."""
     query = keywords if isinstance(keywords, str) else " ".join(
         str(keyword) for keyword in keywords if keyword
     )
-    return search_by_bm25(query, top_k, document_ids)
+    from app.core import elasticsearch_store
+    return elasticsearch_store.search(
+        query=query,
+        top_k=top_k or settings.top_k,
+        document_ids=document_ids,
+    )
 
 
-def invalidate_bm25_index() -> None:
-    global _bm25_index
-    with _bm25_lock:
-        _bm25_index = None
-
-
-def _get_bm25_index() -> _Bm25Index:
-    global _bm25_index
-    if _bm25_index is not None:
-        return _bm25_index
-
-    with _bm25_lock:
-        if _bm25_index is None:
-            corpus = _load_bm25_corpus()
-            tokenized = [_bm25_tokens(_bm25_document_text(payload)) for payload in corpus]
-            # BM25Okapi requires at least one token per document.
-            _bm25_index = _Bm25Index(
-                corpus=corpus,
-                scorer=BM25Okapi(tokenized, k1=settings.bm25_k1, b=settings.bm25_b) if tokenized else None,
-            )
-    return _bm25_index
-
-
-def _load_bm25_corpus() -> list[dict]:
+def iter_chunk_payloads(batch_size: int = 512) -> Iterator[dict]:
+    """Stream existing Qdrant chunk payloads for lexical-index migration."""
     client = get_client()
-    corpus = []
     offset = None
     while True:
         points, offset = client.scroll(
             collection_name=settings.qdrant_collection,
             offset=offset,
-            limit=512,
+            limit=max(1, batch_size),
             with_payload=True,
         )
         for point in points:
@@ -241,36 +181,9 @@ def _load_bm25_corpus() -> list[dict]:
             if not payload.get("content"):
                 continue
             payload["point_id"] = str(point.id)
-            corpus.append(payload)
+            yield payload
         if offset is None:
             break
-    return corpus
-
-
-def _bm25_document_text(payload: dict) -> str:
-    title_path = payload.get("title_path_text") or " ".join(payload.get("title_path") or [])
-    return "\n".join(filter(None, [
-        str(title_path),
-        str(payload.get("section_title") or ""),
-        str(payload.get("content") or ""),
-    ]))
-
-
-def _bm25_tokens(text: str) -> list[str]:
-    """Tokenize ASCII terms and Chinese unigrams/bigrams for BM25."""
-    tokens = []
-    for part in re.findall(r"[\u4e00-\u9fff]+|[A-Za-z0-9_.%+-]+", (text or "").lower()):
-        if any("\u4e00" <= char <= "\u9fff" for char in part):
-            tokens.append(part)
-            if len(part) >= 2:
-                tokens.extend(part[index:index + 2] for index in range(len(part) - 1))
-        else:
-            tokens.append(part)
-    return tokens
-
-
-def _stable_chunk_key(result: dict) -> str:
-    return str(result.get("chunk_id") or result.get("content_hash") or result.get("point_id") or "")
 
 
 def get_chunks_by_ids(chunk_ids: List[str], document_ids: Optional[List[int]] = None) -> List[dict]:
@@ -337,6 +250,5 @@ def delete_by_document(document_id: int) -> int:
             collection_name=settings.qdrant_collection,
             points_selector=PointIdsList(points=ids),
         )
-        invalidate_bm25_index()
 
     return len(ids)
