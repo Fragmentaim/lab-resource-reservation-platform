@@ -1,8 +1,10 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.model.EvidenceCard;
-import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
@@ -21,17 +23,19 @@ import java.util.Map;
 @Component
 public class KnowledgeAgentTools {
 
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() { };
+
     private final AgentToolRuntime runtime;
     private final KbDocumentService documentService;
     private final AiServiceClient aiServiceClient;
-    private final AgentModelMapper agentModelMapper;
+    private final ObjectMapper objectMapper;
 
     public KnowledgeAgentTools(AgentToolRuntime runtime, KbDocumentService documentService,
-                               AiServiceClient aiServiceClient, AgentModelMapper agentModelMapper) {
+                               AiServiceClient aiServiceClient, ObjectMapper objectMapper) {
         this.runtime = runtime;
         this.documentService = documentService;
         this.aiServiceClient = aiServiceClient;
-        this.agentModelMapper = agentModelMapper;
+        this.objectMapper = objectMapper;
     }
 
     @Tool(name = "knowledge_search", description = "检索当前用户有权限访问的实验室制度、预约规则、设备使用说明和流程。遇到规则、政策、流程、费用、处罚或无法由预约工具直接回答的问题时必须调用。只返回候选 chunk 定位信息；要依据知识库事实回答，必须再调用 knowledge_open_chunks 读取候选全文。")
@@ -108,7 +112,7 @@ public class KnowledgeAgentTools {
                 .map(AiServiceClient.KnowledgeChunk::chunkUid).toList());
         List<QaSourceVO> sources = chunks.stream().map(this::toQaSource).toList();
         List<Map<String, Object>> evidence = chunks.stream()
-                .map(EvidenceCard::from).map(agentModelMapper::toolPayload).toList();
+                .map(Evidence::from).map(value -> objectMapper.convertValue(value, MAP_TYPE)).toList();
         String status = evidence.isEmpty() ? "NO_MATCH" : "OK";
         return AgentToolResult.withSources(Map.of("status", status, "chunks", evidence), sources, Map.of(
                 "knowledge_status", status,
@@ -185,5 +189,21 @@ public class KnowledgeAgentTools {
             return "";
         }
         return content.length() <= 240 ? content : content.substring(0, 240);
+    }
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    private record Evidence(String chunkUid, String sectionTitle, Integer pageNo,
+                            List<String> titlePath, Integer tokenCount, String content) {
+        private Evidence {
+            chunkUid = chunkUid == null ? "" : chunkUid;
+            sectionTitle = sectionTitle == null ? "" : sectionTitle;
+            titlePath = titlePath == null ? List.of() : List.copyOf(titlePath);
+            content = content == null ? "" : content;
+        }
+
+        static Evidence from(AiServiceClient.KnowledgeChunk source) {
+            return new Evidence(source.chunkUid(), source.sectionTitle(), source.pageNo(), source.titlePath(),
+                    source.tokenCount(), source.content());
+        }
     }
 }

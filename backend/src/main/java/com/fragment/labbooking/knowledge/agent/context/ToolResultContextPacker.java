@@ -1,6 +1,5 @@
 package com.fragment.labbooking.knowledge.agent.context;
 
-import com.fragment.labbooking.knowledge.agent.model.AgentModelGuard;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -132,8 +131,8 @@ public class ToolResultContextPacker {
 
     public record PackedToolResult(Map<String, Object> modelOutput, Map<String, Object> safeDetail) {
         public PackedToolResult {
-            modelOutput = AgentModelGuard.map(modelOutput);
-            safeDetail = AgentModelGuard.map(safeDetail);
+            modelOutput = modelOutput == null ? Map.of() : Map.copyOf(modelOutput);
+            safeDetail = safeDetail == null ? Map.of() : Map.copyOf(safeDetail);
         }
     }
 }

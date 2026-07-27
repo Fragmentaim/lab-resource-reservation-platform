@@ -3,7 +3,6 @@ package com.fragment.labbooking.knowledge.agent.tool;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.knowledge.agent.context.ToolResultContextPacker;
-import com.fragment.labbooking.knowledge.agent.model.AgentToolExecution;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
@@ -116,7 +115,7 @@ public class AgentToolRuntime {
         if (captureArguments) {
             detail.put("evaluation_arguments", sanitize(arguments));
         }
-        runService.recordToolExecution(context.traceId(), new AgentToolExecution(
+        runService.recordToolExecution(context.traceId(), new AgentRunService.ToolExecution(
                 toolName, status, (int) Math.min(Integer.MAX_VALUE, latencyMs), toolTraceId,
                 "spring_ai_annotated_tool", detail));
     }

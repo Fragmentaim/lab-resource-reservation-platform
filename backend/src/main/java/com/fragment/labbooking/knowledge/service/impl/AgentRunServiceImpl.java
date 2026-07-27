@@ -4,11 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fragment.labbooking.knowledge.agent.model.AgentToolExecution;
-import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
-import com.fragment.labbooking.knowledge.agent.model.ContextPlan;
-import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
-import com.fragment.labbooking.knowledge.agent.model.SessionContextPlan;
+import com.fragment.labbooking.knowledge.agent.context.SessionContextPlanner;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
 import com.fragment.labbooking.knowledge.entity.AgentRuntimeCheckpoint;
@@ -52,7 +48,6 @@ public class AgentRunServiceImpl implements AgentRunService {
     private final AgentStepMapper agentStepMapper;
     private final QaContextTraceMapper qaContextTraceMapper;
     private final ObjectMapper objectMapper;
-    private final AgentModelMapper agentModelMapper;
 
     @Value("${app.knowledge.agent-checkpoint.ttl-seconds:900}")
     private long checkpointTtlSeconds;
@@ -60,14 +55,12 @@ public class AgentRunServiceImpl implements AgentRunService {
     public AgentRunServiceImpl(AgentRunMapper agentRunMapper, AgentRuntimeCheckpointMapper checkpointMapper,
                                AgentStepMapper agentStepMapper,
                                QaContextTraceMapper qaContextTraceMapper,
-                               ObjectMapper objectMapper,
-                               AgentModelMapper agentModelMapper) {
+                               ObjectMapper objectMapper) {
         this.agentRunMapper = agentRunMapper;
         this.checkpointMapper = checkpointMapper;
         this.agentStepMapper = agentStepMapper;
         this.qaContextTraceMapper = qaContextTraceMapper;
         this.objectMapper = objectMapper;
-        this.agentModelMapper = agentModelMapper;
     }
 
     @Override
@@ -95,7 +88,7 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     @Override
-    public void beginRuntime(String traceId, PolicyContext policy) {
+    public void beginRuntime(String traceId, AgentState.Policy policy) {
         safely(traceId, () -> {
             AgentRun run = findRun(traceId);
             if (run == null) {
@@ -104,7 +97,7 @@ public class AgentRunServiceImpl implements AgentRunService {
             run.setRoute("AGENT_RUNTIME");
             agentRunMapper.updateById(run);
             insertStep(run.getId(), nextStepNo(run.getId()), "STATE", "agent_runtime_started", SUCCEEDED, 0, null,
-                    agentModelMapper.attributes(policy));
+                    Map.of("actor_type", policy.admin() ? "ADMIN" : "USER", "role", policy.role()));
         });
     }
 
@@ -121,7 +114,7 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     @Override
-    public Optional<AgentState> restoreRuntimeCheckpoint(String traceId, PolicyContext policy) {
+    public Optional<AgentState> restoreRuntimeCheckpoint(String traceId, AgentState.Policy policy) {
         if (!StringUtils.hasText(traceId) || policy == null || policy.userId() == null) {
             return Optional.empty();
         }
@@ -151,18 +144,18 @@ public class AgentRunServiceImpl implements AgentRunService {
                 addProviderUsage(run, plan.providerUsage(), 1);
                 agentRunMapper.updateById(run);
                 insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "model_tool_plan", SUCCEEDED, 0, null,
-                        agentModelMapper.detail(plan));
+                        jsonMap(plan));
             }
         });
     }
 
     @Override
-    public void recordSessionContextPlan(String traceId, SessionContextPlan plan) {
+    public void recordSessionContextPlan(String traceId, SessionContextPlanner.Plan plan) {
         safely(traceId, () -> {
             AgentRun run = findRun(traceId);
             if (run != null) {
                 insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "session_context_plan", SUCCEEDED, 0, null,
-                        agentModelMapper.detail(plan));
+                        jsonMap(plan));
             }
         });
     }
@@ -184,12 +177,12 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     @Override
-    public void recordToolExecution(String traceId, AgentToolExecution execution) {
+    public void recordToolExecution(String traceId, ToolExecution execution) {
         safely(traceId, () -> {
             AgentRun run = findRun(traceId);
             if (run != null) {
                 insertStep(run.getId(), nextStepNo(run.getId()), "TOOL_CALL", execution.toolName(), execution.status(),
-                        execution.latencyMs(), execution.toolTraceId(), agentModelMapper.detail(execution));
+                        execution.latencyMs(), execution.toolTraceId(), toolExecutionDetail(execution));
             }
         });
     }
@@ -527,6 +520,17 @@ public class AgentRunServiceImpl implements AgentRunService {
         } catch (Exception exception) {
             return "{}";
         }
+    }
+
+    private Map<String, Object> jsonMap(Object value) {
+        return objectMapper.convertValue(value, new TypeReference<>() { });
+    }
+
+    private Map<String, Object> toolExecutionDetail(ToolExecution execution) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("protocol", execution.protocol());
+        detail.putAll(execution.detail());
+        return detail;
     }
 
     private void safely(QaRecord record, Runnable task) {

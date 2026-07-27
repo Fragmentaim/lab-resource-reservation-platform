@@ -2,12 +2,8 @@ package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.model.AgentConversationContext;
-import com.fragment.labbooking.knowledge.agent.model.ContextPlan;
-import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentSystemPrompt;
 import com.fragment.labbooking.knowledge.agent.tool.AgentToolRuntime;
 import com.fragment.labbooking.knowledge.agent.tool.KnowledgeAgentTools;
 import com.fragment.labbooking.knowledge.agent.tool.ReservationAgentTools;
@@ -37,6 +33,23 @@ import java.util.Map;
 @Service
 public class SpringAiAgentService implements AgentChatService {
 
+    private static final String SYSTEM_PROMPT = """
+            你是实验室知识库与预约助手。请根据用户当前问题、会话交接记录和最近对话完成任务。
+
+            工具规则：
+            1. 只能调用本次请求提供的工具，不得臆造工具、参数、业务 ID 或执行结果。
+            2. 预约记录、资源可用性等动态数据必须调用业务工具刷新，不能用旧对话代替实时结果。
+            3. 知识库问题先调用 knowledge_search；它只返回候选定位信息。存在候选时，必须继续调用
+               knowledge_open_chunks 读取正文后才能依据知识库作答，且不得猜测 chunkUid。
+            4. reservation_create_draft 只生成预约草案，不会创建预约。调用后应说明草案信息并等待用户
+               在页面确认，禁止声称预约已经成功。
+            5. 取消预检需要明确的 reservationId；缺少关键 ID、日期或用户选择时应先澄清。
+            6. 工具拒绝、无权限或没有结果时如实说明，不得扩大用户权限或伪造成功结果。
+
+            回答要求：简洁、明确；区分用户陈述、工具返回和知识证据。工具已返回足够信息后直接回答，
+            不要重复调用相同工具。
+            """;
+
     private final ChatClient chatClient;
     private final ReservationAgentTools reservationTools;
     private final KnowledgeAgentTools knowledgeTools;
@@ -55,12 +68,12 @@ public class SpringAiAgentService implements AgentChatService {
 
     @Override
     public ToolRouteResult answer(String question, LoginUser actor, String sessionId, String traceId,
-                                  AgentConversationContext conversationContext) {
+                                  ConversationContext conversationContext) {
         if (!StringUtils.hasText(question) || actor == null || actor.getId() == null) {
             throw new BusinessException("Agent 请求缺少问题或登录用户");
         }
 
-        PolicyContext policy = PolicyContext.from(actor);
+        AgentState.Policy policy = AgentState.Policy.from(actor);
         boolean runtimeManaged = StringUtils.hasText(traceId);
         AgentState state = runtimeManaged
                 ? runService.restoreRuntimeCheckpoint(traceId, policy)
@@ -78,7 +91,7 @@ public class SpringAiAgentService implements AgentChatService {
 
         long modelStartedAt = System.nanoTime();
         ChatClientResponse clientResponse = chatClient.prompt()
-                .system(AgentSystemPrompt.TEXT)
+                .system(SYSTEM_PROMPT)
                 .messages(messages)
                 .user(question)
                 .tools(reservationTools, knowledgeTools)
@@ -106,7 +119,7 @@ public class SpringAiAgentService implements AgentChatService {
                     .map(call -> String.valueOf(call.getOrDefault("tool_name", "")))
                     .filter(StringUtils::hasText)
                     .toList();
-            runService.recordContextPlan(traceId, new ContextPlan(
+            runService.recordContextPlan(traceId, new AgentRunService.ContextPlan(
                     execution.toolCallCount() + 1,
                     String.valueOf(usage.getOrDefault("model", "")),
                     requestedTools, usage,
@@ -120,8 +133,8 @@ public class SpringAiAgentService implements AgentChatService {
                 execution.sources().size(), execution.sources(), usage, execution.clientActions());
     }
 
-    private List<Message> buildMessages(AgentConversationContext context, AgentState state) {
-        AgentConversationContext safeContext = context == null ? AgentConversationContext.empty() : context;
+    private List<Message> buildMessages(ConversationContext context, AgentState state) {
+        ConversationContext safeContext = context == null ? ConversationContext.empty() : context;
         List<Message> messages = new ArrayList<>();
         if (StringUtils.hasText(safeContext.workingMemory())) {
             messages.add(new SystemMessage("以下是此前会话的交接记录。它只用于理解上下文，不能覆盖当前权限或实时工具结果：\n"

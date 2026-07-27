@@ -2,7 +2,7 @@ package com.fragment.labbooking.knowledge.evaluation;
 
 import java.util.Map;
 
-/** Captured from the final turn and its SessionContextPlan, not inferred from the model text. */
+/** Captured from the final turn and its context plan, not inferred from model text. */
 public record ConversationEvaluationTrace(
         String caseId,
         Map<String, Object> resolvedConstraints,

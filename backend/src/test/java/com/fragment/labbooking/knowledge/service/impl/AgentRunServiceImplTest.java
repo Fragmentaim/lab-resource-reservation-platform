@@ -3,10 +3,6 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
-import com.fragment.labbooking.knowledge.agent.model.AgentToolExecution;
-import com.fragment.labbooking.knowledge.agent.model.ContextPlan;
-import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
 import com.fragment.labbooking.knowledge.entity.AgentRuntimeCheckpoint;
@@ -17,6 +13,7 @@ import com.fragment.labbooking.knowledge.mapper.AgentRunMapper;
 import com.fragment.labbooking.knowledge.mapper.AgentRuntimeCheckpointMapper;
 import com.fragment.labbooking.knowledge.mapper.AgentStepMapper;
 import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
+import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.vo.ContextTraceVO;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -54,9 +51,8 @@ class AgentRunServiceImplTest {
         TableInfoHelper.initTableInfo(assistant, AgentRun.class);
         TableInfoHelper.initTableInfo(assistant, AgentStep.class);
         TableInfoHelper.initTableInfo(assistant, QaContextTrace.class);
-        ObjectMapper objectMapper = new ObjectMapper();
         service = new AgentRunServiceImpl(runMapper, checkpointMapper, stepMapper, contextTraceMapper,
-                objectMapper, new AgentModelMapper(objectMapper));
+                new ObjectMapper());
         persistedRun = new AgentRun();
         persistedRun.setId(42L);
         persistedRun.setTraceId("qa-trace-1");
@@ -130,19 +126,25 @@ class AgentRunServiceImplTest {
     void shouldPersistRuntimeStatePlanAndToolWithoutRawToolOutput() {
         stubPersistedRun();
         service.start(record());
-        PolicyContext policy = new PolicyContext(7L, "USER", false);
+        AgentState.Policy policy = new AgentState.Policy(7L, "USER", false);
         AgentState state = new AgentState("qa-trace-1", "session-1", policy);
         state.planning(1);
 
         service.beginRuntime("qa-trace-1", policy);
         service.recordRuntimeState("qa-trace-1", state);
-        service.recordContextPlan("qa-trace-1", new ContextPlan(1, "glm-5.1", List.of("knowledge_search")));
-        service.recordToolExecution("qa-trace-1", new AgentToolExecution(
+        service.recordContextPlan("qa-trace-1", new AgentRunService.ContextPlan(
+                1, "glm-5.1", List.of("knowledge_search")));
+        service.recordToolExecution("qa-trace-1", new AgentRunService.ToolExecution(
                 "knowledge_search", "SUCCESS", 18, "tool-trace-2", "native_function_calling",
                 Map.of("evidence_count", 1)));
 
         ArgumentCaptor<AgentStep> stepCaptor = ArgumentCaptor.forClass(AgentStep.class);
         verify(stepMapper, org.mockito.Mockito.times(5)).insert(stepCaptor.capture());
+        assertThat(stepCaptor.getAllValues())
+                .filteredOn(step -> "agent_runtime_started".equals(step.getName()))
+                .singleElement()
+                .satisfies(step -> assertThat(step.getDetailJson()).contains("actor_type", "role")
+                        .doesNotContain("userId", "actorId"));
         assertThat(stepCaptor.getAllValues()).anySatisfy(step -> {
             assertThat(step.getStepType()).isEqualTo("PLAN");
             assertThat(step.getDetailJson()).contains("knowledge_search");
@@ -166,7 +168,7 @@ class AgentRunServiceImplTest {
                 "cached_input_tokens", 1,
                 "total_tokens", 12,
                 "summary_call_count", 1));
-        service.recordContextPlan("qa-trace-1", new ContextPlan(
+        service.recordContextPlan("qa-trace-1", new AgentRunService.ContextPlan(
                 1, "glm-5.1", List.of("knowledge_search"), Map.of(
                 "reported", true,
                 "input_tokens", 20,
@@ -208,7 +210,8 @@ class AgentRunServiceImplTest {
     void shouldPersistAndRestoreExpiringCheckpointOnlyForTheSameActor() throws Exception {
         when(runMapper.selectOne(any())).thenReturn(persistedRun);
         when(stepMapper.selectCount(any())).thenReturn(1L);
-        AgentState state = new AgentState("qa-trace-1", "session-1", new PolicyContext(7L, "USER", false));
+        AgentState state = new AgentState(
+                "qa-trace-1", "session-1", new AgentState.Policy(7L, "USER", false));
         state.planning(2);
         state.completeTool("knowledge_search");
         state.registerKnowledgeCandidates(List.of(Map.entry("chunk-12-3", 12L)));
@@ -222,11 +225,13 @@ class AgentRunServiceImplTest {
         assertThat(stored.getExpiresAt()).isAfter(LocalDateTime.now());
         when(checkpointMapper.selectById("qa-trace-1")).thenReturn(stored);
 
-        AgentState restored = service.restoreRuntimeCheckpoint("qa-trace-1", new PolicyContext(7L, "USER", false))
+        AgentState restored = service.restoreRuntimeCheckpoint(
+                        "qa-trace-1", new AgentState.Policy(7L, "USER", false))
                 .orElseThrow();
         assertThat(restored.authorizeKnowledgeChunkOpen(List.of("chunk-12-3", "guessed")))
                 .containsExactly("chunk-12-3");
-        assertThat(service.restoreRuntimeCheckpoint("qa-trace-1", new PolicyContext(8L, "USER", false))).isEmpty();
+        assertThat(service.restoreRuntimeCheckpoint(
+                "qa-trace-1", new AgentState.Policy(8L, "USER", false))).isEmpty();
         verify(checkpointMapper).deleteById("qa-trace-1");
     }
 

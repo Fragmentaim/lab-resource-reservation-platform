@@ -3,7 +3,6 @@ package com.fragment.labbooking.knowledge.agent.tool;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.agent.context.ToolResultContextPacker;
-import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
@@ -38,7 +37,7 @@ class AgentToolRuntimeTest {
         runtime = new AgentToolRuntime(contextPacker, auditService, runService, true);
         LoginUser actor = new LoginUser(7L, "user7", "用户", "USER", "13800000000");
         context = new AgentExecutionContext(actor, "查看我的预约", "trace-1",
-                new AgentState("trace-1", "session-1", PolicyContext.from(actor)), true, 8);
+                new AgentState("trace-1", "session-1", AgentState.Policy.from(actor)), true, 8);
     }
 
     @Test

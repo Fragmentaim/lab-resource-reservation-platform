@@ -1,8 +1,9 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
-import com.fragment.labbooking.knowledge.agent.model.AgentModelGuard;
 import com.fragment.labbooking.knowledge.vo.QaSourceVO;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -11,9 +12,9 @@ public record AgentToolResult(Map<String, Object> output, List<QaSourceVO> sourc
                               Map<String, Object> executionDetail) {
 
     public AgentToolResult {
-        output = AgentModelGuard.map(output);
-        sources = AgentModelGuard.list(sources);
-        executionDetail = AgentModelGuard.map(executionDetail);
+        output = immutableMap(output);
+        sources = sources == null ? List.of() : List.copyOf(sources);
+        executionDetail = immutableMap(executionDetail);
     }
 
     public static AgentToolResult of(Map<String, Object> output) {
@@ -27,6 +28,10 @@ public record AgentToolResult(Map<String, Object> output, List<QaSourceVO> sourc
     public static AgentToolResult withSources(Map<String, Object> output, List<QaSourceVO> sources,
                                               Map<String, Object> executionDetail) {
         return new AgentToolResult(output, sources, executionDetail);
+    }
+
+    private static Map<String, Object> immutableMap(Map<String, Object> value) {
+        return value == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(value));
     }
 
 }

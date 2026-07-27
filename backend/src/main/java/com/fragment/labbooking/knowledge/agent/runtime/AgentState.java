@@ -1,7 +1,6 @@
 package com.fragment.labbooking.knowledge.agent.runtime;
 
-import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
-import com.fragment.labbooking.knowledge.agent.model.AgentModelGuard;
+import com.fragment.labbooking.common.auth.LoginUser;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -20,14 +19,14 @@ public final class AgentState {
 
     private final String traceId;
     private final String sessionId;
-    private final PolicyContext policy;
+    private final Policy policy;
     private final List<String> completedTools = new ArrayList<>();
     private final Map<String, Long> searchableChunkDocumentIds = new LinkedHashMap<>();
     private final List<String> openedChunkUids = new ArrayList<>();
     private Phase phase = Phase.PLANNING;
     private int round;
 
-    public AgentState(String traceId, String sessionId, PolicyContext policy) {
+    public AgentState(String traceId, String sessionId, Policy policy) {
         this.traceId = traceId;
         this.sessionId = sessionId;
         this.policy = policy;
@@ -113,7 +112,7 @@ public final class AgentState {
     }
 
     /** Rehydrate only for the same authenticated principal; downstream tools still re-check ACL. */
-    public static AgentState restore(Checkpoint checkpoint, PolicyContext policy) {
+    public static AgentState restore(Checkpoint checkpoint, Policy policy) {
         if (checkpoint == null || policy == null || policy.userId() == null
                 || !policy.userId().equals(checkpoint.actorId())) {
             throw new IllegalArgumentException("Agent checkpoint does not belong to the current actor");
@@ -150,11 +149,29 @@ public final class AgentState {
             List<String> openedChunkUids
     ) {
         public Checkpoint {
-            traceId = AgentModelGuard.text(traceId);
-            sessionId = AgentModelGuard.text(sessionId);
-            completedTools = AgentModelGuard.list(completedTools);
-            searchableChunkDocumentIds = AgentModelGuard.map(searchableChunkDocumentIds);
-            openedChunkUids = AgentModelGuard.list(openedChunkUids);
+            traceId = traceId == null ? "" : traceId;
+            sessionId = sessionId == null ? "" : sessionId;
+            completedTools = completedTools == null ? List.of() : List.copyOf(completedTools);
+            searchableChunkDocumentIds = searchableChunkDocumentIds == null
+                    ? Map.of() : Map.copyOf(searchableChunkDocumentIds);
+            openedChunkUids = openedChunkUids == null ? List.of() : List.copyOf(openedChunkUids);
+        }
+    }
+
+    /** Authenticated identity owned by Java, never populated from model output. */
+    public record Policy(Long userId, String role, boolean admin) {
+        public Policy {
+            if (userId == null || userId <= 0) {
+                throw new IllegalArgumentException("Agent execution requires an authenticated user");
+            }
+            role = role == null ? "" : role;
+        }
+
+        public static Policy from(LoginUser actor) {
+            if (actor == null || actor.getId() == null) {
+                throw new IllegalArgumentException("Agent execution requires an authenticated user");
+            }
+            return new Policy(actor.getId(), actor.getRole(), actor.isAdmin());
         }
     }
 }

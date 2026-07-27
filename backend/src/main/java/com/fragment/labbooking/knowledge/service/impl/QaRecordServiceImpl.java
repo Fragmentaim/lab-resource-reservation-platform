@@ -7,10 +7,6 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.agent.context.ModelContextProfileProperties;
 import com.fragment.labbooking.knowledge.agent.context.SessionContextPlanner;
-import com.fragment.labbooking.knowledge.agent.model.AgentConversationContext;
-import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
-import com.fragment.labbooking.knowledge.agent.model.SessionContextPlan;
-import com.fragment.labbooking.knowledge.agent.model.SessionTurn;
 import com.fragment.labbooking.knowledge.dto.QaAskDTO;
 import com.fragment.labbooking.knowledge.dto.QaFeedbackDTO;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
@@ -95,9 +91,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     @Autowired
     private ObjectMapper objectMapper;
 
-    @Autowired
-    private AgentModelMapper agentModelMapper;
-
     @Override
     public QaAnswerVO ask(QaAskDTO dto, LoginUser actor) {
         RoutedAnswer result = routeAndBuildAnswer(dto, actor);
@@ -116,7 +109,8 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         if (record == null || !"PENDING".equals(record.getStatus())) {
             throw new BusinessException("运行不存在、已结束或无权恢复");
         }
-        if (agentRunService.restoreRuntimeCheckpoint(traceId, com.fragment.labbooking.knowledge.agent.model.PolicyContext.from(actor)).isEmpty()) {
+        if (agentRunService.restoreRuntimeCheckpoint(traceId,
+                com.fragment.labbooking.knowledge.agent.runtime.AgentState.Policy.from(actor)).isEmpty()) {
             throw new BusinessException("运行恢复点不存在或已过期，请重新提问");
         }
         QaSession session = qaSessionMapper.selectById(record.getSessionId());
@@ -124,14 +118,14 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             throw new BusinessException("会话不存在或无权访问");
         }
         PreparedSessionContext prepared = prepareSessionContext(session, record.getQuestion());
-        SessionContextPlan sessionPlan = prepared.plan();
+        SessionContextPlanner.Plan sessionPlan = prepared.plan();
         agentRunService.recordProviderUsage(record.getTraceId(), prepared.summaryProviderUsage());
         agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
 
         long routeStartedAt = System.nanoTime();
         ToolRouteResult routed = agentChatService.answer(
                 record.getQuestion(), actor, record.getSessionId(), record.getTraceId(),
-                new AgentConversationContext(prepared.session().getSummary(), sessionPlan.historyMessages()));
+                new AgentChatService.ConversationContext(prepared.session().getSummary(), sessionPlan.historyMessages()));
         QaAnswerVO answer = new QaAnswerVO();
         answer.setAnswer(routed.answer());
         answer.setLatencyMs(elapsedMs(routeStartedAt));
@@ -145,7 +139,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         stats.put("runtime_managed", routed.runtimeManaged());
         stats.put("selected_source_count", routed.sourceCount());
         attachProviderUsage(stats, routed.providerUsage(), prepared.summaryProviderUsage());
-        stats.put("session_context_plan", agentModelMapper.detail(sessionPlan));
+        stats.put("session_context_plan", objectMapper.convertValue(sessionPlan, Map.class));
         answer.setContextStats(stats);
         finishToolAnswer(record, answer, record.getSessionId(), actor.getId(), record.getQuestion(), nextTurnNo(prepared.session()));
         return answer;
@@ -196,7 +190,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         PreparedSessionContext preparedContext = prepareSessionContext(session, dto.getQuestion());
         session = preparedContext.session();
         String sessionId = session.getSessionId();
-        SessionContextPlan sessionPlan = preparedContext.plan();
+        SessionContextPlanner.Plan sessionPlan = preparedContext.plan();
         List<AiServiceClient.ChatMessage> chatHistory = sessionPlan.historyMessages();
         int turnNo = nextTurnNo(session);
 
@@ -218,7 +212,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         try {
             ToolRouteResult routed = agentChatService.answer(
                     dto.getQuestion(), actor, sessionId, record.getTraceId(),
-                    new AgentConversationContext(session.getSummary(), chatHistory));
+                    new AgentChatService.ConversationContext(session.getSummary(), chatHistory));
             QaAnswerVO answer = new QaAnswerVO();
             answer.setAnswer(routed.answer());
             answer.setLatencyMs(elapsedMs(routeStartedAt));
@@ -232,7 +226,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             toolStats.put("runtime_managed", routed.runtimeManaged());
             toolStats.put("selected_source_count", routed.sourceCount());
             attachProviderUsage(toolStats, routed.providerUsage(), preparedContext.summaryProviderUsage());
-            toolStats.put("session_context_plan", agentModelMapper.detail(sessionPlan));
+            toolStats.put("session_context_plan", objectMapper.convertValue(sessionPlan, Map.class));
             answer.setContextStats(toolStats);
             finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
             return new RoutedAnswer(answer);
@@ -382,17 +376,18 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
                 .orderByAsc(QaRecord::getId));
     }
 
-    private List<SessionTurn> loadUncompressedSessionTurns(QaSession session) {
+    private List<SessionContextPlanner.Turn> loadUncompressedSessionTurns(QaSession session) {
         List<QaRecord> records = loadAnsweredSessionRecords(session.getSessionId(), session.getUserId());
         int coveredTurnCount = Math.min(records.size(), Math.max(0,
                 session.getSummaryTurnCount() == null ? 0 : session.getSummaryTurnCount()));
         return records.stream()
                 .skip(coveredTurnCount)
-                .map(record -> new SessionTurn(record.getId(), record.getTraceId(), record.getQuestion(), record.getAnswer()))
+                .map(record -> new SessionContextPlanner.Turn(
+                        record.getId(), record.getTraceId(), record.getQuestion(), record.getAnswer()))
                 .toList();
     }
 
-    private SessionContextPlan planSessionContext(QaSession session, String question) {
+    private SessionContextPlanner.Plan planSessionContext(QaSession session, String question) {
         return sessionContextPlanner.plan(
                 session.getSummary(), question, loadUncompressedSessionTurns(session),
                 contextCapacity()
@@ -477,7 +472,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         QaSession session = initialSession;
         List<Map<String, Object>> summaryUsages = new ArrayList<>();
         for (int attempt = 0; attempt < 3; attempt++) {
-            SessionContextPlan plan = planSessionContext(session, question);
+            SessionContextPlanner.Plan plan = planSessionContext(session, question);
             if (!plan.compactionRecommended()) {
                 return new PreparedSessionContext(session, plan, aggregateSummaryUsage(summaryUsages));
             }
@@ -496,7 +491,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         throw new BusinessException("会话上下文正在更新，请稍后重试");
     }
 
-    private AiServiceClient.SummaryResult compactSessionSummary(QaSession session, SessionContextPlan plan) {
+    private AiServiceClient.SummaryResult compactSessionSummary(QaSession session, SessionContextPlanner.Plan plan) {
         if (plan.deferredTurns().isEmpty()) {
             throw new BusinessException("会话上下文无法安全压缩");
         }
@@ -581,7 +576,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         }
     }
 
-    private record PreparedSessionContext(QaSession session, SessionContextPlan plan,
+    private record PreparedSessionContext(QaSession session, SessionContextPlanner.Plan plan,
                                           Map<String, Object> summaryProviderUsage) {
     }
 
