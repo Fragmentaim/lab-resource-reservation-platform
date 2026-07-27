@@ -1,9 +1,9 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
 import com.fragment.labbooking.common.auth.LoginUser;
-import com.fragment.labbooking.knowledge.agent.AgentExecutionContext;
-import com.fragment.labbooking.knowledge.agent.AgentState;
-import com.fragment.labbooking.knowledge.agent.PolicyContext;
+import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
+import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
+import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.service.ReservationCancellationPreviewToolService;

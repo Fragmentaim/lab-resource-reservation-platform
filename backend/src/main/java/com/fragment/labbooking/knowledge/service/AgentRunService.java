@@ -1,11 +1,11 @@
 package com.fragment.labbooking.knowledge.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.fragment.labbooking.knowledge.agent.AgentState;
-import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
-import com.fragment.labbooking.knowledge.agent.ContextPlan;
-import com.fragment.labbooking.knowledge.agent.SessionContextPlan;
-import com.fragment.labbooking.knowledge.agent.PolicyContext;
+import com.fragment.labbooking.knowledge.agent.model.AgentToolExecution;
+import com.fragment.labbooking.knowledge.agent.model.ContextPlan;
+import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
+import com.fragment.labbooking.knowledge.agent.model.SessionContextPlan;
+import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.knowledge.vo.AgentRunVO;
 import com.fragment.labbooking.knowledge.vo.AgentStepVO;

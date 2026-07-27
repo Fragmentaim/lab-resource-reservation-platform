@@ -2,12 +2,12 @@ package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
-import com.fragment.labbooking.knowledge.agent.AgentExecutionContext;
-import com.fragment.labbooking.knowledge.agent.AgentState;
-import com.fragment.labbooking.knowledge.agent.AgentSystemPrompt;
-import com.fragment.labbooking.knowledge.agent.ContextPlan;
-import com.fragment.labbooking.knowledge.agent.PolicyContext;
+import com.fragment.labbooking.knowledge.agent.model.AgentConversationContext;
+import com.fragment.labbooking.knowledge.agent.model.ContextPlan;
+import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
+import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
+import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
+import com.fragment.labbooking.knowledge.agent.runtime.AgentSystemPrompt;
 import com.fragment.labbooking.knowledge.agent.tool.AgentToolRuntime;
 import com.fragment.labbooking.knowledge.agent.tool.KnowledgeAgentTools;
 import com.fragment.labbooking.knowledge.agent.tool.ReservationAgentTools;

@@ -1,7 +1,7 @@
 package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fragment.labbooking.knowledge.agent.ContextTokenCounter;
+import com.fragment.labbooking.knowledge.agent.context.ContextTokenCounter;
 import com.fragment.labbooking.knowledge.entity.AgentSessionEvent;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.knowledge.mapper.AgentSessionEventMapper;

@@ -1,8 +1,8 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.AgentExecutionContext;
-import com.fragment.labbooking.knowledge.agent.EvidenceCard;
+import com.fragment.labbooking.knowledge.agent.model.EvidenceCard;
+import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.vo.QaSourceVO;

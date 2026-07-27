@@ -1,4 +1,4 @@
-package com.fragment.labbooking.knowledge.agent;
+package com.fragment.labbooking.knowledge.agent.context;
 
 import org.junit.jupiter.api.Test;
 

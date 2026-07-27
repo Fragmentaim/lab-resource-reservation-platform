@@ -1,4 +1,6 @@
-package com.fragment.labbooking.knowledge.agent;
+package com.fragment.labbooking.knowledge.agent.runtime;
+
+import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

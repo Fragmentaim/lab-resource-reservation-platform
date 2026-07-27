@@ -1,7 +1,7 @@
 package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
-import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
+import com.fragment.labbooking.knowledge.agent.model.AgentConversationContext;
 import com.fragment.labbooking.knowledge.agent.tool.KnowledgeAgentTools;
 import com.fragment.labbooking.knowledge.agent.tool.ReservationAgentTools;
 import com.fragment.labbooking.knowledge.service.AgentRunService;

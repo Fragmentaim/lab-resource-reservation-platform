@@ -1,4 +1,4 @@
-package com.fragment.labbooking.knowledge.agent;
+package com.fragment.labbooking.knowledge.agent.runtime;
 
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;

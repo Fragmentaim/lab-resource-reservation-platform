@@ -1,4 +1,4 @@
-package com.fragment.labbooking.knowledge.agent;
+package com.fragment.labbooking.knowledge.agent.context;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;

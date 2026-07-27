@@ -2,9 +2,9 @@ package com.fragment.labbooking.knowledge.agent.tool;
 
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.util.TruncateUtil;
-import com.fragment.labbooking.knowledge.agent.AgentExecutionContext;
-import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
-import com.fragment.labbooking.knowledge.agent.ToolResultContextPacker;
+import com.fragment.labbooking.knowledge.agent.context.ToolResultContextPacker;
+import com.fragment.labbooking.knowledge.agent.model.AgentToolExecution;
+import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
 import org.springframework.ai.chat.model.ToolContext;

@@ -1,7 +1,7 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.AgentExecutionContext;
+import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
 import com.fragment.labbooking.knowledge.service.ReservationCancellationPreviewToolService;
 import com.fragment.labbooking.knowledge.service.ReservationContextToolService;
 import com.fragment.labbooking.knowledge.service.ReservationDraftToolService;

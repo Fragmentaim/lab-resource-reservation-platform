@@ -1,7 +1,7 @@
 package com.fragment.labbooking.knowledge.service;
 
 import com.fragment.labbooking.common.auth.LoginUser;
-import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
+import com.fragment.labbooking.knowledge.agent.model.AgentConversationContext;
 
 /** Executes one authenticated Agent request, including any model-selected tools. */
 public interface AgentChatService {

@@ -1,4 +1,4 @@
-package com.fragment.labbooking.knowledge.agent;
+package com.fragment.labbooking.knowledge.agent.runtime;
 
 /** Stable behavioral contract for the lab assistant. Domain authorization remains in Java. */
 public final class AgentSystemPrompt {

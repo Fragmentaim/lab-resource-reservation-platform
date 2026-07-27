@@ -1,5 +1,6 @@
-package com.fragment.labbooking.knowledge.agent;
+package com.fragment.labbooking.knowledge.agent.model;
 
+import com.fragment.labbooking.knowledge.agent.context.ContextTokenCounter;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 
 import java.util.ArrayList;

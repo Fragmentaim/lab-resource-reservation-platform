@@ -5,11 +5,11 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.SessionContextPlan;
-import com.fragment.labbooking.knowledge.agent.SessionContextPlanner;
-import com.fragment.labbooking.knowledge.agent.SessionTurn;
-import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
-import com.fragment.labbooking.knowledge.agent.ModelContextProfileProperties;
+import com.fragment.labbooking.knowledge.agent.context.ModelContextProfileProperties;
+import com.fragment.labbooking.knowledge.agent.context.SessionContextPlanner;
+import com.fragment.labbooking.knowledge.agent.model.AgentConversationContext;
+import com.fragment.labbooking.knowledge.agent.model.SessionContextPlan;
+import com.fragment.labbooking.knowledge.agent.model.SessionTurn;
 import com.fragment.labbooking.knowledge.dto.QaAskDTO;
 import com.fragment.labbooking.knowledge.dto.QaFeedbackDTO;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
@@ -112,7 +112,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         if (record == null || !"PENDING".equals(record.getStatus())) {
             throw new BusinessException("运行不存在、已结束或无权恢复");
         }
-        if (agentRunService.restoreRuntimeCheckpoint(traceId, com.fragment.labbooking.knowledge.agent.PolicyContext.from(actor)).isEmpty()) {
+        if (agentRunService.restoreRuntimeCheckpoint(traceId, com.fragment.labbooking.knowledge.agent.model.PolicyContext.from(actor)).isEmpty()) {
             throw new BusinessException("运行恢复点不存在或已过期，请重新提问");
         }
         QaSession session = qaSessionMapper.selectById(record.getSessionId());

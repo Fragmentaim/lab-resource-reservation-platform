@@ -1,5 +1,7 @@
-package com.fragment.labbooking.knowledge.agent;
+package com.fragment.labbooking.knowledge.agent.context;
 
+import com.fragment.labbooking.knowledge.agent.model.SessionContextPlan;
+import com.fragment.labbooking.knowledge.agent.model.SessionTurn;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
