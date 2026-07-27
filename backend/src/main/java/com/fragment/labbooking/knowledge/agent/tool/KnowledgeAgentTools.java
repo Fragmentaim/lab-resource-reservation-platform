@@ -2,6 +2,7 @@ package com.fragment.labbooking.knowledge.agent.tool;
 
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.agent.model.EvidenceCard;
+import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
@@ -23,12 +24,14 @@ public class KnowledgeAgentTools {
     private final AgentToolRuntime runtime;
     private final KbDocumentService documentService;
     private final AiServiceClient aiServiceClient;
+    private final AgentModelMapper agentModelMapper;
 
     public KnowledgeAgentTools(AgentToolRuntime runtime, KbDocumentService documentService,
-                               AiServiceClient aiServiceClient) {
+                               AiServiceClient aiServiceClient, AgentModelMapper agentModelMapper) {
         this.runtime = runtime;
         this.documentService = documentService;
         this.aiServiceClient = aiServiceClient;
+        this.agentModelMapper = agentModelMapper;
     }
 
     @Tool(name = "knowledge_search", description = "检索当前用户有权限访问的实验室制度、预约规则、设备使用说明和流程。遇到规则、政策、流程、费用、处罚或无法由预约工具直接回答的问题时必须调用。只返回候选 chunk 定位信息；要依据知识库事实回答，必须再调用 knowledge_open_chunks 读取候选全文。")
@@ -105,7 +108,7 @@ public class KnowledgeAgentTools {
                 .map(AiServiceClient.KnowledgeChunk::chunkUid).toList());
         List<QaSourceVO> sources = chunks.stream().map(this::toQaSource).toList();
         List<Map<String, Object>> evidence = chunks.stream()
-                .map(EvidenceCard::from).map(EvidenceCard::toToolPayload).toList();
+                .map(EvidenceCard::from).map(agentModelMapper::toolPayload).toList();
         String status = evidence.isEmpty() ? "NO_MATCH" : "OK";
         return AgentToolResult.withSources(Map.of("status", status, "chunks", evidence), sources, Map.of(
                 "knowledge_status", status,

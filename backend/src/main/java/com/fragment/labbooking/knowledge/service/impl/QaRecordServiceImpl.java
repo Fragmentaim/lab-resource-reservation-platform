@@ -8,6 +8,7 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.agent.context.ModelContextProfileProperties;
 import com.fragment.labbooking.knowledge.agent.context.SessionContextPlanner;
 import com.fragment.labbooking.knowledge.agent.model.AgentConversationContext;
+import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
 import com.fragment.labbooking.knowledge.agent.model.SessionContextPlan;
 import com.fragment.labbooking.knowledge.agent.model.SessionTurn;
 import com.fragment.labbooking.knowledge.dto.QaAskDTO;
@@ -94,6 +95,9 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private AgentModelMapper agentModelMapper;
+
     @Override
     public QaAnswerVO ask(QaAskDTO dto, LoginUser actor) {
         RoutedAnswer result = routeAndBuildAnswer(dto, actor);
@@ -141,7 +145,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         stats.put("runtime_managed", routed.runtimeManaged());
         stats.put("selected_source_count", routed.sourceCount());
         attachProviderUsage(stats, routed.providerUsage(), prepared.summaryProviderUsage());
-        stats.put("session_context_plan", sessionPlan.safeDetail());
+        stats.put("session_context_plan", agentModelMapper.detail(sessionPlan));
         answer.setContextStats(stats);
         finishToolAnswer(record, answer, record.getSessionId(), actor.getId(), record.getQuestion(), nextTurnNo(prepared.session()));
         return answer;
@@ -228,7 +232,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             toolStats.put("runtime_managed", routed.runtimeManaged());
             toolStats.put("selected_source_count", routed.sourceCount());
             attachProviderUsage(toolStats, routed.providerUsage(), preparedContext.summaryProviderUsage());
-            toolStats.put("session_context_plan", sessionPlan.safeDetail());
+            toolStats.put("session_context_plan", agentModelMapper.detail(sessionPlan));
             answer.setContextStats(toolStats);
             finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
             return new RoutedAnswer(answer);

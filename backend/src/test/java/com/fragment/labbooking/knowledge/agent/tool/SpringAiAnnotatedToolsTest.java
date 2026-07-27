@@ -1,8 +1,10 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
+import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
 import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
@@ -54,7 +56,8 @@ class SpringAiAnnotatedToolsTest {
                 mock(ResourceAvailabilityToolService.class),
                 mock(ReservationCancellationPreviewToolService.class),
                 draftService);
-        knowledgeTools = new KnowledgeAgentTools(runtime, documentService, aiServiceClient);
+        knowledgeTools = new KnowledgeAgentTools(runtime, documentService, aiServiceClient,
+                new AgentModelMapper(new ObjectMapper()));
         when(runtime.execute(anyString(), anyString(), anyMap(), any(), any())).thenAnswer(invocation -> {
             Supplier<AgentToolResult> action = invocation.getArgument(4);
             return action.get().output();

@@ -1,14 +1,14 @@
 package com.fragment.labbooking.knowledge.agent.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fragment.labbooking.common.auth.LoginUser;
-
-import java.util.Map;
 
 /**
  * Server-owned identity and authorization boundary for one agent run.
  * It is built from the authenticated principal, never from model output.
  */
-public record PolicyContext(Long userId, String role, boolean admin) {
+public record PolicyContext(@JsonIgnore Long userId, String role, @JsonIgnore boolean admin) {
 
     public PolicyContext {
         userId = AgentModelGuard.requiredId(userId, "userId");
@@ -22,7 +22,8 @@ public record PolicyContext(Long userId, String role, boolean admin) {
         return new PolicyContext(actor.getId(), actor.getRole(), actor.isAdmin());
     }
 
-    public Map<String, Object> safeAttributes() {
-        return Map.of("actor_type", admin ? "ADMIN" : "USER", "role", role);
+    @JsonProperty("actor_type")
+    public String actorType() {
+        return admin ? "ADMIN" : "USER";
     }
 }

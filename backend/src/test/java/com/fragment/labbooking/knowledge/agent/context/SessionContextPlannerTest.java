@@ -1,10 +1,13 @@
 package com.fragment.labbooking.knowledge.agent.context;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
 import com.fragment.labbooking.knowledge.agent.model.SessionContextPlan;
 import com.fragment.labbooking.knowledge.agent.model.SessionTurn;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,8 +32,9 @@ class SessionContextPlannerTest {
         assertThat(plan.deferredTurnCount()).isEqualTo(1);
         assertThat(plan.deferredTurns()).extracting(SessionTurn::recordId).containsExactly(1L);
         assertThat(plan.compactionRecommended()).isTrue();
-        assertThat(plan.safeDetail()).containsEntry("selection_unit", "COMPLETE_TURN");
-        assertThat(plan.safeDetail()).containsEntry("history_shape", "CONTIGUOUS_RECENT_SUFFIX");
+        Map<String, Object> detail = new AgentModelMapper(new ObjectMapper()).detail(plan);
+        assertThat(detail).containsEntry("selection_unit", "COMPLETE_TURN");
+        assertThat(detail).containsEntry("history_shape", "CONTIGUOUS_RECENT_SUFFIX");
     }
 
     @Test

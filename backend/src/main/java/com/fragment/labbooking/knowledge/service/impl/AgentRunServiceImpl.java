@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.knowledge.agent.model.AgentToolExecution;
+import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
 import com.fragment.labbooking.knowledge.agent.model.ContextPlan;
 import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
 import com.fragment.labbooking.knowledge.agent.model.SessionContextPlan;
@@ -51,6 +52,7 @@ public class AgentRunServiceImpl implements AgentRunService {
     private final AgentStepMapper agentStepMapper;
     private final QaContextTraceMapper qaContextTraceMapper;
     private final ObjectMapper objectMapper;
+    private final AgentModelMapper agentModelMapper;
 
     @Value("${app.knowledge.agent-checkpoint.ttl-seconds:900}")
     private long checkpointTtlSeconds;
@@ -58,12 +60,14 @@ public class AgentRunServiceImpl implements AgentRunService {
     public AgentRunServiceImpl(AgentRunMapper agentRunMapper, AgentRuntimeCheckpointMapper checkpointMapper,
                                AgentStepMapper agentStepMapper,
                                QaContextTraceMapper qaContextTraceMapper,
-                               ObjectMapper objectMapper) {
+                               ObjectMapper objectMapper,
+                               AgentModelMapper agentModelMapper) {
         this.agentRunMapper = agentRunMapper;
         this.checkpointMapper = checkpointMapper;
         this.agentStepMapper = agentStepMapper;
         this.qaContextTraceMapper = qaContextTraceMapper;
         this.objectMapper = objectMapper;
+        this.agentModelMapper = agentModelMapper;
     }
 
     @Override
@@ -100,7 +104,7 @@ public class AgentRunServiceImpl implements AgentRunService {
             run.setRoute("AGENT_RUNTIME");
             agentRunMapper.updateById(run);
             insertStep(run.getId(), nextStepNo(run.getId()), "STATE", "agent_runtime_started", SUCCEEDED, 0, null,
-                    policy.safeAttributes());
+                    agentModelMapper.attributes(policy));
         });
     }
 
@@ -147,7 +151,7 @@ public class AgentRunServiceImpl implements AgentRunService {
                 addProviderUsage(run, plan.providerUsage(), 1);
                 agentRunMapper.updateById(run);
                 insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "model_tool_plan", SUCCEEDED, 0, null,
-                        plan.safeDetail());
+                        agentModelMapper.detail(plan));
             }
         });
     }
@@ -158,7 +162,7 @@ public class AgentRunServiceImpl implements AgentRunService {
             AgentRun run = findRun(traceId);
             if (run != null) {
                 insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "session_context_plan", SUCCEEDED, 0, null,
-                        plan.safeDetail());
+                        agentModelMapper.detail(plan));
             }
         });
     }
@@ -185,7 +189,7 @@ public class AgentRunServiceImpl implements AgentRunService {
             AgentRun run = findRun(traceId);
             if (run != null) {
                 insertStep(run.getId(), nextStepNo(run.getId()), "TOOL_CALL", execution.toolName(), execution.status(),
-                        execution.latencyMs(), execution.toolTraceId(), execution.safeDetail());
+                        execution.latencyMs(), execution.toolTraceId(), agentModelMapper.detail(execution));
             }
         });
     }

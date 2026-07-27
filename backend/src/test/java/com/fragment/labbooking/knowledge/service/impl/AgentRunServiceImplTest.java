@@ -3,6 +3,7 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fragment.labbooking.knowledge.agent.model.AgentModelMapper;
 import com.fragment.labbooking.knowledge.agent.model.AgentToolExecution;
 import com.fragment.labbooking.knowledge.agent.model.ContextPlan;
 import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
@@ -53,7 +54,9 @@ class AgentRunServiceImplTest {
         TableInfoHelper.initTableInfo(assistant, AgentRun.class);
         TableInfoHelper.initTableInfo(assistant, AgentStep.class);
         TableInfoHelper.initTableInfo(assistant, QaContextTrace.class);
-        service = new AgentRunServiceImpl(runMapper, checkpointMapper, stepMapper, contextTraceMapper, new ObjectMapper());
+        ObjectMapper objectMapper = new ObjectMapper();
+        service = new AgentRunServiceImpl(runMapper, checkpointMapper, stepMapper, contextTraceMapper,
+                objectMapper, new AgentModelMapper(objectMapper));
         persistedRun = new AgentRun();
         persistedRun.setId(42L);
         persistedRun.setTraceId("qa-trace-1");
