@@ -724,12 +724,23 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                 .set(KbDocument::getChunkCount, result.chunkCount())
                 .set(KbDocument::getParserProvider, quality == null ? null : quality.provider())
                 .set(KbDocument::getParserVersion, quality == null ? null : quality.providerVersion())
-                .set(KbDocument::getParseQuality, quality == null ? null : quality.reportJson())
+                .set(KbDocument::getParseQuality, serializeParseQuality(quality))
                 .set(KbDocument::getStatus, DocumentStatusConstants.READY)
                 .set(KbDocument::getErrorMessage, null)
                 .set(KbDocument::getProcessFinishedAt, now)
                 .set(KbDocument::getUpdatedAt, now));
         return updated == 1;
+    }
+
+    private String serializeParseQuality(AiServiceClient.ParseQuality quality) {
+        if (quality == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(quality);
+        } catch (Exception exception) {
+            throw new BusinessException("解析质量信息序列化失败: " + exception.getMessage());
+        }
     }
 
     private void cleanupRetiredVersion(Long documentId, String retiredVersion, int attempt,

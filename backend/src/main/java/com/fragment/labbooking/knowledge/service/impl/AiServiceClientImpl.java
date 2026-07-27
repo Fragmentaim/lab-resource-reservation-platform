@@ -1,8 +1,6 @@
 package com.fragment.labbooking.knowledge.service.impl;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import lombok.extern.slf4j.Slf4j;
@@ -12,12 +10,13 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.multipart.MultipartFile;
+import tools.jackson.databind.PropertyNamingStrategies;
+import tools.jackson.databind.annotation.JsonNaming;
 
 import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,11 +27,9 @@ import java.util.Map;
 public class AiServiceClientImpl implements AiServiceClient {
 
     private final RestClient restClient;
-    private final ObjectMapper objectMapper;
 
-    public AiServiceClientImpl(RestClient aiServiceRestClient, ObjectMapper objectMapper) {
+    public AiServiceClientImpl(RestClient aiServiceRestClient) {
         this.restClient = aiServiceRestClient;
-        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -55,7 +52,7 @@ public class AiServiceClientImpl implements AiServiceClient {
     @Override
     public ProcessResult processDocument(Long documentId, File file, String fileName, String fileType, String docVersion) {
         try {
-            return doProcessDocumentMultipart(documentId, new FileSystemResource(file), fileName, fileType, docVersion);
+            return doProcessDocumentMultipart(documentId, new FileSystemResource(file), fileType, docVersion);
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -78,7 +75,7 @@ public class AiServiceClientImpl implements AiServiceClient {
                     return fileName;
                 }
             };
-            return doProcessDocumentMultipart(documentId, resource, fileName, fileType, docVersion);
+            return doProcessDocumentMultipart(documentId, resource, fileType, docVersion);
         } catch (Exception e) {
             log.error("Failed to process document {} via AI service: {}", documentId, e.getMessage());
             throw new BusinessException("文档处理失败: " + e.getMessage());
@@ -96,93 +93,35 @@ public class AiServiceClientImpl implements AiServiceClient {
             request.put("file_type", fileType);
             request.put("doc_version", docVersion);
 
-            String response = restClient.post()
+            ProcessResult response = restClient.post()
                     .uri("/api/v1/ai/documents/process-by-url")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(objectMapper.writeValueAsString(request))
+                    .body(request)
                     .retrieve()
-                    .body(String.class);
-            return parseProcessResult(response, docVersion);
+                    .body(ProcessResult.class);
+            return normalizeProcessResult(requireBody(response, "AI-service 返回空处理结果"), docVersion);
         } catch (Exception e) {
             log.error("Failed to process document {} by URL via AI service: {}", documentId, e.getMessage());
             throw new BusinessException("文档 URL 处理失败: " + e.getMessage());
         }
     }
 
-    private ProcessResult doProcessDocumentMultipart(Long documentId, Object fileResource, String fileName,
-                                                     String fileType, String docVersion) throws Exception {
+    private ProcessResult doProcessDocumentMultipart(Long documentId, Object fileResource,
+                                                     String fileType, String docVersion) {
         MultiValueMap<String, Object> formData = new LinkedMultiValueMap<>();
         formData.add("document_id", documentId.toString());
         formData.add("file_type", fileType);
         formData.add("doc_version", docVersion);
         formData.add("file", fileResource);
 
-        String response = restClient.post()
+        ProcessResult response = restClient.post()
                 .uri("/api/v1/ai/documents/process")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(formData)
                 .retrieve()
-                .body(String.class);
+                .body(ProcessResult.class);
 
-        return parseProcessResult(response, docVersion);
-    }
-
-    private ProcessResult parseProcessResult(String response, String docVersion) throws IOException {
-        JsonNode node = objectMapper.readTree(response);
-        int chunkCount = node.path("chunk_count").asInt();
-        String status = node.path("status").asText("FAILED");
-        String resolvedDocVersion = node.path("doc_version").asText(docVersion);
-        List<String> chunkIds = parseStringArray(node.path("chunk_ids"));
-        List<String> vectorIds = parseStringArray(node.path("vector_ids"));
-        List<ChunkResult> chunks = parseChunks(node.path("chunks"));
-        return new ProcessResult(
-                chunkCount,
-                status,
-                resolvedDocVersion,
-                chunkIds,
-                vectorIds,
-                chunks,
-                parseQuality(node.path("parse_quality"))
-        );
-    }
-
-    private List<String> parseStringArray(JsonNode node) {
-        if (node == null || !node.isArray()) {
-            return Collections.emptyList();
-        }
-        List<String> values = new ArrayList<>();
-        for (JsonNode item : node) {
-            values.add(item.asText());
-        }
-        return values;
-    }
-
-    private List<ChunkResult> parseChunks(JsonNode node) {
-        if (node == null || !node.isArray()) {
-            return Collections.emptyList();
-        }
-        List<ChunkResult> chunks = new ArrayList<>();
-        for (JsonNode item : node) {
-            chunks.add(new ChunkResult(
-                    item.path("chunk_id").asText(null),
-                    nullableInt(item, "chunk_index"),
-                    item.path("content").asText(""),
-                    nullableInt(item, "token_count"),
-                    nullableInt(item, "page_no"),
-                    item.path("section_title").asText(null),
-                    parseStringArray(item.path("title_path")),
-                    item.path("content_hash").asText(null),
-                    nullableInt(item, "char_start"),
-                    nullableInt(item, "char_end"),
-                    item.path("vector_id").asText(null)
-            ));
-        }
-        return chunks;
-    }
-
-    private Integer nullableInt(JsonNode node, String fieldName) {
-        JsonNode value = node.path(fieldName);
-        return value.isMissingNode() || value.isNull() ? null : value.asInt();
+        return normalizeProcessResult(requireBody(response, "AI-service 返回空处理结果"), docVersion);
     }
 
     @Override
@@ -193,48 +132,19 @@ public class AiServiceClientImpl implements AiServiceClient {
             request.put("question", question);
             request.put("document_ids", scopes.keySet());
             request.put("document_versions", scopes);
-            String response = restClient.post()
+            KnowledgeSearchResult response = restClient.post()
                     .uri("/api/v1/ai/qa/retrieve")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(objectMapper.writeValueAsString(request))
+                    .body(request)
                     .retrieve()
-                    .body(String.class);
-            JsonNode data = objectMapper.readTree(response);
-            return new KnowledgeSearchResult(data.path("query").asText(question),
-                    parseKnowledgeCandidates(data.path("candidates")));
+                    .body(KnowledgeSearchResult.class);
+            KnowledgeSearchResult result = requireBody(response, "AI-service 返回空检索结果");
+            return StringUtils.hasText(result.query()) ? result
+                    : new KnowledgeSearchResult(question, result.candidates());
         } catch (Exception e) {
             log.error("Failed to retrieve knowledge candidates via AI service: {}", e.getMessage());
             throw new BusinessException("知识库候选检索失败: " + e.getMessage());
         }
-    }
-
-    private ParseQuality parseQuality(JsonNode node) {
-        if (node == null || !node.isObject()) {
-            return null;
-        }
-        return new ParseQuality(
-                textOrNull(node, "provider"),
-                textOrNull(node, "provider_version"),
-                textOrNull(node, "parse_mode"),
-                nullableInt(node, "unit_count"),
-                nullableInt(node, "non_empty_unit_count"),
-                nullableInt(node, "character_count"),
-                nullableInt(node, "heading_count"),
-                nullableInt(node, "table_count"),
-                nullableInt(node, "image_count"),
-                nullableInt(node, "scanned_unit_count"),
-                nullableInt(node, "ocr_unit_count"),
-                nullableInt(node, "ocr_character_count"),
-                nullableDouble(node, "ocr_average_confidence"),
-                nullableDouble(node, "parse_average_confidence"),
-                nullableDouble(node, "layout_average_confidence"),
-                nullableDouble(node, "table_average_confidence"),
-                nullableInt(node, "empty_unit_count"),
-                nullableDouble(node, "quality_score"),
-                nullableDouble(node, "quality_low_score"),
-                parseStringArray(node.path("warnings")),
-                node.toString()
-        );
     }
 
     @Override
@@ -245,13 +155,13 @@ public class AiServiceClientImpl implements AiServiceClient {
             request.put("chunk_uids", chunkUids == null ? Collections.emptyList() : chunkUids);
             request.put("document_ids", scopes.keySet());
             request.put("document_versions", scopes);
-            String response = restClient.post()
+            KnowledgeChunksResponse response = restClient.post()
                     .uri("/api/v1/ai/qa/chunks/open")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(objectMapper.writeValueAsString(request))
+                    .body(request)
                     .retrieve()
-                    .body(String.class);
-            return parseKnowledgeChunks(objectMapper.readTree(response).path("chunks"));
+                    .body(KnowledgeChunksResponse.class);
+            return requireBody(response, "AI-service 返回空正文结果").chunks();
         } catch (Exception e) {
             log.error("Failed to open knowledge chunks via AI service: {}", e.getMessage());
             throw new BusinessException("知识库正文读取失败: " + e.getMessage());
@@ -265,21 +175,13 @@ public class AiServiceClientImpl implements AiServiceClient {
             request.put("existing_summary", existingSummary);
             request.put("new_turns", newTurns == null ? Collections.emptyList() : newTurns);
 
-            String response = restClient.post()
+            SummaryResult response = restClient.post()
                     .uri("/api/v1/ai/qa/sessions/summarize")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(objectMapper.writeValueAsString(request))
+                    .body(request)
                     .retrieve()
-                    .body(String.class);
-
-            JsonNode node = objectMapper.readTree(response);
-            return new SummaryResult(
-                    node.path("summary").asText(""),
-                    node.path("summary_tokens").asInt(0),
-                    node.path("provider_usage").isObject()
-                            ? objectMapper.convertValue(node.path("provider_usage"), new TypeReference<Map<String, Object>>() {})
-                            : Map.of()
-            );
+                    .body(SummaryResult.class);
+            return requireBody(response, "AI-service 返回空摘要结果");
         } catch (Exception e) {
             log.warn("Failed to summarize session via AI service: {}", e.getMessage());
             throw new BusinessException("会话摘要更新失败: " + e.getMessage());
@@ -289,13 +191,11 @@ public class AiServiceClientImpl implements AiServiceClient {
     @Override
     public int deleteDocumentVectors(Long documentId) {
         try {
-            String response = restClient.delete()
+            DeleteResponse response = restClient.delete()
                     .uri("/api/v1/ai/documents/{id}/vectors", documentId)
                     .retrieve()
-                    .body(String.class);
-
-            JsonNode node = objectMapper.readTree(response);
-            return node.path("deleted_count").asInt();
+                    .body(DeleteResponse.class);
+            return requireBody(response, "AI-service 返回空删除结果").deletedCount();
         } catch (Exception e) {
             log.error("Failed to delete vectors for document {}: {}", documentId, e.getMessage());
             throw new BusinessException("删除文档索引失败: " + e.getMessage());
@@ -305,11 +205,11 @@ public class AiServiceClientImpl implements AiServiceClient {
     @Override
     public int deleteDocumentVersion(Long documentId, String docVersion) {
         try {
-            String response = restClient.delete()
+            DeleteResponse response = restClient.delete()
                     .uri("/api/v1/ai/documents/{id}/versions/{version}", documentId, docVersion)
                     .retrieve()
-                    .body(String.class);
-            return objectMapper.readTree(response).path("deleted_count").asInt();
+                    .body(DeleteResponse.class);
+            return requireBody(response, "AI-service 返回空删除结果").deletedCount();
         } catch (Exception e) {
             log.error("Failed to delete document version. documentId={}, version={}, error={}",
                     documentId, docVersion, e.getMessage());
@@ -320,60 +220,43 @@ public class AiServiceClientImpl implements AiServiceClient {
     @Override
     public boolean checkHealth() {
         try {
-            String response = restClient.get()
+            HealthResponse response = restClient.get()
                     .uri("/api/v1/ai/health")
                     .retrieve()
-                    .body(String.class);
-            JsonNode node = objectMapper.readTree(response);
-            return "ok".equals(node.path("status").asText());
+                    .body(HealthResponse.class);
+            return response != null && "ok".equals(response.status());
         } catch (Exception e) {
             return false;
         }
     }
 
-    private List<KnowledgeCandidate> parseKnowledgeCandidates(JsonNode node) {
-        if (node == null || !node.isArray()) {
-            return Collections.emptyList();
-        }
-        List<KnowledgeCandidate> candidates = new ArrayList<>();
-        for (JsonNode item : node) {
-            candidates.add(new KnowledgeCandidate(
-                    textOrNull(item, "chunk_uid"), item.path("document_id").asLong(),
-                    textOrNull(item, "doc_version"), nullableInt(item, "chunk_index"), nullableInt(item, "page_no"),
-                    textOrNull(item, "section_title"), parseStringArray(item.path("title_path")),
-                    textOrNull(item, "content_hash"), nullableInt(item, "token_count"),
-                    nullableDouble(item, "score"), nullableDouble(item, "retrieval_score"),
-                    nullableDouble(item, "rerank_score"), textOrNull(item, "rerank_provider"),
-                    textOrNull(item, "retrieval_source"), item.path("locator").asText("")
-            ));
-        }
-        return candidates;
+    private ProcessResult normalizeProcessResult(ProcessResult result, String fallbackDocVersion) {
+        String status = StringUtils.hasText(result.status()) ? result.status() : "FAILED";
+        String docVersion = StringUtils.hasText(result.docVersion()) ? result.docVersion() : fallbackDocVersion;
+        return new ProcessResult(result.chunkCount(), status, docVersion, result.chunkIds(), result.vectorIds(),
+                result.chunks(), result.parseQuality());
     }
 
-    private List<KnowledgeChunk> parseKnowledgeChunks(JsonNode node) {
-        if (node == null || !node.isArray()) {
-            return Collections.emptyList();
+    private <T> T requireBody(T body, String message) {
+        if (body == null) {
+            throw new BusinessException(message);
         }
-        List<KnowledgeChunk> chunks = new ArrayList<>();
-        for (JsonNode item : node) {
-            chunks.add(new KnowledgeChunk(
-                    textOrNull(item, "chunk_uid"), item.path("document_id").asLong(),
-                    textOrNull(item, "doc_version"), nullableInt(item, "chunk_index"), nullableInt(item, "page_no"),
-                    textOrNull(item, "section_title"), parseStringArray(item.path("title_path")),
-                    textOrNull(item, "content_hash"), nullableInt(item, "token_count"), item.path("content").asText("")
-            ));
+        return body;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record KnowledgeChunksResponse(List<KnowledgeChunk> chunks) {
+        private KnowledgeChunksResponse {
+            chunks = chunks == null ? List.of() : List.copyOf(chunks);
         }
-        return chunks;
     }
 
-    private String textOrNull(JsonNode node, String fieldName) {
-        JsonNode value = node.path(fieldName);
-        return value.isMissingNode() || value.isNull() ? null : value.asText();
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    private record DeleteResponse(int deletedCount) {
     }
 
-    private Double nullableDouble(JsonNode node, String fieldName) {
-        JsonNode value = node.path(fieldName);
-        return value.isMissingNode() || value.isNull() ? null : value.asDouble();
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record HealthResponse(String status) {
     }
-
 }
