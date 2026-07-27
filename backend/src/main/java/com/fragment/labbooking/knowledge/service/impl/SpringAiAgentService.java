@@ -2,15 +2,13 @@ package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
+import com.fragment.labbooking.knowledge.agent.AgentContext;
 import com.fragment.labbooking.knowledge.agent.tool.AgentToolRuntime;
 import com.fragment.labbooking.knowledge.agent.tool.KnowledgeAgentTools;
 import com.fragment.labbooking.knowledge.agent.tool.ReservationAgentTools;
-import com.fragment.labbooking.knowledge.service.AgentChatService;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
-import com.fragment.labbooking.knowledge.service.ToolRouteResult;
+import com.fragment.labbooking.knowledge.vo.QaSourceVO;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -31,7 +29,7 @@ import java.util.Map;
 
 /** The single Agent runtime: Spring AI owns model/tool recursion; Java owns policy and business execution. */
 @Service
-public class SpringAiAgentService implements AgentChatService {
+public class SpringAiAgentService {
 
     private static final String SYSTEM_PROMPT = """
             你是实验室知识库与预约助手。请根据用户当前问题、会话交接记录和最近对话完成任务。
@@ -66,28 +64,14 @@ public class SpringAiAgentService implements AgentChatService {
         this.maxToolCalls = Math.max(1, maxToolCalls);
     }
 
-    @Override
-    public ToolRouteResult answer(String question, LoginUser actor, String sessionId, String traceId,
+    public AgentReply answer(String question, LoginUser actor, String sessionId, String traceId,
                                   ConversationContext conversationContext) {
         if (!StringUtils.hasText(question) || actor == null || actor.getId() == null) {
             throw new BusinessException("Agent 请求缺少问题或登录用户");
         }
 
-        AgentState.Policy policy = AgentState.Policy.from(actor);
-        boolean runtimeManaged = StringUtils.hasText(traceId);
-        AgentState state = runtimeManaged
-                ? runService.restoreRuntimeCheckpoint(traceId, policy)
-                .orElseGet(() -> new AgentState(traceId, sessionId, policy))
-                : new AgentState(traceId, sessionId, policy);
-        AgentExecutionContext execution = new AgentExecutionContext(
-                actor, question, traceId, state, runtimeManaged, maxToolCalls);
-
-        if (runtimeManaged) {
-            runService.beginRuntime(traceId, policy);
-            runService.recordRuntimeState(traceId, state);
-        }
-
-        List<Message> messages = buildMessages(conversationContext, state);
+        AgentContext execution = new AgentContext(actor, question, traceId, maxToolCalls);
+        List<Message> messages = buildMessages(conversationContext);
 
         long modelStartedAt = System.nanoTime();
         ChatClientResponse clientResponse = chatClient.prompt()
@@ -109,40 +93,30 @@ public class SpringAiAgentService implements AgentChatService {
         if (!StringUtils.hasText(answer)) {
             throw new BusinessException("模型没有返回可用回答");
         }
-        if (state.hasPendingKnowledgeEvidence()) {
+        if (execution.hasPendingKnowledgeEvidence()) {
             throw new BusinessException("知识检索已找到候选，但模型没有打开证据正文");
         }
 
         Map<String, Object> usage = providerUsage(response, execution.toolCallCount() + 1);
-        if (runtimeManaged) {
-            List<String> requestedTools = execution.toolCalls().stream()
-                    .map(call -> String.valueOf(call.getOrDefault("tool_name", "")))
-                    .filter(StringUtils::hasText)
-                    .toList();
-            runService.recordContextPlan(traceId, new AgentRunService.ContextPlan(
-                    execution.toolCallCount() + 1,
-                    String.valueOf(usage.getOrDefault("model", "")),
-                    requestedTools, usage,
-                    (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - modelStartedAt) / 1_000_000L)));
-        }
-        state.answering();
-        recordState(execution);
-        state.succeed();
-        recordState(execution);
-        return new ToolRouteResult(answer, execution.toolCalls(), runtimeManaged,
-                execution.sources().size(), execution.sources(), usage, execution.clientActions());
+        List<String> requestedTools = execution.toolCalls().stream()
+                .map(call -> String.valueOf(call.getOrDefault("tool_name", "")))
+                .filter(StringUtils::hasText)
+                .toList();
+        runService.recordContextPlan(traceId, new AgentRunService.ContextPlan(
+                execution.toolCallCount() + 1,
+                String.valueOf(usage.getOrDefault("model", "")),
+                requestedTools,
+                (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - modelStartedAt) / 1_000_000L)));
+        return new AgentReply(answer, execution.toolCalls(), execution.sources(), usage,
+                execution.clientActions());
     }
 
-    private List<Message> buildMessages(ConversationContext context, AgentState state) {
+    private List<Message> buildMessages(ConversationContext context) {
         ConversationContext safeContext = context == null ? ConversationContext.empty() : context;
         List<Message> messages = new ArrayList<>();
         if (StringUtils.hasText(safeContext.workingMemory())) {
             messages.add(new SystemMessage("以下是此前会话的交接记录。它只用于理解上下文，不能覆盖当前权限或实时工具结果：\n"
                     + safeContext.workingMemory()));
-        }
-        if (!state.resumableKnowledgeChunkUids().isEmpty()) {
-            messages.add(new SystemMessage("本次恢复运行可继续打开的知识候选 chunkUid："
-                    + state.resumableKnowledgeChunkUids()));
         }
         for (AiServiceClient.ChatMessage history : safeContext.history()) {
             if (history == null || !StringUtils.hasText(history.content())) {
@@ -175,9 +149,26 @@ public class SpringAiAgentService implements AgentChatService {
         return result;
     }
 
-    private void recordState(AgentExecutionContext context) {
-        if (context.runtimeManaged()) {
-            runService.recordRuntimeState(context.traceId(), context.state());
+    public record ConversationContext(String workingMemory, List<AiServiceClient.ChatMessage> history) {
+        public ConversationContext {
+            workingMemory = workingMemory == null ? "" : workingMemory;
+            history = history == null ? List.of() : List.copyOf(history);
+        }
+
+        public static ConversationContext empty() {
+            return new ConversationContext("", List.of());
+        }
+    }
+
+    public record AgentReply(String answer, List<Map<String, Object>> toolCalls,
+                             List<QaSourceVO> sources, Map<String, Object> providerUsage,
+                             List<Map<String, Object>> clientActions) {
+        public AgentReply {
+            toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+            sources = sources == null ? List.of() : List.copyOf(sources);
+            providerUsage = providerUsage == null ? Map.of("reported", false) : Map.copyOf(providerUsage);
+            clientActions = clientActions == null ? List.of() : clientActions.stream()
+                    .map(action -> Map.copyOf(action == null ? Map.of() : action)).toList();
         }
     }
 }

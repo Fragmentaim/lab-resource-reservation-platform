@@ -5,15 +5,12 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.knowledge.agent.context.SessionContextPlanner;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
-import com.fragment.labbooking.knowledge.entity.AgentRuntimeCheckpoint;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
 import com.fragment.labbooking.knowledge.entity.QaContextTrace;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.knowledge.mapper.AgentRunMapper;
-import com.fragment.labbooking.knowledge.mapper.AgentRuntimeCheckpointMapper;
 import com.fragment.labbooking.knowledge.mapper.AgentStepMapper;
 import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
@@ -23,7 +20,6 @@ import com.fragment.labbooking.knowledge.vo.AgentStepVO;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -32,7 +28,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /** Stores sanitized run metadata; raw content remains in domain tables. */
 @Service
@@ -44,20 +39,14 @@ public class AgentRunServiceImpl implements AgentRunService {
     private static final String FAILED = "FAILED";
 
     private final AgentRunMapper agentRunMapper;
-    private final AgentRuntimeCheckpointMapper checkpointMapper;
     private final AgentStepMapper agentStepMapper;
     private final QaContextTraceMapper qaContextTraceMapper;
     private final ObjectMapper objectMapper;
 
-    @Value("${app.knowledge.agent-checkpoint.ttl-seconds:900}")
-    private long checkpointTtlSeconds;
-
-    public AgentRunServiceImpl(AgentRunMapper agentRunMapper, AgentRuntimeCheckpointMapper checkpointMapper,
-                               AgentStepMapper agentStepMapper,
+    public AgentRunServiceImpl(AgentRunMapper agentRunMapper, AgentStepMapper agentStepMapper,
                                QaContextTraceMapper qaContextTraceMapper,
                                ObjectMapper objectMapper) {
         this.agentRunMapper = agentRunMapper;
-        this.checkpointMapper = checkpointMapper;
         this.agentStepMapper = agentStepMapper;
         this.qaContextTraceMapper = qaContextTraceMapper;
         this.objectMapper = objectMapper;
@@ -88,61 +77,10 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     @Override
-    public void beginRuntime(String traceId, AgentState.Policy policy) {
-        safely(traceId, () -> {
-            AgentRun run = findRun(traceId);
-            if (run == null) {
-                return;
-            }
-            run.setRoute("AGENT_RUNTIME");
-            agentRunMapper.updateById(run);
-            insertStep(run.getId(), nextStepNo(run.getId()), "STATE", "agent_runtime_started", SUCCEEDED, 0, null,
-                    Map.of("actor_type", policy.admin() ? "ADMIN" : "USER", "role", policy.role()));
-        });
-    }
-
-    @Override
-    public void recordRuntimeState(String traceId, AgentState state) {
-        safely(traceId, () -> {
-            AgentRun run = findRun(traceId);
-            if (run != null) {
-                insertStep(run.getId(), nextStepNo(run.getId()), "STATE", "agent_state", SUCCEEDED, 0, null,
-                        state.safeSnapshot());
-                upsertCheckpoint(run, state);
-            }
-        });
-    }
-
-    @Override
-    public Optional<AgentState> restoreRuntimeCheckpoint(String traceId, AgentState.Policy policy) {
-        if (!StringUtils.hasText(traceId) || policy == null || policy.userId() == null) {
-            return Optional.empty();
-        }
-        try {
-            AgentRuntimeCheckpoint stored = checkpointMapper.selectById(traceId);
-            if (stored == null) {
-                return Optional.empty();
-            }
-            if (!policy.userId().equals(stored.getUserId())
-                    || stored.getExpiresAt() == null || !stored.getExpiresAt().isAfter(LocalDateTime.now())) {
-                checkpointMapper.deleteById(traceId);
-                return Optional.empty();
-            }
-            AgentState.Checkpoint checkpoint = deserializeCheckpoint(stored.getCheckpointJson());
-            return Optional.of(AgentState.restore(checkpoint, policy));
-        } catch (Exception exception) {
-            log.warn("Failed to restore agent checkpoint. traceId={}, reason={}", traceId, exception.getMessage());
-            return Optional.empty();
-        }
-    }
-
-    @Override
     public void recordContextPlan(String traceId, ContextPlan plan) {
         safely(traceId, () -> {
             AgentRun run = findRun(traceId);
             if (run != null) {
-                addProviderUsage(run, plan.providerUsage(), 1);
-                agentRunMapper.updateById(run);
                 insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "model_tool_plan", SUCCEEDED, 0, null,
                         jsonMap(plan));
             }
@@ -161,22 +99,6 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     @Override
-    public void recordProviderUsage(String traceId, Map<String, Object> providerUsage) {
-        if (!StringUtils.hasText(traceId) || providerUsage == null || providerUsage.isEmpty()) {
-            return;
-        }
-        safely(traceId, () -> {
-            AgentRun run = findRun(traceId);
-            if (run != null) {
-                addProviderUsage(run, providerUsage, 0);
-                agentRunMapper.updateById(run);
-                insertStep(run.getId(), nextStepNo(run.getId()), "USAGE", "provider_usage", SUCCEEDED, 0, null,
-                        Map.of("provider_usage", providerUsage));
-            }
-        });
-    }
-
-    @Override
     public void recordToolExecution(String traceId, ToolExecution execution) {
         safely(traceId, () -> {
             AgentRun run = findRun(traceId);
@@ -189,22 +111,8 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     @Override
     public void finishTool(QaRecord record, QaAnswerVO answer) {
-        safely(record, () -> finish(record, answer, runtimeManaged(answer) ? "AGENT_RUNTIME" : "TOOL", toolSteps(answer),
+        safely(record, () -> finish(record, answer, "AGENT_RUNTIME", toolSteps(answer),
                 intValue(safeStats(answer.getContextStats()).get("selected_source_count"))));
-    }
-
-    @Override
-    public void finishRag(QaRecord record, QaAnswerVO answer) {
-        safely(record, () -> {
-            int sourceCount = answer.getSources() == null ? 0 : answer.getSources().size();
-            Map<String, Object> stats = safeStats(answer.getContextStats());
-            List<StepData> steps = List.of(
-                    new StepData("RETRIEVAL", "knowledge_retrieval", SUCCEEDED, 0, null, retrievalDetail(stats, sourceCount)),
-                    new StepData("ANSWER", "model_answer", SUCCEEDED, safeLatency(answer.getLatencyMs()), null,
-                            Map.of("model", safeText(answer.getModelName()), "source_count", sourceCount))
-            );
-            finish(record, answer, "KB_RAG", steps, sourceCount);
-        });
     }
 
     @Override
@@ -217,7 +125,6 @@ public class AgentRunServiceImpl implements AgentRunService {
             run.setStatus(FAILED);
             run.setFinishedAt(LocalDateTime.now());
             agentRunMapper.updateById(run);
-            clearCheckpoint(record.getTraceId());
             insertStep(run.getId(), nextStepNo(run.getId()), "FAILURE", "execution_failed", FAILED, 0, null,
                     Map.of("error_type", exception.getClass().getSimpleName(), "message", safeText(exception.getMessage())));
         });
@@ -290,8 +197,6 @@ public class AgentRunServiceImpl implements AgentRunService {
         applyProviderUsageSnapshot(run, mapValue(safeStats(answer.getContextStats()).get("provider_usage")));
         run.setFinishedAt(LocalDateTime.now());
         agentRunMapper.updateById(run);
-        clearCheckpoint(record.getTraceId());
-
         int stepNo = nextStepNo(run.getId());
         for (StepData step : steps) {
             insertStep(run.getId(), stepNo++, step.type(), step.name(), step.status(), step.latencyMs(),
@@ -301,53 +206,8 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     private List<StepData> toolSteps(QaAnswerVO answer) {
         Map<String, Object> stats = safeStats(answer.getContextStats());
-        if (runtimeManaged(answer)) {
-            return List.of(new StepData("ANSWER", "agent_answer", SUCCEEDED, safeLatency(answer.getLatencyMs()), null,
-                    Map.of("model", safeText(answer.getModelName()), "runtime", "native_function_calling")));
-        }
-        Object rawCalls = stats.get("tool_calls");
-        List<?> calls = rawCalls instanceof List<?> value ? value : Collections.emptyList();
-        List<StepData> steps = new java.util.ArrayList<>();
-        for (Object rawCall : calls) {
-            if (!(rawCall instanceof Map<?, ?> rawMap)) {
-                continue;
-            }
-            Map<String, Object> call = new LinkedHashMap<>();
-            rawMap.forEach((key, value) -> call.put(String.valueOf(key), value));
-            steps.add(new StepData(
-                    "TOOL_CALL",
-                    safeText(call.get("tool_name")),
-                    safeText(call.get("result")),
-                    intValue(call.get("latency_ms")),
-                    safeText(call.get("tool_trace_id")),
-                    Map.of("protocol", safeText(call.get("protocol")), "result", safeText(call.get("result")))
-            ));
-        }
-        steps.add(new StepData("ANSWER", "tool_answer", SUCCEEDED, safeLatency(answer.getLatencyMs()), null,
-                Map.of("model", safeText(answer.getModelName()), "tool_call_count", steps.size())));
-        return steps;
-    }
-
-    private boolean runtimeManaged(QaAnswerVO answer) {
-        return Boolean.TRUE.equals(safeStats(answer.getContextStats()).get("runtime_managed"));
-    }
-
-    private Map<String, Object> retrievalDetail(Map<String, Object> stats, int sourceCount) {
-        Map<String, Object> detail = new LinkedHashMap<>();
-        detail.put("source_count", sourceCount);
-        copyMetric(stats, detail, "selected_source_count");
-        copyMetric(stats, detail, "dropped_source_count");
-        copyMetric(stats, detail, "evidence_tokens");
-        copyMetric(stats, detail, "history_tokens");
-        copyMetric(stats, detail, "summary_tokens");
-        copyMetric(stats, detail, "total_prompt_tokens");
-        return detail;
-    }
-
-    private void copyMetric(Map<String, Object> source, Map<String, Object> target, String key) {
-        if (source.containsKey(key)) {
-            target.put(key, source.get(key));
-        }
+        return List.of(new StepData("ANSWER", "agent_answer", SUCCEEDED, safeLatency(answer.getLatencyMs()), null,
+                Map.of("model", safeText(answer.getModelName()), "runtime", "native_function_calling")));
     }
 
     private AgentRun findRun(String traceId) {
@@ -357,41 +217,6 @@ public class AgentRunServiceImpl implements AgentRunService {
         return agentRunMapper.selectOne(new LambdaQueryWrapper<AgentRun>()
                 .eq(AgentRun::getTraceId, traceId)
                 .last("LIMIT 1"));
-    }
-
-    private void upsertCheckpoint(AgentRun run, AgentState state) {
-        LocalDateTime now = LocalDateTime.now();
-        AgentRuntimeCheckpoint checkpoint = new AgentRuntimeCheckpoint();
-        checkpoint.setTraceId(run.getTraceId());
-        checkpoint.setAgentRunId(run.getId());
-        checkpoint.setUserId(run.getUserId());
-        checkpoint.setSessionId(run.getSessionId());
-        checkpoint.setCheckpointJson(serializeCheckpoint(state.checkpoint()));
-        checkpoint.setExpiresAt(now.plusSeconds(Math.max(60L, checkpointTtlSeconds)));
-        checkpoint.setUpdatedAt(now);
-        if (checkpointMapper.selectById(run.getTraceId()) == null) {
-            checkpointMapper.insert(checkpoint);
-        } else {
-            checkpointMapper.updateById(checkpoint);
-        }
-    }
-
-    private String serializeCheckpoint(AgentState.Checkpoint checkpoint) {
-        try {
-            return objectMapper.writeValueAsString(checkpoint);
-        } catch (Exception exception) {
-            throw new IllegalStateException("Cannot serialize agent checkpoint", exception);
-        }
-    }
-
-    private AgentState.Checkpoint deserializeCheckpoint(String json) throws Exception {
-        return objectMapper.readValue(json, AgentState.Checkpoint.class);
-    }
-
-    private void clearCheckpoint(String traceId) {
-        if (StringUtils.hasText(traceId)) {
-            checkpointMapper.deleteById(traceId);
-        }
     }
 
     private int nextStepNo(Long runId) {
@@ -435,24 +260,6 @@ public class AgentRunServiceImpl implements AgentRunService {
         return stats == null ? Collections.emptyMap() : stats;
     }
 
-    private void addProviderUsage(AgentRun run, Map<String, Object> usage, int defaultCallCount) {
-        Map<String, Object> safeUsage = usage == null ? Map.of() : usage;
-        run.setUsageReported(Boolean.TRUE.equals(run.getUsageReported())
-                || Boolean.TRUE.equals(safeUsage.get("reported")));
-        run.setInputTokens(safeLong(run.getInputTokens()) + safeLongValue(safeUsage.get("input_tokens")));
-        run.setOutputTokens(safeLong(run.getOutputTokens()) + safeLongValue(safeUsage.get("output_tokens")));
-        run.setCachedInputTokens(safeLong(run.getCachedInputTokens())
-                + safeLongValue(safeUsage.get("cached_input_tokens")));
-        long reportedTotal = safeLongValue(safeUsage.get("total_tokens"));
-        if (reportedTotal <= 0) {
-            reportedTotal = safeLongValue(safeUsage.get("input_tokens"))
-                    + safeLongValue(safeUsage.get("output_tokens"));
-        }
-        run.setTotalTokens(safeLong(run.getTotalTokens()) + reportedTotal);
-        int callCount = usageCallCount(safeUsage, defaultCallCount);
-        run.setModelCallCount(safeMetric(run.getModelCallCount()) + callCount);
-    }
-
     private void applyProviderUsageSnapshot(AgentRun run, Map<String, Object> usage) {
         if (usage.isEmpty()) {
             return;
@@ -486,10 +293,6 @@ public class AgentRunServiceImpl implements AgentRunService {
         Map<String, Object> result = new LinkedHashMap<>();
         raw.forEach((key, item) -> result.put(String.valueOf(key), item));
         return result;
-    }
-
-    private long safeLong(Long value) {
-        return value == null ? 0L : Math.max(0L, value);
     }
 
     private long safeLongValue(Object value) {

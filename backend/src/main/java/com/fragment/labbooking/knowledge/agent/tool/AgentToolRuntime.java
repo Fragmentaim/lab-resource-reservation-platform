@@ -2,10 +2,8 @@ package com.fragment.labbooking.knowledge.agent.tool;
 
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.util.TruncateUtil;
-import com.fragment.labbooking.knowledge.agent.context.ToolResultContextPacker;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
+import com.fragment.labbooking.knowledge.agent.AgentContext;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
-import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -24,89 +22,63 @@ public class AgentToolRuntime {
 
     public static final String EXECUTION_CONTEXT_KEY = "agentExecutionContext";
 
-    private final ToolResultContextPacker contextPacker;
-    private final AiToolCallAuditService auditService;
     private final AgentRunService runService;
     private final boolean captureArguments;
 
-    public AgentToolRuntime(ToolResultContextPacker contextPacker, AiToolCallAuditService auditService,
-                            AgentRunService runService,
+    public AgentToolRuntime(AgentRunService runService,
                             @Value("${app.knowledge.agent-evaluation.capture-arguments:false}")
                             boolean captureArguments) {
-        this.contextPacker = contextPacker;
-        this.auditService = auditService;
         this.runService = runService;
         this.captureArguments = captureArguments;
     }
 
     public Map<String, Object> execute(String toolName, String accessScope, Map<String, Object> arguments,
-                                       AgentExecutionContext context, Supplier<AgentToolResult> action) {
+                                       AgentContext context, Supplier<AgentToolResult> action) {
         Map<String, Object> safeArguments = arguments == null ? Map.of() : arguments;
-        int callNumber = context.beginToolCall();
+        context.beginToolCall();
         String toolTraceId = UUID.randomUUID().toString();
         long startedAt = System.nanoTime();
-
-        context.state().planning(callNumber);
-        recordState(context);
-        context.state().executingTool();
-        recordState(context);
 
         try {
             AgentToolResult result = action.get();
             long latencyMs = elapsedMs(startedAt);
-            auditService.recordSuccess(toolTraceId, toolName, context.actor(), context.actor().getId(),
-                    accessScope, latencyMs, summarize(safeArguments));
-
-            ToolResultContextPacker.PackedToolResult packed = contextPacker.pack(toolName, result.output());
             context.addToolResult(trace(toolName, toolTraceId, latencyMs, "SUCCESS", safeArguments),
                     result.sources(), reservationDraftAction(toolName, result.output()));
             recordExecution(context, toolName, toolTraceId, latencyMs, "SUCCESS", result.output(),
-                    result.executionDetail(), packed.safeDetail(), safeArguments);
-            context.state().completeTool(toolName);
-            recordState(context);
-            return packed.modelOutput();
+                    accessScope, result.executionDetail(), safeArguments);
+            return result.output();
         } catch (BusinessException exception) {
             long latencyMs = elapsedMs(startedAt);
-            auditService.recordFailure(toolTraceId, toolName, context.actor(), context.actor().getId(), latencyMs,
-                    summarize(safeArguments), exception.getMessage());
             Map<String, Object> rejected = Map.of(
                     "error", "TOOL_EXECUTION_REJECTED",
                     "message", exception.getMessage());
             context.addToolResult(trace(toolName, toolTraceId, latencyMs, "REJECTED", safeArguments), List.of(), null);
             recordExecution(context, toolName, toolTraceId, latencyMs, "REJECTED", rejected,
-                    Map.of(), Map.of("strategy", "DIRECT"), safeArguments);
-            context.state().completeTool(toolName);
-            recordState(context);
+                    accessScope, Map.of(), safeArguments);
             return rejected;
         } catch (RuntimeException exception) {
-            long latencyMs = elapsedMs(startedAt);
-            auditService.recordFailure(toolTraceId, toolName, context.actor(), context.actor().getId(), latencyMs,
-                    summarize(safeArguments), exception.getMessage());
             throw exception;
         }
     }
 
-    public AgentExecutionContext requireExecutionContext(ToolContext toolContext) {
+    public AgentContext requireExecutionContext(ToolContext toolContext) {
         Object value = toolContext == null ? null : toolContext.getContext().get(EXECUTION_CONTEXT_KEY);
-        if (value instanceof AgentExecutionContext context) {
+        if (value instanceof AgentContext context) {
             return context;
         }
         throw new BusinessException("工具缺少服务端执行上下文");
     }
 
-    private void recordExecution(AgentExecutionContext context, String toolName, String toolTraceId,
+    private void recordExecution(AgentContext context, String toolName, String toolTraceId,
                                  long latencyMs, String status, Map<String, Object> output,
-                                 Map<String, Object> toolDetail, Map<String, Object> packing,
+                                 String accessScope, Map<String, Object> toolDetail,
                                  Map<String, Object> arguments) {
-        if (!context.runtimeManaged()) {
-            return;
-        }
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("result", status);
+        detail.put("access_scope", accessScope);
         if (toolDetail != null) {
             detail.putAll(toolDetail);
         }
-        detail.put("context_pack", packing);
         if ("knowledge_search".equals(toolName) || "knowledge_open_chunks".equals(toolName)) {
             detail.putIfAbsent("candidate_count", listSize(output.get("candidates")));
             detail.putIfAbsent("opened_chunk_count", listSize(output.get("chunks")));
@@ -118,12 +90,6 @@ public class AgentToolRuntime {
         runService.recordToolExecution(context.traceId(), new AgentRunService.ToolExecution(
                 toolName, status, (int) Math.min(Integer.MAX_VALUE, latencyMs), toolTraceId,
                 "spring_ai_annotated_tool", detail));
-    }
-
-    private void recordState(AgentExecutionContext context) {
-        if (context.runtimeManaged()) {
-            runService.recordRuntimeState(context.traceId(), context.state());
-        }
     }
 
     private Map<String, Object> trace(String toolName, String toolTraceId, long latencyMs, String result,
@@ -188,10 +154,6 @@ public class AgentToolRuntime {
             return safe;
         }
         return value instanceof String text ? TruncateUtil.truncate(text, 240) : value;
-    }
-
-    private String summarize(Map<String, Object> arguments) {
-        return TruncateUtil.truncate(String.valueOf(sanitize(arguments)), 512);
     }
 
     private int listSize(Object value) { return value instanceof List<?> list ? list.size() : 0; }

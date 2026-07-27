@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
+import com.fragment.labbooking.knowledge.agent.AgentContext;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.vo.QaSourceVO;
@@ -24,6 +24,8 @@ import java.util.Map;
 public class KnowledgeAgentTools {
 
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() { };
+    private static final int MAX_SEARCH_CANDIDATES = 8;
+    private static final int MAX_OPEN_CHUNKS = 4;
 
     private final AgentToolRuntime runtime;
     private final KbDocumentService documentService;
@@ -42,7 +44,7 @@ public class KnowledgeAgentTools {
     public Map<String, Object> knowledgeSearch(
             @ToolParam(description = "用于知识库检索的简短具体问题") String query,
             ToolContext toolContext) {
-        AgentExecutionContext context = runtime.requireExecutionContext(toolContext);
+        AgentContext context = runtime.requireExecutionContext(toolContext);
         String normalizedQuery = optionalText(query, 240);
         if (normalizedQuery == null) {
             normalizedQuery = context.question();
@@ -56,13 +58,14 @@ public class KnowledgeAgentTools {
     public Map<String, Object> knowledgeOpenChunks(
             @ToolParam(description = "从本次候选中按需选择的 chunkUid") List<String> chunkUids,
             ToolContext toolContext) {
-        AgentExecutionContext context = runtime.requireExecutionContext(toolContext);
+        AgentContext context = runtime.requireExecutionContext(toolContext);
         return runtime.execute("knowledge_open_chunks", "ACL_FILTERED_KNOWLEDGE",
                 arguments("chunkUids", chunkUids), context,
-                () -> openKnowledgeChunks(context, requiredStrings(chunkUids, "chunkUids")));
+                () -> openKnowledgeChunks(context, requiredStrings(chunkUids, "chunkUids").stream()
+                        .limit(MAX_OPEN_CHUNKS).toList()));
     }
 
-    private AgentToolResult searchKnowledge(AgentExecutionContext context, String query) {
+    private AgentToolResult searchKnowledge(AgentContext context, String query) {
         Map<Long, String> documentVersions = documentService.listAccessibleDocumentVersions(context.actor());
         if (documentVersions.isEmpty()) {
             return AgentToolResult.of(Map.of(
@@ -75,8 +78,9 @@ public class KnowledgeAgentTools {
         List<AiServiceClient.KnowledgeCandidate> candidates = search.candidates() == null ? List.of()
                 : search.candidates().stream()
                 .filter(candidate -> isCurrentAccessibleCandidate(candidate, documentVersions))
+                .limit(MAX_SEARCH_CANDIDATES)
                 .toList();
-        context.state().registerKnowledgeCandidates(candidates.stream()
+        context.registerKnowledgeCandidates(candidates.stream()
                 .map(candidate -> Map.entry(candidate.chunkUid(), candidate.documentId()))
                 .toList());
         List<Map<String, Object>> payloadCandidates = candidates.stream().map(this::candidatePayload).toList();
@@ -94,8 +98,8 @@ public class KnowledgeAgentTools {
                 "opened_chunk_count", 0));
     }
 
-    private AgentToolResult openKnowledgeChunks(AgentExecutionContext context, List<String> requestedChunkUids) {
-        List<String> authorized = context.state().authorizeKnowledgeChunkOpen(requestedChunkUids);
+    private AgentToolResult openKnowledgeChunks(AgentContext context, List<String> requestedChunkUids) {
+        List<String> authorized = context.authorizeKnowledgeChunks(requestedChunkUids);
         if (authorized.isEmpty()) {
             return AgentToolResult.of(Map.of("status", "NO_AUTHORIZED_CANDIDATES", "chunks", List.of()),
                     Map.of("knowledge_status", "NO_AUTHORIZED_CANDIDATES", "candidate_count", 0,
@@ -108,8 +112,7 @@ public class KnowledgeAgentTools {
                             "opened_chunk_count", 0));
         }
         List<AiServiceClient.KnowledgeChunk> chunks = aiServiceClient.openKnowledgeChunks(authorized, documentVersions);
-        context.state().registerOpenedKnowledgeChunks(chunks.stream()
-                .map(AiServiceClient.KnowledgeChunk::chunkUid).toList());
+        if (!chunks.isEmpty()) context.markKnowledgeOpened();
         List<QaSourceVO> sources = chunks.stream().map(this::toQaSource).toList();
         List<Map<String, Object>> evidence = chunks.stream()
                 .map(Evidence::from).map(value -> objectMapper.convertValue(value, MAP_TYPE)).toList();

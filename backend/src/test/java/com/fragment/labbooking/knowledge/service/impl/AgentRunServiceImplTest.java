@@ -3,14 +3,11 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
-import com.fragment.labbooking.knowledge.entity.AgentRuntimeCheckpoint;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
 import com.fragment.labbooking.knowledge.entity.QaContextTrace;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.knowledge.mapper.AgentRunMapper;
-import com.fragment.labbooking.knowledge.mapper.AgentRuntimeCheckpointMapper;
 import com.fragment.labbooking.knowledge.mapper.AgentStepMapper;
 import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
@@ -26,7 +23,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Map;
-import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -38,7 +34,6 @@ import static org.mockito.Mockito.when;
 class AgentRunServiceImplTest {
 
     @Mock private AgentRunMapper runMapper;
-    @Mock private AgentRuntimeCheckpointMapper checkpointMapper;
     @Mock private AgentStepMapper stepMapper;
     @Mock private QaContextTraceMapper contextTraceMapper;
 
@@ -51,7 +46,7 @@ class AgentRunServiceImplTest {
         TableInfoHelper.initTableInfo(assistant, AgentRun.class);
         TableInfoHelper.initTableInfo(assistant, AgentStep.class);
         TableInfoHelper.initTableInfo(assistant, QaContextTrace.class);
-        service = new AgentRunServiceImpl(runMapper, checkpointMapper, stepMapper, contextTraceMapper,
+        service = new AgentRunServiceImpl(runMapper, stepMapper, contextTraceMapper,
                 new ObjectMapper());
         persistedRun = new AgentRun();
         persistedRun.setId(42L);
@@ -86,16 +81,20 @@ class AgentRunServiceImplTest {
                 "protocol", "native_function_calling"
         ))));
 
+        service.recordToolExecution("qa-trace-1", new AgentRunService.ToolExecution(
+                "reservation_context", "SUCCESS", 12, "tool-trace-1",
+                "spring_ai_annotated_tool", Map.of()));
+
         service.finishTool(record, answer);
 
-        assertThat(persistedRun.getRoute()).isEqualTo("TOOL");
+        assertThat(persistedRun.getRoute()).isEqualTo("AGENT_RUNTIME");
         assertThat(persistedRun.getStatus()).isEqualTo("SUCCEEDED");
         ArgumentCaptor<AgentStep> stepCaptor = ArgumentCaptor.forClass(AgentStep.class);
         verify(stepMapper, org.mockito.Mockito.times(3)).insert(stepCaptor.capture());
         assertThat(stepCaptor.getAllValues()).anySatisfy(step -> {
             assertThat(step.getStepType()).isEqualTo("TOOL_CALL");
             assertThat(step.getToolTraceId()).isEqualTo("tool-trace-1");
-            assertThat(step.getDetailJson()).contains("native_function_calling");
+            assertThat(step.getDetailJson()).contains("spring_ai_annotated_tool");
         });
     }
 
@@ -123,15 +122,9 @@ class AgentRunServiceImplTest {
     }
 
     @Test
-    void shouldPersistRuntimeStatePlanAndToolWithoutRawToolOutput() {
+    void shouldPersistPlanAndToolWithoutRawToolOutput() {
         stubPersistedRun();
         service.start(record());
-        AgentState.Policy policy = new AgentState.Policy(7L, "USER", false);
-        AgentState state = new AgentState("qa-trace-1", "session-1", policy);
-        state.planning(1);
-
-        service.beginRuntime("qa-trace-1", policy);
-        service.recordRuntimeState("qa-trace-1", state);
         service.recordContextPlan("qa-trace-1", new AgentRunService.ContextPlan(
                 1, "glm-5.1", List.of("knowledge_search")));
         service.recordToolExecution("qa-trace-1", new AgentRunService.ToolExecution(
@@ -139,12 +132,7 @@ class AgentRunServiceImplTest {
                 Map.of("evidence_count", 1)));
 
         ArgumentCaptor<AgentStep> stepCaptor = ArgumentCaptor.forClass(AgentStep.class);
-        verify(stepMapper, org.mockito.Mockito.times(5)).insert(stepCaptor.capture());
-        assertThat(stepCaptor.getAllValues())
-                .filteredOn(step -> "agent_runtime_started".equals(step.getName()))
-                .singleElement()
-                .satisfies(step -> assertThat(step.getDetailJson()).contains("actor_type", "role")
-                        .doesNotContain("userId", "actorId"));
+        verify(stepMapper, org.mockito.Mockito.times(3)).insert(stepCaptor.capture());
         assertThat(stepCaptor.getAllValues()).anySatisfy(step -> {
             assertThat(step.getStepType()).isEqualTo("PLAN");
             assertThat(step.getDetailJson()).contains("knowledge_search");
@@ -157,36 +145,17 @@ class AgentRunServiceImplTest {
     }
 
     @Test
-    void shouldAccumulateUsageDuringRunAndCalibrateFinalTotals() {
+    void shouldPersistFinalProviderUsageSnapshot() {
         when(runMapper.selectOne(any())).thenReturn(persistedRun);
         when(stepMapper.selectCount(any())).thenReturn(1L);
 
-        service.recordProviderUsage("qa-trace-1", Map.of(
-                "reported", true,
-                "input_tokens", 10,
-                "output_tokens", 2,
-                "cached_input_tokens", 1,
-                "total_tokens", 12,
-                "summary_call_count", 1));
         service.recordContextPlan("qa-trace-1", new AgentRunService.ContextPlan(
-                1, "glm-5.1", List.of("knowledge_search"), Map.of(
-                "reported", true,
-                "input_tokens", 20,
-                "output_tokens", 3,
-                "cached_input_tokens", 5,
-                "total_tokens", 23), 15));
-
-        assertThat(persistedRun.getInputTokens()).isEqualTo(30L);
-        assertThat(persistedRun.getOutputTokens()).isEqualTo(5L);
-        assertThat(persistedRun.getCachedInputTokens()).isEqualTo(6L);
-        assertThat(persistedRun.getTotalTokens()).isEqualTo(35L);
-        assertThat(persistedRun.getModelCallCount()).isEqualTo(2);
+                1, "glm-5.1", List.of("knowledge_search"), 15));
 
         QaAnswerVO answer = new QaAnswerVO();
         answer.setModelName("glm-5.1");
         answer.setLatencyMs(80);
         answer.setContextStats(Map.of(
-                "runtime_managed", true,
                 "selected_source_count", 0,
                 "provider_usage", Map.of(
                         "reported", true,
@@ -204,35 +173,6 @@ class AgentRunServiceImplTest {
         assertThat(persistedRun.getCachedInputTokens()).isEqualTo(6L);
         assertThat(persistedRun.getTotalTokens()).isEqualTo(42L);
         assertThat(persistedRun.getModelCallCount()).isEqualTo(3);
-    }
-
-    @Test
-    void shouldPersistAndRestoreExpiringCheckpointOnlyForTheSameActor() throws Exception {
-        when(runMapper.selectOne(any())).thenReturn(persistedRun);
-        when(stepMapper.selectCount(any())).thenReturn(1L);
-        AgentState state = new AgentState(
-                "qa-trace-1", "session-1", new AgentState.Policy(7L, "USER", false));
-        state.planning(2);
-        state.completeTool("knowledge_search");
-        state.registerKnowledgeCandidates(List.of(Map.entry("chunk-12-3", 12L)));
-
-        service.recordRuntimeState("qa-trace-1", state);
-
-        ArgumentCaptor<AgentRuntimeCheckpoint> captured = ArgumentCaptor.forClass(AgentRuntimeCheckpoint.class);
-        verify(checkpointMapper).insert(captured.capture());
-        AgentRuntimeCheckpoint stored = captured.getValue();
-        assertThat(stored.getCheckpointJson()).contains("chunk-12-3").doesNotContain("grounded_answer");
-        assertThat(stored.getExpiresAt()).isAfter(LocalDateTime.now());
-        when(checkpointMapper.selectById("qa-trace-1")).thenReturn(stored);
-
-        AgentState restored = service.restoreRuntimeCheckpoint(
-                        "qa-trace-1", new AgentState.Policy(7L, "USER", false))
-                .orElseThrow();
-        assertThat(restored.authorizeKnowledgeChunkOpen(List.of("chunk-12-3", "guessed")))
-                .containsExactly("chunk-12-3");
-        assertThat(service.restoreRuntimeCheckpoint(
-                "qa-trace-1", new AgentState.Policy(8L, "USER", false))).isEmpty();
-        verify(checkpointMapper).deleteById("qa-trace-1");
     }
 
     private QaRecord record() {

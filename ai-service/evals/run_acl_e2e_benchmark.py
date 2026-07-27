@@ -684,18 +684,6 @@ def dynamic_acl_cases(
         business_code=cross_session.get("business_code"),
     ))
 
-    cross_resume = client.result_request(
-        "POST",
-        f"/knowledge/qa/resume/{before.get('trace_id')}",
-        actor=actors["charlie"],
-    )
-    results.append(case_result(
-        "cross-user-trace-resume",
-        "cross_user_isolation",
-        cross_resume.get("business_code") != 200 and cross_resume.get("data") is None,
-        business_code=cross_resume.get("business_code"),
-    ))
-
     update_alice = client.result_request(
         "PUT",
         f"/knowledge/documents/{alice_document.document_id}",

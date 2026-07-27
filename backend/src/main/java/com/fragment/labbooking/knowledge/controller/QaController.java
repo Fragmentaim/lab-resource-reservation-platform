@@ -11,8 +11,6 @@ import com.fragment.labbooking.knowledge.vo.QaRecordVO;
 import com.fragment.labbooking.knowledge.vo.QaSessionVO;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,9 +19,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
-
-import java.util.concurrent.CompletableFuture;
 import java.util.List;
 
 @RestController
@@ -36,21 +31,6 @@ public class QaController {
     @PostMapping("/ask")
     public Result<QaAnswerVO> ask(@Valid @RequestBody QaAskDTO dto) {
         return Result.success(qaRecordService.ask(dto, UserContext.requireUser()));
-    }
-
-    @PostMapping("/resume/{traceId}")
-    public Result<QaAnswerVO> resume(@PathVariable String traceId) {
-        return Result.success(qaRecordService.resume(traceId, UserContext.requireUser()));
-    }
-
-    @PostMapping(value = "/ask/stream", produces = "application/x-ndjson")
-    public ResponseEntity<ResponseBodyEmitter> askStream(@Valid @RequestBody QaAskDTO dto) {
-        com.fragment.labbooking.common.auth.LoginUser actor = UserContext.requireUser();
-        ResponseBodyEmitter emitter = new ResponseBodyEmitter(180000L);
-        CompletableFuture.runAsync(() -> qaRecordService.askStream(dto, actor, emitter));
-        return ResponseEntity.ok()
-                .contentType(MediaType.valueOf("application/x-ndjson; charset=UTF-8"))
-                .body(emitter);
     }
 
     @GetMapping("/records")

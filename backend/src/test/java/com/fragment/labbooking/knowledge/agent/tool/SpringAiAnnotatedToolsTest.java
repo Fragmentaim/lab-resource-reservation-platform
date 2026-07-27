@@ -2,8 +2,7 @@ package com.fragment.labbooking.knowledge.agent.tool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.auth.LoginUser;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentState;
+import com.fragment.labbooking.knowledge.agent.AgentContext;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.knowledge.service.ReservationCancellationPreviewToolService;
@@ -39,7 +38,7 @@ class SpringAiAnnotatedToolsTest {
     private AiServiceClient aiServiceClient;
     private ReservationAgentTools reservationTools;
     private KnowledgeAgentTools knowledgeTools;
-    private AgentExecutionContext execution;
+    private AgentContext execution;
     private ToolContext toolContext;
 
     @BeforeEach
@@ -60,8 +59,7 @@ class SpringAiAnnotatedToolsTest {
             return action.get().output();
         });
         LoginUser actor = new LoginUser(7L, "user7", "用户", "USER", "13800000000");
-        AgentState state = new AgentState("trace", "session", AgentState.Policy.from(actor));
-        execution = new AgentExecutionContext(actor, "预约规则", "trace", state, false, 8);
+        execution = new AgentContext(actor, "预约规则", "trace", 8);
         toolContext = new ToolContext(Map.of(AgentToolRuntime.EXECUTION_CONTEXT_KEY, execution));
         when(runtime.requireExecutionContext(any())).thenReturn(execution);
     }
@@ -115,14 +113,14 @@ class SpringAiAnnotatedToolsTest {
         List<?> candidates = (List<?>) result.get("candidates");
         assertThat(candidates).hasSize(1);
         assertThat(((Map<?, ?>) candidates.get(0)).get("chunk_uid")).isEqualTo("current");
-        assertThat(execution.state().authorizeKnowledgeChunkOpen(List.of("current", "stale", "forbidden")))
+        assertThat(execution.authorizeKnowledgeChunks(List.of("current", "stale", "forbidden")))
                 .containsExactly("current");
     }
 
     @Test
     void shouldSerializeOpenedEvidenceWithStableJsonFields() {
         Map<Long, String> versions = Map.of(12L, "v2");
-        execution.state().registerKnowledgeCandidates(List.of(Map.entry("chunk-1", 12L)));
+        execution.registerKnowledgeCandidates(List.of(Map.entry("chunk-1", 12L)));
         when(documentService.listAccessibleDocumentVersions(execution.actor())).thenReturn(versions);
         when(aiServiceClient.openKnowledgeChunks(List.of("chunk-1"), versions)).thenReturn(List.of(
                 new AiServiceClient.KnowledgeChunk(

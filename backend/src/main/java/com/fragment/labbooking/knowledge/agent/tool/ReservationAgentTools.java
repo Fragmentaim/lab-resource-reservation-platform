@@ -1,7 +1,7 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.runtime.AgentExecutionContext;
+import com.fragment.labbooking.knowledge.agent.AgentContext;
 import com.fragment.labbooking.knowledge.service.ReservationCancellationPreviewToolService;
 import com.fragment.labbooking.knowledge.service.ReservationContextToolService;
 import com.fragment.labbooking.knowledge.service.ReservationDraftToolService;
@@ -43,7 +43,7 @@ public class ReservationAgentTools {
 
     @Tool(name = "reservation_context", description = "读取当前登录用户自己的预约统计与未来预约，只读。")
     public Map<String, Object> reservationContext(ToolContext toolContext) {
-        AgentExecutionContext context = runtime.requireExecutionContext(toolContext);
+        AgentContext context = runtime.requireExecutionContext(toolContext);
         return runtime.execute("reservation_context", "SELF_READ", Map.of(), context, () -> {
             ReservationAssistantContextVO value = reservationContextService.getReservationContext(
                     context.actor(), context.actor().getId());
@@ -61,7 +61,7 @@ public class ReservationAgentTools {
     public Map<String, Object> resourceAvailability(
             @ToolParam(description = "可选资源名称关键词", required = false) String keyword,
             ToolContext toolContext) {
-        AgentExecutionContext context = runtime.requireExecutionContext(toolContext);
+        AgentContext context = runtime.requireExecutionContext(toolContext);
         String normalizedKeyword = optionalText(keyword, 40);
         return runtime.execute("resource_availability", "SELF_READ",
                 arguments("keyword", normalizedKeyword), context, () -> {
@@ -80,7 +80,7 @@ public class ReservationAgentTools {
     public Map<String, Object> reservationCancellationPreview(
             @ToolParam(description = "预约 ID") Long reservationId,
             ToolContext toolContext) {
-        AgentExecutionContext context = runtime.requireExecutionContext(toolContext);
+        AgentContext context = runtime.requireExecutionContext(toolContext);
         return runtime.execute("reservation_cancellation_preview", "SELF_READ",
                 arguments("reservationId", reservationId), context, () -> {
                     Long validReservationId = requiredPositive(reservationId, "reservationId");
@@ -105,7 +105,7 @@ public class ReservationAgentTools {
             @ToolParam(description = "资源 ID") Long resourceId,
             @ToolParam(description = "时段 ID") Long slotId,
             ToolContext toolContext) {
-        AgentExecutionContext context = runtime.requireExecutionContext(toolContext);
+        AgentContext context = runtime.requireExecutionContext(toolContext);
         return runtime.execute("reservation_create_draft", "SELF_WRITE_DRAFT",
                 arguments("resourceId", resourceId, "slotId", slotId), context, () -> {
                     Long validResourceId = requiredPositive(resourceId, "resourceId");
