@@ -6,6 +6,7 @@ import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.constants.UserRoleConstants;
 import com.fragment.labbooking.common.constants.UserStatusConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
+import com.fragment.labbooking.common.util.TextUtil;
 import com.fragment.labbooking.dto.AuthLoginDTO;
 import com.fragment.labbooking.dto.AuthRegisterDTO;
 import com.fragment.labbooking.dto.ChangePasswordDTO;
@@ -67,7 +68,7 @@ public class AuthServiceImpl implements AuthService {
         String password = dto.getPassword().trim();
         String confirmPassword = dto.getConfirmPassword().trim();
         String nickname = dto.getNickname().trim();
-        String phone = normalizeOptionalText(dto.getPhone());
+        String phone = TextUtil.trimToNull(dto.getPhone());
 
         if (!password.equals(confirmPassword)) {
             throw new BusinessException("两次输入的密码不一致");
@@ -159,13 +160,6 @@ public class AuthServiceImpl implements AuthService {
         CurrentUserVO currentUserVO = new CurrentUserVO();
         BeanUtils.copyProperties(loginUser, currentUserVO);
         return currentUserVO;
-    }
-
-    private String normalizeOptionalText(String value) {
-        if (!StringUtils.hasText(value)) {
-            return null;
-        }
-        return value.trim();
     }
 
     private void validatePasswordLength(String password) {

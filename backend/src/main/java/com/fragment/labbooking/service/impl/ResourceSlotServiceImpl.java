@@ -11,6 +11,7 @@ import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
+import com.fragment.labbooking.common.util.TextUtil;
 import com.fragment.labbooking.dto.ResourceSlotAddDTO;
 import com.fragment.labbooking.dto.ResourceSlotPageQueryDTO;
 import com.fragment.labbooking.dto.ResourceSlotUpdateDTO;
@@ -99,8 +100,8 @@ public class ResourceSlotServiceImpl extends ServiceImpl<ResourceSlotMapper, Res
                 "RESOURCE_SLOT",
                 slot::getId,
                 () -> "resourceId=" + dto.getResourceId()
-                        + ", slotType=" + trimForSummary(dto.getSlotType())
-                        + ", status=" + trimForSummary(dto.getStatus())
+                        + ", slotType=" + TextUtil.trimToNull(dto.getSlotType())
+                        + ", status=" + TextUtil.trimToNull(dto.getStatus())
                         + ", totalQuota=" + dto.getTotalQuota(),
                 () -> {
                     Resource resource = resourceMapper.selectById(dto.getResourceId());
@@ -317,10 +318,6 @@ public class ResourceSlotServiceImpl extends ServiceImpl<ResourceSlotMapper, Res
         return reservationMapper.selectCount(new LambdaQueryWrapper<Reservation>()
                 .eq(Reservation::getSlotId, slotId)
                 .eq(Reservation::getStatus, ReservationStatusConstants.BOOKED));
-    }
-
-    private String trimForSummary(String value) {
-        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     private record NormalizedSlotInput(LocalDateTime startDatetime,

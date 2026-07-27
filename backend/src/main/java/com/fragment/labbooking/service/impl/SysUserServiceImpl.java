@@ -7,6 +7,7 @@ import com.fragment.labbooking.common.audit.AdminAuditHelper;
 import com.fragment.labbooking.common.constants.UserRoleConstants;
 import com.fragment.labbooking.common.constants.UserStatusConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
+import com.fragment.labbooking.common.util.TextUtil;
 import com.fragment.labbooking.dto.UserAddDTO;
 import com.fragment.labbooking.dto.UserPageQueryDTO;
 import com.fragment.labbooking.dto.UserUpdateDTO;
@@ -100,9 +101,9 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser>
                 "ADD",
                 "SYS_USER",
                 sysUser::getId,
-                () -> "username=" + trimForSummary(dto.getUsername())
-                        + ", role=" + trimForSummary(dto.getRole())
-                        + ", status=" + trimForSummary(dto.getStatus()),
+                () -> "username=" + TextUtil.trimToNull(dto.getUsername())
+                        + ", role=" + TextUtil.trimToNull(dto.getRole())
+                        + ", status=" + TextUtil.trimToNull(dto.getStatus()),
                 () -> {
                     String username = normalizeRequiredText(dto.getUsername(), "用户名不能为空");
                     String password = normalizeRequiredText(dto.getPassword(), "密码不能为空");
@@ -120,7 +121,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser>
                     sysUser.setPasswordHash(passwordEncoder.encode(password));
                     sysUser.setNickname(nickname);
                     sysUser.setRole(role);
-                    sysUser.setPhone(normalizeOptionalText(dto.getPhone()));
+                    sysUser.setPhone(TextUtil.trimToNull(dto.getPhone()));
                     sysUser.setStatus(status);
                     sysUser.setCreatedAt(now);
                     sysUser.setUpdatedAt(now);
@@ -159,7 +160,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser>
                     existing.setUsername(username);
                     existing.setNickname(nickname);
                     existing.setRole(role);
-                    existing.setPhone(normalizeOptionalText(dto.getPhone()));
+                    existing.setPhone(TextUtil.trimToNull(dto.getPhone()));
                     existing.setStatus(status);
                     existing.setUpdatedAt(LocalDateTime.now());
 
@@ -295,17 +296,6 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser>
             throw new BusinessException(message);
         }
         return value.trim();
-    }
-
-    private String normalizeOptionalText(String value) {
-        if (!StringUtils.hasText(value)) {
-            return null;
-        }
-        return value.trim();
-    }
-
-    private String trimForSummary(String value) {
-        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     private UserVO toUserVO(SysUser sysUser) {

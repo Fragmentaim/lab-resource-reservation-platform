@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.audit.AdminAuditHelper;
 import com.fragment.labbooking.common.exception.BusinessException;
+import com.fragment.labbooking.common.util.TextUtil;
 import com.fragment.labbooking.dto.SysDictDataAddDTO;
 import com.fragment.labbooking.dto.SysDictDataPageQueryDTO;
 import com.fragment.labbooking.dto.SysDictDataUpdateDTO;
@@ -77,9 +78,9 @@ public class SysDictDataServiceImpl extends ServiceImpl<SysDictDataMapper, SysDi
                 "ADD",
                 "SYS_DICT_DATA",
                 sysDictData::getId,
-                () -> "dictType=" + trimForSummary(dictData.getDictType())
-                        + ", dictValue=" + trimForSummary(dictData.getDictValue())
-                        + ", dictLabel=" + trimForSummary(dictData.getDictLabel()),
+                () -> "dictType=" + TextUtil.trimToNull(dictData.getDictType())
+                        + ", dictValue=" + TextUtil.trimToNull(dictData.getDictValue())
+                        + ", dictLabel=" + TextUtil.trimToNull(dictData.getDictLabel()),
                 () -> {
                     String dictType = dictData.getDictType().trim();
                     String dictLabel = dictData.getDictLabel().trim();
@@ -297,7 +298,4 @@ public class SysDictDataServiceImpl extends ServiceImpl<SysDictDataMapper, SysDi
         }
     }
 
-    private String trimForSummary(String value) {
-        return StringUtils.hasText(value) ? value.trim() : null;
-    }
 }

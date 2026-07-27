@@ -7,6 +7,7 @@ import com.fragment.labbooking.common.audit.AdminAuditHelper;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
+import com.fragment.labbooking.common.util.TextUtil;
 import com.fragment.labbooking.dto.ResourceAddDTO;
 import com.fragment.labbooking.dto.ResourcePageQueryDTO;
 import com.fragment.labbooking.dto.ResourceQueryDTO;
@@ -162,9 +163,9 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
                 "ADD",
                 "RESOURCE",
                 resource::getId,
-                () -> "resourceCode=" + trimForSummary(dto.getResourceCode())
-                        + ", resourceName=" + trimForSummary(dto.getResourceName())
-                        + ", status=" + trimForSummary(dto.getStatus()),
+                () -> "resourceCode=" + TextUtil.trimToNull(dto.getResourceCode())
+                        + ", resourceName=" + TextUtil.trimToNull(dto.getResourceName())
+                        + ", status=" + TextUtil.trimToNull(dto.getStatus()),
                 () -> {
                     String resourceCode = dto.getResourceCode().trim();
                     String resourceName = dto.getResourceName().trim();
@@ -179,8 +180,8 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
                     resource.setResourceName(resourceName);
                     resource.setResourceType(resourceType);
                     resource.setStatus(status);
-                    resource.setLocation(normalizeOptionalText(dto.getLocation()));
-                    resource.setDescription(normalizeOptionalText(dto.getDescription()));
+                    resource.setLocation(TextUtil.trimToNull(dto.getLocation()));
+                    resource.setDescription(TextUtil.trimToNull(dto.getDescription()));
 
                     boolean saved = this.save(resource);
                     if (!saved) {
@@ -221,8 +222,8 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
                     existing.setResourceName(resourceName);
                     existing.setResourceType(resourceType);
                     existing.setStatus(status);
-                    existing.setLocation(normalizeOptionalText(dto.getLocation()));
-                    existing.setDescription(normalizeOptionalText(dto.getDescription()));
+                    existing.setLocation(TextUtil.trimToNull(dto.getLocation()));
+                    existing.setDescription(TextUtil.trimToNull(dto.getDescription()));
 
                     boolean updated = this.updateById(existing);
                     if (!updated) {
@@ -309,17 +310,6 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
         if (count <= 0) {
             throw new BusinessException(message);
         }
-    }
-
-    private String normalizeOptionalText(String value) {
-        if (!StringUtils.hasText(value)) {
-            return null;
-        }
-        return value.trim();
-    }
-
-    private String trimForSummary(String value) {
-        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     private ResourceVO toResourceVO(Resource resource,
