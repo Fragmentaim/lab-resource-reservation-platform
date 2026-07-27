@@ -4,7 +4,7 @@ from app.core import elasticsearch_store, vectorstore
 def test_search_by_keywords_preserves_complete_query_and_acl(monkeypatch):
     captured = {}
 
-    def fake_search(query, top_k, document_ids):
+    def fake_search(query, top_k, document_ids, document_versions=None):
         captured.update(query=query, top_k=top_k, document_ids=document_ids)
         return [{"chunk_id": "es-result"}]
 
@@ -27,7 +27,7 @@ def test_search_by_keywords_preserves_complete_query_and_acl(monkeypatch):
 def test_search_by_keywords_accepts_keyword_sequences(monkeypatch):
     captured = {}
 
-    def fake_search(query, top_k, document_ids):
+    def fake_search(query, top_k, document_ids, document_versions=None):
         captured.update(query=query, top_k=top_k, document_ids=document_ids)
         return []
 

@@ -58,7 +58,7 @@ public class ReservationCreateDraftAgentTool implements AgentTool {
         output.put("requiresUserConfirmation", true);
         output.put("confirmationEndpoint", draft.getConfirmationEndpoint());
         output.put("nextAction", draft.getNextAction());
-        return new AgentToolResult(output, 0, Map.of(
+        return AgentToolResult.of(output, Map.of(
                 "result_type", "RESERVATION_DRAFT",
                 "resource_id", resourceId,
                 "slot_id", slotId,

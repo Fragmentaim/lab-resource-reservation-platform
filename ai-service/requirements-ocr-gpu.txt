@@ -1,5 +1,0 @@
-# Optional local OCR runtime. Install it only on a GPU worker, after
-# requirements.txt. Model cache is configured through PADDLE_PDX_CACHE_HOME.
---extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu129/
-paddlepaddle-gpu==3.2.2
-paddleocr==3.3.0

@@ -7,7 +7,7 @@ from app.core.handoff_memory import (
     HANDOFF_HEADER,
     is_legacy_working_memory,
     normalize_handoff,
-    protected_anchors,
+    strip_legacy_protected_anchor_section,
 )
 
 
@@ -64,8 +64,6 @@ def test_summary_returns_markdown_and_provider_usage(monkeypatch):
         "cached_input_tokens": 10,
         "model_call_count": 1,
         "summary_validation_attempts": 1,
-        "critical_token_count": 2,
-        "protected_anchor_count": 2,
         "summary_format": "MARKDOWN_HANDOFF_V1",
     }
 
@@ -89,31 +87,23 @@ def test_handoff_prompt_is_extensible_and_safety_preserving():
     assert HANDOFF_HEADER in prompt
     assert "可以按当前任务自由增加" in prompt
     assert "按任务线分别记录" in prompt
-    assert "protected_anchors" in prompt
+    assert "结合上下文理解它们的关系" in prompt
     assert "需要重新调用工具刷新" in prompt
     assert "不能扩大服务端 PolicyContext 或 ACL" in prompt
     assert "不要把用户意图写成已执行结果" in prompt
 
 
-def test_summary_retries_when_protected_identifier_is_lost(monkeypatch):
+def test_summary_does_not_apply_regex_anchor_validation(monkeypatch):
     calls = []
 
     def fake_chat(**_):
         calls.append(1)
-        if len(calls) == 1:
-            return valid_handoff(
-                "## 当前目标",
-                "- 继续整理预约方案。",
-                "## 当前约束",
-                "- 不要创建真实预约。",
-            ), {"reported": True, "input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
         return valid_handoff(
             "## 当前目标",
-            "- [用户] 继续处理方案 AURORA-18。",
+            "- 继续整理预约方案。",
             "## 当前约束",
-            "- [用户] 后续不得猜测其他编号。",
             "- [用户] 不要创建真实预约。",
-        ), {"reported": True, "input_tokens": 12, "output_tokens": 6, "total_tokens": 18}
+        ), {"reported": True, "input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
 
     monkeypatch.setattr(session_summarizer.llm, "chat_with_usage", fake_chat)
 
@@ -122,39 +112,28 @@ def test_summary_retries_when_protected_identifier_is_lost(monkeypatch):
         [{"role": "user", "content": "方案编号 AURORA-18，后续不得猜测其他编号。不要创建真实预约。"}],
     )
 
-    assert "AURORA-18" in result["summary"]
-    assert result["provider_usage"]["model_call_count"] == 2
-    assert result["provider_usage"]["total_tokens"] == 33
+    assert "AURORA-18" not in result["summary"]
+    assert result["provider_usage"]["model_call_count"] == 1
+    assert result["provider_usage"]["total_tokens"] == 15
 
 
-def test_previous_chinese_entity_and_constraint_cannot_silently_disappear(monkeypatch):
-    previous = valid_handoff(
-        "## 预约信息",
-        "- [用户] 当前实验室为创新实验室A，labId=LAB-01。",
-        "## 当前约束",
-        "- [用户] 周三晚上不能安排。",
-    )
+def test_summary_retries_only_when_output_format_is_invalid(monkeypatch):
     calls = []
 
     def fake_chat(**_):
         calls.append(1)
         if len(calls) == 1:
-            return valid_handoff(
-                "## 当前目标",
-                "- 继续讨论 LAB-01。",
-            ), {"reported": False}
-        return previous, {"reported": False}
+            return "这是解释，不是交接记录", {"reported": False}
+        return valid_handoff(), {"reported": False}
 
     monkeypatch.setattr(session_summarizer.llm, "chat_with_usage", fake_chat)
 
     result = session_summarizer.summarize_session(
-        previous,
-        [{"role": "user", "content": "没有变更，继续讨论。"}],
+        "",
+        [{"role": "user", "content": "继续处理当前任务。"}],
     )
 
-    assert "创新实验室A" in result["summary"]
-    assert "LAB-01" in result["summary"]
-    assert "周三晚上不能安排" in result["summary"]
+    assert result["summary"].startswith(HANDOFF_HEADER)
     assert len(calls) == 2
 
 
@@ -241,22 +220,24 @@ def test_two_invalid_outputs_fail_without_returning_a_replacement(monkeypatch):
         )
 
 
-def test_anchor_extraction_covers_identifiers_time_quantity_and_safety():
-    anchors = protected_anchors(
-        valid_handoff("## 当前约束", "- 周三晚上不能安排。"),
-        [{
-            "role": "user",
-            "content": (
-                "resourceId=RES-12，目标日期2026-09-03，14:30开始，最多2小时，"
-                "设备为焊接台-WELD-4；没有明确确认前不要创建预约。"
-            ),
-        }],
+def test_retired_machine_anchor_section_is_removed_from_existing_handoff():
+    old_handoff = (
+        valid_handoff(
+            "## 当前目标",
+            "- 继续讨论实验室安排。",
+        )
+        + "\n\n## 受保护锚点（程序校验）\n"
+        + "- `LAB-B02`\n"
+        + "- `2小时`"
     )
 
-    assert all(value in anchors for value in (
-        "RES-12", "2026-09-03", "14:30", "2小时", "焊接台-WELD-4",
-        "周三晚上不能安排", "没有明确确认前不要创建预约",
-    ))
+    cleaned = strip_legacy_protected_anchor_section(old_handoff)
+
+    assert cleaned == valid_handoff(
+        "## 当前目标",
+        "- 继续讨论实验室安排。",
+    )
+    assert "受保护锚点" not in cleaned
 
 
 def test_normalizer_rejects_json_and_accepts_markdown_code_fence():
@@ -266,3 +247,10 @@ def test_normalizer_rejects_json_and_accepts_markdown_code_fence():
         normalize_handoff("下面是摘要：\n" + valid_handoff())
 
     assert normalize_handoff(f"```markdown\n{valid_handoff()}\n```") == valid_handoff()
+
+
+def test_normalizer_removes_leading_reasoning_envelope_only():
+    handoff = valid_handoff()
+    assert normalize_handoff(f"<think>internal reasoning</think>\n{handoff}") == handoff
+    with pytest.raises(ValueError, match="输出首行必须"):
+        normalize_handoff(f"普通解释前言\n<think>internal reasoning</think>\n{handoff}")

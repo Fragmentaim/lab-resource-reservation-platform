@@ -17,7 +17,7 @@ app:
     delay-topic: reservation-delay
     delay-consumer-group: lab-booking-delay-consumer-group
     outbox:
-      relay-delay-millis: 1000
+      dispatch-delay-millis: 1000
       batch-size: 20
       max-retry-count: 10
       initial-retry-delay-millis: 1000

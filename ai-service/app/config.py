@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(Path(__file__).resolve().parents[1] / ".env"),
+        # Old deployments may still contain removed OCR/parser variables.
+        # Ignore them during the one-time transition to the Docling pipeline.
+        extra="ignore",
     )
 
     app_name: str = "Lab Knowledge AI Service"
@@ -17,7 +20,6 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_api_mode: str = "chat_completions"
     chat_model: str = "qwen2.5:7b"
-    tool_calling_model: str = ""
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 1
     # Provider-neutral API clients do not expose reasoning controls directly.
@@ -33,7 +35,6 @@ class Settings(BaseSettings):
     llm_fallback_base_url: str = ""
     llm_fallback_api_key: str = ""
     llm_fallback_chat_model: str = ""
-    llm_fallback_tool_calling_model: str = ""
     llm_circuit_failure_threshold: int = 3
     llm_circuit_reset_seconds: int = 30
     ai_service_token: str = "change-me-before-production"
@@ -81,7 +82,6 @@ class Settings(BaseSettings):
     context_window_tokens: int = 12000
     max_output_tokens: int = 2000
     safety_margin_tokens: int = 512
-    enable_query_rewrite: bool = True
 
     # 本地 Embedding 模型配置
     use_local_embedding: bool = True
@@ -96,23 +96,36 @@ class Settings(BaseSettings):
     # system temporary directory.
     qdrant_local_path: str = ""
 
+    # Docling HybridChunker uses this as a tokenizer-aware maximum rather than
+    # a character count. It preserves document structure and splits only when
+    # a structured unit exceeds the model budget.
     chunk_size: int = 512
-    chunk_overlap: int = 64
     top_k: int = 5
     score_threshold: float = 0.5
 
-    # Local document OCR. The engine is lazily loaded because the normal
-    # native-text PDF path must stay lightweight.
-    ocr_enabled: bool = True
-    ocr_provider: str = "paddle"
-    ocr_device: str = "gpu:0"
-    ocr_language: str = "ch"
-    ocr_model_cache_dir: str = "./.model-cache/paddlex"
-    ocr_min_native_chars: int = 80
-    ocr_hybrid_image_coverage: float = 0.20
-    ocr_scan_image_coverage: float = 0.35
+    # Unified document ingestion. Docling owns format parsing, OCR, layout,
+    # tables, formulas, pictures and structure-aware chunking.
+    docling_device: str = "auto"
+    docling_num_threads: int = 8
+    docling_model_cache_dir: str = "./.model-cache/docling"
+    docling_do_ocr: bool = True
+    docling_do_table_structure: bool = True
+    docling_do_formula_enrichment: bool = True
+    docling_do_picture_classification: bool = True
+    docling_images_scale: float = 3.0
+    # off | local | api. API mode expects an OpenAI-compatible multimodal
+    # chat-completions endpoint and is disabled unless explicitly configured.
+    docling_picture_description_mode: str = "off"
+    docling_picture_local_model: str = "ibm-granite/granite-vision-3.3-2b"
+    docling_picture_api_url: str = ""
+    docling_picture_api_key: str = ""
+    docling_picture_model: str = ""
+    docling_picture_timeout_seconds: float = 300.0
+    docling_picture_max_tokens: int = 1200
+    document_download_timeout_seconds: float = 120.0
+    document_download_max_bytes: int = 268435456
 
 settings = Settings()
-os.environ.setdefault("PADDLE_PDX_CACHE_HOME", settings.ocr_model_cache_dir)
-os.environ.setdefault("PADDLE_HOME", "./.model-cache/paddle")
-os.environ.setdefault("DISABLE_MODEL_SOURCE_CHECK", "True")
+os.environ.setdefault("HF_HOME", settings.docling_model_cache_dir)
+os.environ.setdefault("TORCH_HOME", str(Path(settings.docling_model_cache_dir) / "torch"))
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")

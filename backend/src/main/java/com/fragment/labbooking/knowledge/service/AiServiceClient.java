@@ -23,13 +23,15 @@ public interface AiServiceClient {
     ProcessResult processDocumentByUrl(Long documentId, String fileUrl, String fileName, String fileType,
                                        String docVersion);
 
-    KnowledgeSearchResult retrieveKnowledge(String question, List<Long> documentIds);
+    KnowledgeSearchResult retrieveKnowledge(String question, Map<Long, String> documentVersions);
 
-    List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, List<Long> documentIds);
+    List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, Map<Long, String> documentVersions);
 
     SummaryResult summarizeSession(String existingSummary, List<ChatMessage> newTurns);
 
     int deleteDocumentVectors(Long documentId);
+
+    int deleteDocumentVersion(Long documentId, String docVersion);
 
     boolean checkHealth();
 
@@ -54,8 +56,15 @@ public interface AiServiceClient {
             Integer tableCount,
             Integer imageCount,
             Integer scannedUnitCount,
+            Integer ocrUnitCount,
+            Integer ocrCharacterCount,
+            Double ocrAverageConfidence,
+            Double parseAverageConfidence,
+            Double layoutAverageConfidence,
+            Double tableAverageConfidence,
             Integer emptyUnitCount,
             Double qualityScore,
+            Double qualityLowScore,
             List<String> warnings,
             String reportJson
     ) {}

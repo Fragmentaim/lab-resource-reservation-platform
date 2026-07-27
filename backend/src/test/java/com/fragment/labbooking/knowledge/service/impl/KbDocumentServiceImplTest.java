@@ -32,6 +32,7 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -78,13 +79,13 @@ class KbDocumentServiceImplTest {
         KbDocument grantedDocument = document(9L, DocumentVisibilityConstants.SPECIFIED_USERS, 100L);
         when(documentMapper.selectList(any())).thenReturn(List.of(publicDocument, grantedDocument));
 
-        List<Long> ids = service.listAccessibleReadyDocumentIds(user(7L));
+        Map<Long, String> versions = service.listAccessibleDocumentVersions(user(7L));
 
-        assertThat(ids).containsExactly(3L, 9L);
+        assertThat(versions).containsExactlyInAnyOrderEntriesOf(Map.of(3L, "v1", 9L, "v1"));
         ArgumentCaptor<LambdaQueryWrapper<KbDocument>> wrapperCaptor = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
         verify(documentMapper).selectList(wrapperCaptor.capture());
         assertThat(wrapperCaptor.getValue().getSqlSegment())
-                .contains("status")
+                .contains("chunk_count")
                 .contains("visibility")
                 .contains("uploader_id");
     }
@@ -130,12 +131,35 @@ class KbDocumentServiceImplTest {
         assertThat(events.get(0).getMessage()).doesNotContain("实验室规程");
     }
 
+    @Test
+    void reprocessShouldKeepTheActiveVersionUntilTheNewVersionIsReady() {
+        KbDocument document = document(12L, DocumentVisibilityConstants.PUBLIC, 100L);
+        document.setDocVersion("v3");
+        document.setChunkCount(8);
+        document.setParserProvider("docling");
+        document.setParseQuality("{\"quality_score\":0.9}");
+        when(documentMapper.selectById(12L)).thenReturn(document);
+        when(documentMapper.updateById(any(KbDocument.class))).thenReturn(1);
+        when(outboxProperties.isEnabled()).thenReturn(true);
+        when(documentProcessProperties.isEnabled()).thenReturn(true);
+
+        service.reprocessDocument(12L);
+
+        assertThat(document.getStatus()).isEqualTo(DocumentStatusConstants.PENDING);
+        assertThat(document.getDocVersion()).isEqualTo("v3");
+        assertThat(document.getChunkCount()).isEqualTo(8);
+        assertThat(document.getParserProvider()).isEqualTo("docling");
+        assertThat(document.getParseQuality()).contains("quality_score");
+    }
+
     private KbDocument document(Long id, String visibility, Long uploaderId) {
         KbDocument document = new KbDocument();
         document.setId(id);
         document.setTitle("实验室规程");
         document.setFileName("rule.pdf");
         document.setStatus(DocumentStatusConstants.READY);
+        document.setDocVersion("v1");
+        document.setChunkCount(1);
         document.setVisibility(visibility);
         document.setUploaderId(uploaderId);
         return document;

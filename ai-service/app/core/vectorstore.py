@@ -3,7 +3,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
     Filter, FieldCondition, MatchValue, MatchAny,
-    PointIdsList,
+    FilterSelector,
 )
 from typing import Iterator, List, Optional, Sequence
 import threading
@@ -106,20 +106,14 @@ def search(
     top_k: Optional[int] = None,
     score_threshold: Optional[float] = None,
     document_ids: Optional[List[int]] = None,
+    document_versions: Optional[dict[int, str]] = None,
 ) -> List[dict]:
     """Search for similar vectors and return scored results."""
     client = get_client()
 
-    query_filter = None
-    if document_ids is not None:
-        if not document_ids:
-            return []
-        query_filter = Filter(
-            must=[FieldCondition(
-                key="document_id",
-                match=MatchAny(any=document_ids),
-            )]
-        )
+    query_filter = _document_filter(document_ids, document_versions)
+    if document_ids is not None and not document_ids:
+        return []
 
     results = []
     if hasattr(client, "search"):
@@ -152,6 +146,7 @@ def search_by_keywords(
     keywords: str | Sequence[str],
     top_k: int = None,
     document_ids: Optional[List[int]] = None,
+    document_versions: Optional[dict[int, str]] = None,
 ) -> list:
     """Search the Elasticsearch BM25 index with the caller's ACL document IDs."""
     query = keywords if isinstance(keywords, str) else " ".join(
@@ -162,6 +157,7 @@ def search_by_keywords(
         query=query,
         top_k=top_k or settings.top_k,
         document_ids=document_ids,
+        document_versions=document_versions,
     )
 
 
@@ -186,14 +182,21 @@ def iter_chunk_payloads(batch_size: int = 512) -> Iterator[dict]:
             break
 
 
-def get_chunks_by_ids(chunk_ids: List[str], document_ids: Optional[List[int]] = None) -> List[dict]:
+def get_chunks_by_ids(
+    chunk_ids: List[str],
+    document_ids: Optional[List[int]] = None,
+    document_versions: Optional[dict[int, str]] = None,
+) -> List[dict]:
     """Load chunks by ID after applying the document filter."""
     if not chunk_ids or document_ids is not None and not document_ids:
         return []
 
     client = get_client()
     conditions = [FieldCondition(key="chunk_id", match=MatchAny(any=chunk_ids))]
-    if document_ids is not None:
+    scope_filter = _document_filter(document_ids, document_versions)
+    if scope_filter is not None:
+        conditions.append(scope_filter)
+    elif document_ids is not None:
         conditions.append(FieldCondition(key="document_id", match=MatchAny(any=document_ids)))
     points, _ = client.scroll(
         collection_name=settings.qdrant_collection,
@@ -230,25 +233,59 @@ def _result_from_payload(point_id: str, score: float, payload: dict) -> dict:
 
 
 def delete_by_document(document_id: int) -> int:
+    return _delete_matching(Filter(
+        must=[FieldCondition(
+            key="document_id",
+            match=MatchValue(value=document_id),
+        )]
+    ))
+
+
+def delete_by_document_version(document_id: int, doc_version: str) -> int:
+    return _delete_matching(Filter(must=[
+        FieldCondition(key="document_id", match=MatchValue(value=document_id)),
+        FieldCondition(key="doc_version", match=MatchValue(value=doc_version)),
+    ]))
+
+
+def _delete_matching(query_filter: Filter) -> int:
     with _mutation_lock:
         client = get_client()
-        points, _ = client.scroll(
+        count = int(client.count(
             collection_name=settings.qdrant_collection,
-            scroll_filter=Filter(
-                must=[FieldCondition(
-                    key="document_id",
-                    match=MatchValue(value=document_id),
-                )]
-            ),
-            limit=10000,
-            with_payload=False,
-        )
-        if not points:
+            count_filter=query_filter,
+            exact=True,
+        ).count)
+        if count == 0:
             return 0
-        ids = [p.id for p in points]
         client.delete(
             collection_name=settings.qdrant_collection,
-            points_selector=PointIdsList(points=ids),
+            points_selector=FilterSelector(filter=query_filter),
+            wait=True,
         )
 
-    return len(ids)
+    return count
+
+
+def _document_filter(
+    document_ids: Optional[List[int]],
+    document_versions: Optional[dict[int, str]],
+) -> Optional[Filter]:
+    if document_versions:
+        allowed_ids = set(document_ids) if document_ids is not None else None
+        scopes = [
+            Filter(must=[
+                FieldCondition(key="document_id", match=MatchValue(value=document_id)),
+                FieldCondition(key="doc_version", match=MatchValue(value=doc_version)),
+            ])
+            for document_id, doc_version in document_versions.items()
+            if doc_version and (allowed_ids is None or document_id in allowed_ids)
+        ]
+        return Filter(should=scopes) if scopes else Filter(must=[
+            FieldCondition(key="document_id", match=MatchValue(value=-1)),
+        ])
+    if document_ids is None:
+        return None
+    return Filter(must=[
+        FieldCondition(key="document_id", match=MatchAny(any=document_ids)),
+    ])

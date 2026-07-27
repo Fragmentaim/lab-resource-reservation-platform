@@ -97,7 +97,7 @@ def test_hybrid_retrieval_uses_rrf_to_fuse_duplicate_candidates_and_preserves_ac
             _result("shared", "取消预约需要提前确认", 0.75),
         ]
 
-    def keyword_search(_keywords, top_k, document_ids):
+    def keyword_search(_keywords, top_k, document_ids, document_versions=None):
         calls.append(("keyword", document_ids))
         return [
             _result("shared", "取消预约需要提前确认", 9.0),

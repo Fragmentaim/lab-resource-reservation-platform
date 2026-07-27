@@ -1,6 +1,5 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
-import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.agent.PolicyContext;
 import org.springframework.stereotype.Component;
 
@@ -33,18 +32,10 @@ public class AgentToolRegistry {
         this.toolsByName = Collections.unmodifiableMap(new LinkedHashMap<>(collected));
     }
 
-    public List<Map<String, Object>> definitionsFor(PolicyContext policy) {
+    public List<AgentTool> toolsFor(PolicyContext policy) {
         return toolsByName.values().stream()
                 .filter(tool -> tool.isAvailableFor(policy))
-                .map(AgentTool::definition)
                 .toList();
     }
 
-    public AgentTool resolve(String name, PolicyContext policy) {
-        AgentTool tool = toolsByName.get(name == null ? "" : name);
-        if (tool == null || !tool.isAvailableFor(policy)) {
-            throw new BusinessException("不允许调用的 AI 工具: " + name);
-        }
-        return tool;
-    }
 }

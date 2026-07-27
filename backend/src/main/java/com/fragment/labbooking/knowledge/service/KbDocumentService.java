@@ -12,6 +12,7 @@ import com.fragment.labbooking.common.auth.LoginUser;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Map;
 
 public interface KbDocumentService extends IService<KbDocument> {
 
@@ -34,5 +35,5 @@ public interface KbDocumentService extends IService<KbDocument> {
 
     void processDocumentMessage(Long documentId, String traceId);
 
-    List<Long> listAccessibleReadyDocumentIds(LoginUser actor);
+    Map<Long, String> listAccessibleDocumentVersions(LoginUser actor);
 }

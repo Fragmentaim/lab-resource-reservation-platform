@@ -76,20 +76,11 @@ public final class AgentState {
 
     /**
      * A successful knowledge search yields only opaque candidate locators.
-     * Until at least one locator is opened, the next planning turn must stay
-     * on the evidence-reading path rather than starting another broad search.
+     * Until the evidence-reading tool has run, a candidate preview is not
+     * sufficient grounds for a final answer.
      */
     public boolean hasPendingKnowledgeEvidence() {
-        return !searchableChunkDocumentIds.isEmpty() && openedChunkUids.isEmpty();
-    }
-
-    /**
-     * Opened chunks are the evidence boundary for the current knowledge task.
-     * The following model turn should synthesize an answer, not start a new
-     * tool loop against the same question.
-     */
-    public boolean hasOpenedKnowledgeEvidence() {
-        return !openedChunkUids.isEmpty();
+        return !searchableChunkDocumentIds.isEmpty() && !completedTools.contains("knowledge_open_chunks");
     }
 
     public void answering() {

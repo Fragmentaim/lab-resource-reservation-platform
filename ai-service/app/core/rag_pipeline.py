@@ -1,9 +1,10 @@
+"""ACL-scoped hybrid retrieval used by the Agent knowledge tools."""
+
 import re
 
-from typing import Iterator, List, Optional
-from app.core import embedder, vectorstore, llm, reranker, query_rewriter, context_assembler
+from typing import List, Optional
+from app.core import embedder, vectorstore, reranker
 from app.config import settings
-import time
 
 
 def _extract_keywords(question: str) -> list:
@@ -24,167 +25,22 @@ def _extract_keywords(question: str) -> list:
     return list(dict.fromkeys(keywords)) or tokens
 
 
-def answer_question(
-    question: str,
-    document_ids: Optional[List[int]] = None,
-    chat_history: Optional[List[dict]] = None,
-    session_summary: Optional[str] = None,
-    context_options: Optional[dict] = None,
-    top_k: Optional[int] = None,
-    score_threshold: Optional[float] = None,
-    model: Optional[str] = None,
-) -> dict:
-    """Full RAG pipeline: retrieve -> assemble prompt -> generate answer."""
-    start = time.time()
-    system_prompt, user_prompt, packed_history, sources, rewritten_question, rewrite_applied, context_stats = _build_rag_prompt(
-        question=question,
-        document_ids=document_ids,
-        chat_history=chat_history,
-        session_summary=session_summary,
-        context_options=context_options,
-        top_k=top_k,
-        score_threshold=score_threshold,
-        model=model,
-    )
-
-    answer, provider_usage = llm.chat_with_usage(
-        system_prompt=system_prompt,
-        user_message=user_prompt,
-        history=packed_history,
-        model=model,
-    )
-
-    latency_ms = int((time.time() - start) * 1000)
-    context_stats["provider_usage"] = provider_usage
-
-    return {
-        "answer": answer,
-        "sources": sources,
-        "latency_ms": latency_ms,
-        "model": model or settings.chat_model,
-        "rewritten_question": rewritten_question,
-        "rewrite_applied": rewrite_applied,
-        "context_stats": context_stats,
-    }
-
-
 def retrieve_candidates(
     question: str,
     document_ids: Optional[List[int]] = None,
     top_k: Optional[int] = None,
     score_threshold: Optional[float] = None,
     apply_rerank: bool = True,
+    document_versions: Optional[dict[int, str]] = None,
 ) -> List[dict]:
     """Retrieve and rerank chunks without invoking a chat model or assembling an answer."""
-    return _retrieve_ranked_candidates(question, document_ids, top_k, score_threshold, apply_rerank)
-
-
-def answer_question_stream(
-    question: str,
-    document_ids: Optional[List[int]] = None,
-    chat_history: Optional[List[dict]] = None,
-    session_summary: Optional[str] = None,
-    context_options: Optional[dict] = None,
-    top_k: Optional[int] = None,
-    score_threshold: Optional[float] = None,
-    model: Optional[str] = None,
-) -> Iterator[dict]:
-    """Streaming RAG pipeline: emit sources first, then token deltas."""
-    start = time.time()
-    system_prompt, user_prompt, packed_history, sources, rewritten_question, rewrite_applied, context_stats = _build_rag_prompt(
-        question=question,
-        document_ids=document_ids,
-        chat_history=chat_history,
-        session_summary=session_summary,
-        context_options=context_options,
-        top_k=top_k,
-        score_threshold=score_threshold,
-        model=model,
-    )
-    resolved_model = model or settings.chat_model
-
-    yield {
-        "type": "meta",
-        "sources": sources,
-        "model": resolved_model,
-        "rewritten_question": rewritten_question,
-        "rewrite_applied": rewrite_applied,
-        "context_stats": context_stats,
-    }
-
-    for content in llm.chat_stream(
-        system_prompt=system_prompt,
-        user_message=user_prompt,
-        history=packed_history,
-        model=model,
-    ):
-        yield {
-            "type": "delta",
-            "content": content,
-        }
-
-    yield {
-        "type": "done",
-        "latency_ms": int((time.time() - start) * 1000),
-        "model": resolved_model,
-    }
-
-
-def _build_rag_prompt(
-    question: str,
-    document_ids: Optional[List[int]] = None,
-    chat_history: Optional[List[dict]] = None,
-    session_summary: Optional[str] = None,
-    context_options: Optional[dict] = None,
-    top_k: Optional[int] = None,
-    score_threshold: Optional[float] = None,
-    model: Optional[str] = None,
-) -> tuple[str, str, list, list, str, bool, dict]:
-    rewritten_question, rewrite_applied = query_rewriter.rewrite_question(
-        question=question,
-        session_summary=session_summary,
-        chat_history=chat_history,
-        model=model,
-    )
-    retrieval_question = rewritten_question or question
-    k = top_k or settings.top_k
-    search_results = _retrieve_ranked_candidates(retrieval_question, document_ids, top_k, score_threshold)
-    assembled = context_assembler.assemble_context(
-        original_question=question,
-        rewritten_question=retrieval_question,
-        ranked_results=search_results,
-        session_summary=session_summary,
-        chat_history=chat_history,
-        top_k=k,
-        context_options=context_options,
-    )
-    sources = []
-    for result in assembled["sources"]:
-        sources.append({
-            "document_id": result["document_id"],
-            "doc_version": result.get("doc_version"),
-            "chunk_id": result.get("chunk_id"),
-            "chunk_index": result.get("chunk_index"),
-            "page_no": result.get("page_no"),
-            "section_title": result.get("section_title"),
-            "title_path": result.get("title_path") or [],
-            "content_hash": result.get("content_hash"),
-            "score": result["score"],
-            "retrieval_score": result.get("retrieval_score"),
-            "rerank_score": result.get("rerank_score"),
-            "rerank_provider": result.get("rerank_provider"),
-            "retrieval_source": result.get("retrieval_source"),
-            "excerpt": result["content"][:200],
-        })
-
-    return (
-        assembled["system_prompt"],
-        assembled["user_prompt"],
-        assembled["history"],
-        sources,
-        retrieval_question,
-        rewrite_applied,
-        assembled["context_stats"],
+    return _retrieve_ranked_candidates(
+        question,
+        document_ids,
+        top_k,
+        score_threshold,
+        apply_rerank,
+        document_versions,
     )
 
 
@@ -194,6 +50,7 @@ def _retrieve_ranked_candidates(
     top_k: Optional[int],
     score_threshold: Optional[float],
     apply_rerank: bool = True,
+    document_versions: Optional[dict[int, str]] = None,
 ) -> List[dict]:
     """Collect lexical and vector candidates, fuse them, then rerank once."""
     k = top_k or settings.top_k
@@ -208,13 +65,24 @@ def _retrieve_ranked_candidates(
             top_k=candidate_k,
             score_threshold=threshold,
             document_ids=document_ids,
+            document_versions=document_versions,
         )
         _mark_retrieval_source(vector_results, "vector")
         if settings.enable_hybrid_search or not vector_results:
-            keyword_results = vectorstore.search_by_keywords(question, top_k=candidate_k, document_ids=document_ids)
+            keyword_results = vectorstore.search_by_keywords(
+                question,
+                top_k=candidate_k,
+                document_ids=document_ids,
+                document_versions=document_versions,
+            )
             _mark_retrieval_source(keyword_results, "bm25")
     else:
-        keyword_results = vectorstore.search_by_keywords(question, top_k=candidate_k, document_ids=document_ids)
+        keyword_results = vectorstore.search_by_keywords(
+            question,
+            top_k=candidate_k,
+            document_ids=document_ids,
+            document_versions=document_versions,
+        )
         _mark_retrieval_source(keyword_results, "bm25")
         if (settings.enable_hybrid_search or not keyword_results) and settings.enable_embedding:
             vector_results = vectorstore.search(
@@ -222,6 +90,7 @@ def _retrieve_ranked_candidates(
                 top_k=candidate_k,
                 score_threshold=threshold,
                 document_ids=document_ids,
+                document_versions=document_versions,
             )
             _mark_retrieval_source(vector_results, "vector")
 

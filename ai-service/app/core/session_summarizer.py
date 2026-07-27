@@ -4,9 +4,8 @@ from typing import List, Optional
 from app.core import llm
 from app.core.handoff_memory import (
     HANDOFF_HEADER,
-    missing_anchors,
     normalize_handoff,
-    protected_anchors,
+    strip_legacy_protected_anchor_section,
 )
 from app.core.token_counter import count_tokens
 
@@ -25,7 +24,7 @@ HANDOFF_PROMPT = f"""你是 Agent 会话状态交接编译器，不是聊天概�
 
 信息保留规则：
 1. 保留会影响后续理解、判断、工具参数、权限检查、用户确认和证据引用的信息；删除寒暄、重复解释、无效尝试和无业务影响的过程。
-2. ID、编号、日期、时间、时长、数量、明确禁止条件和待确认操作必须逐字保留，不得改写、补全或猜测。输入中的 protected_anchors 必须全部出现在输出中；失效值放入“已失效信息”仍需原样保留。
+2. 准确保留会影响后续行为的实体、ID、日期、时间、时长、数量、限制条件、待确认操作和用户偏好；结合上下文理解它们的关系，不得补全、猜测或张冠李戴。失效值只在仍有助于解释当前状态或防止误操作时简要记录。
 3. 新信息只有在用户明确改为、撤销、作废、不再考虑时才能覆盖旧信息。无法判断冲突时标记“需要澄清”，不能自行选择。
 4. 严格区分“用户陈述、工具验证、知识证据、系统状态、未验证推测”；不要把用户意图写成已执行结果，也不要把模型推测写成工具事实。
 5. 严格区分讨论、草案、等待确认和实际执行。创建、取消、修改等真实写操作必须记录对象、所处阶段、缺少参数、确认状态和执行结果。
@@ -34,10 +33,12 @@ HANDOFF_PROMPT = f"""你是 Agent 会话状态交接编译器，不是聊天概�
 8. 知识证据保留必要的文档、章节、页码、chunkId、结论和来源；未被证据支持的内容标记为未验证。
 9. 已完成且不再相关的任务压成一行归档；活跃任务、待确认写操作和未解决问题保留足够细节。
 10. 不设置固定篇幅。信息确实很多时可以输出较长记录，但要合并重复内容并提高信息密度。
+11. 完全不影响后续行为的背景材料、寒暄、重复纪要和噪声直接删除；不要为它们建立计数、索引、批次或归档章节。
+12. 已完成的知识问答只保留问题标识、最终结论和必要证据定位，不复刻选项表、完整原文或推理过程。
 
 输出前自行检查：
 - 后续 Agent 是否能直接继续每条活跃任务；
-- 所有 protected_anchors 是否逐字出现；
+- 活跃任务的关键实体、参数、限制和待确认状态是否完整；
 - 参数、限制、权限、来源和确认状态是否清楚；
 - 是否错误声称执行了工具或真实写操作；
 - 是否错误扩大了用户权限。
@@ -51,18 +52,17 @@ def summarize_session(
     new_turns: List[dict],
 ) -> dict:
     prepared_turns = _prepare_turns(new_turns)
-    if not prepared_turns and existing_summary:
+    previous_handoff = strip_legacy_protected_anchor_section(existing_summary)
+    if not prepared_turns and previous_handoff:
         return {
-            "summary": existing_summary,
-            "summary_tokens": count_tokens(existing_summary),
+            "summary": previous_handoff,
+            "summary_tokens": count_tokens(previous_handoff),
             "provider_usage": {"reported": False, "model_call_count": 0},
         }
 
-    anchors = protected_anchors(existing_summary, prepared_turns)
     input_payload = {
-        "previous_handoff": existing_summary or None,
+        "previous_handoff": previous_handoff or None,
         "events_to_compact": prepared_turns,
-        "protected_anchors": anchors,
     }
     source_text = json.dumps(input_payload, ensure_ascii=False, separators=(",", ":"))
     usages = []
@@ -75,8 +75,6 @@ def summarize_session(
             correction = (
                 "\n上一次交接记录未通过校验，请根据原始输入完整重写。校验错误："
                 + "；".join(validation_errors[-3:])
-                + "。以下锚点必须逐字出现："
-                + json.dumps(anchors, ensure_ascii=False)
             )
         raw, provider_usage = llm.chat_with_usage(
             system_prompt=HANDOFF_PROMPT,
@@ -84,11 +82,7 @@ def summarize_session(
         )
         usages.append(provider_usage or {})
         try:
-            candidate = normalize_handoff(raw)
-            missing = missing_anchors(candidate, anchors)
-            if missing:
-                raise ValueError("受保护锚点缺失: " + ", ".join(missing))
-            handoff = candidate
+            handoff = normalize_handoff(raw)
             break
         except Exception as exc:
             validation_errors.append(str(exc))
@@ -99,8 +93,6 @@ def summarize_session(
     usage = _aggregate_usage(usages)
     usage["model_call_count"] = len(usages)
     usage["summary_validation_attempts"] = len(usages)
-    usage["critical_token_count"] = len(anchors)
-    usage["protected_anchor_count"] = len(anchors)
     usage["summary_format"] = "MARKDOWN_HANDOFF_V1"
     return {
         "summary": handoff,

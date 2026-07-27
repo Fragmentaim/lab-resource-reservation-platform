@@ -2,6 +2,16 @@ server:
   port: ${SERVER_PORT:8081}
 
 spring:
+  ai:
+    openai:
+      base-url: ${AGENT_LLM_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11434/v1}}
+      api-key: ${AGENT_LLM_API_KEY:${LLM_API_KEY:local-no-key}}
+      chat:
+        model: ${AGENT_MODEL:${CHAT_MODEL:qwen2.5:7b}}
+        timeout: ${LLM_TIMEOUT_SECONDS:60}s
+        max-retries: ${LLM_MAX_RETRIES:1}
+        parallel-tool-calls: false
+        reasoning-effort: ${AGENT_REASONING_EFFORT:${LLM_REASONING_EFFORT:}}
   datasource:
     url: ${MYSQL_URL:jdbc:mysql://localhost:3306/lab_booking?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8}
     username: ${MYSQL_USERNAME:root}
@@ -66,7 +76,7 @@ app:
     delay-topic: reservation-delay
     delay-consumer-group: lab-booking-delay-consumer-group
     outbox:
-      relay-delay-millis: 1000
+      dispatch-delay-millis: 1000
       batch-size: 20
   audit:
     enabled: true
@@ -132,8 +142,10 @@ app:
           max-output-tokens: 4000
           safety-margin-tokens: 2048
           compaction-target-ratio: 0.70
-    native-tool-calling:
-      enabled: true
+    agent:
+      # Spring AI owns the model/tool loop. This limit guards against a model
+      # repeatedly selecting tools without finishing the user's task.
+      max-tool-calls: ${AGENT_MAX_TOOL_CALLS:8}
     agent-reservation-confirmation:
       # A draft is user-bound and short-lived. Confirmation always reuses the
       # reservation service, which performs the authoritative business checks.

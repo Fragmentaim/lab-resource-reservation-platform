@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from app.core.handoff_memory import HANDOFF_HEADER, normalize_handoff, protected_anchors
+from app.core.handoff_memory import HANDOFF_HEADER, normalize_handoff
 from app.core.session_summarizer import summarize_session
 
 
@@ -61,7 +61,7 @@ def new_turns() -> list[dict]:
     ]
 
 
-def checks(handoff: str, anchors: list[str]) -> dict[str, bool]:
+def checks(handoff: str) -> dict[str, bool]:
     return {
         "valid_markdown_handoff": handoff.startswith(HANDOFF_HEADER),
         "current_lab_preserved": "制造实验室B" in handoff and "LAB-02" in handoff,
@@ -79,7 +79,6 @@ def checks(handoff: str, anchors: list[str]) -> dict[str, bool]:
         "missing_slot_preserved": "slotId" in handoff,
         "acl_not_authoritative": "PolicyContext" in handoff or "服务端" in handoff,
         "dynamic_availability_requires_refresh": "需要重新调用工具刷新" in handoff,
-        "all_protected_anchors_preserved": all(anchor in handoff for anchor in anchors),
     }
 
 
@@ -90,19 +89,17 @@ def main() -> int:
 
     previous = build_previous_handoff()
     turns = new_turns()
-    anchors = protected_anchors(previous, turns)
     started = time.perf_counter()
     result = summarize_session(previous, turns)
     latency_ms = round((time.perf_counter() - started) * 1000, 2)
     handoff = normalize_handoff(result["summary"])
-    assertions = checks(handoff, anchors)
+    assertions = checks(handoff)
     report = {
         "benchmark_type": "real_single_markdown_handoff_compaction",
         "format_version": "MARKDOWN_HANDOFF_V1",
         "input": {
             "previous_handoff": previous,
             "new_turns": turns,
-            "protected_anchors": anchors,
         },
         "output_handoff": handoff,
         "checks": assertions,

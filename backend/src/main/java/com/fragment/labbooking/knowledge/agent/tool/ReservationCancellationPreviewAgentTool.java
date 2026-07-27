@@ -40,7 +40,7 @@ public class ReservationCancellationPreviewAgentTool implements AgentTool {
     public AgentToolResult execute(AgentToolInvocation invocation) {
         ReservationCancellationPreviewVO value = cancellationPreviewToolService.preview(
                 invocation.actor(), AgentToolArguments.requiredPositiveLong(invocation.arguments().get("reservationId"), "reservationId"));
-        return new AgentToolResult(Map.of(
+        return AgentToolResult.of(Map.of(
                 "reservationId", value.getReservationId(),
                 "reservationNo", value.getReservationNo(),
                 "resourceName", value.getResourceName(),
@@ -48,7 +48,7 @@ public class ReservationCancellationPreviewAgentTool implements AgentTool {
                 "requiresUserConfirmation", value.isRequiresUserConfirmation(),
                 "writeExecuted", value.isWriteExecuted(),
                 "nextAction", value.getNextAction()
-        ), 0, Map.of(
+        ), Map.of(
                 "result_type", "CANCELLATION_PREVIEW",
                 "reservationId", value.getReservationId(),
                 "writeExecuted", value.isWriteExecuted()

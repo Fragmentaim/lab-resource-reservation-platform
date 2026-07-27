@@ -16,21 +16,11 @@ from app.config import settings
 
 
 @dataclass(frozen=True)
-class ModelCapability:
-    model: str
-    api_mode: str
-    supports_native_tool_calling: bool
-    timeout_seconds: float
-    max_retries: int
-
-
-@dataclass(frozen=True)
 class ProviderRoute:
     name: str
     base_url: str
     api_key: str
     chat_model: str
-    tool_model: str
 
 
 @dataclass
@@ -50,34 +40,9 @@ _lock = Lock()
 T = TypeVar("T")
 
 
-def chat_capability(requested_model: Optional[str] = None) -> ModelCapability:
-    return _capability(requested_model or settings.chat_model)
-
-
-def tool_capability(requested_model: Optional[str] = None) -> ModelCapability:
-    return _capability(requested_model or settings.tool_calling_model or settings.chat_model)
-
-
 def get_client() -> object:
     """Compatibility entrypoint for callers that only need the primary client."""
     return _client_for(_routes()[0])
-
-
-def require_native_tool_calling(requested_model: Optional[str] = None) -> ModelCapability:
-    capability = tool_capability(requested_model)
-    if not capability.supports_native_tool_calling:
-        raise ValueError("Native tool calling requires llm_api_mode=chat_completions or anthropic")
-    return capability
-
-
-def _capability(model: str) -> ModelCapability:
-    return ModelCapability(
-        model=model,
-        api_mode=settings.llm_api_mode,
-        supports_native_tool_calling=settings.llm_api_mode in {"chat_completions", "anthropic"},
-        timeout_seconds=max(1.0, settings.llm_timeout_seconds),
-        max_retries=max(0, settings.llm_max_retries),
-    )
 
 
 def _openai_base_url() -> str:
@@ -89,7 +54,7 @@ def _normalize_base_url(value: str) -> str:
     return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
 
 
-def invoke(kind: str, requested_model: Optional[str], operation: Callable[[OpenAI, str], T]) -> tuple[T, dict]:
+def invoke(requested_model: Optional[str], operation: Callable[[OpenAI, str], T]) -> tuple[T, dict]:
     """Call the first healthy route and return privacy-safe routing metadata."""
     errors: list[str] = []
     routes = _routes()
@@ -97,7 +62,7 @@ def invoke(kind: str, requested_model: Optional[str], operation: Callable[[OpenA
         if not _try_acquire(route.name):
             errors.append(f"{route.name}:circuit_open")
             continue
-        model = requested_model or (route.tool_model if kind == "tool" else route.chat_model)
+        model = requested_model or route.chat_model
         try:
             result = operation(_client_for(route), model)
             _mark_success(route.name)
@@ -163,13 +128,11 @@ def health_snapshot() -> list[dict]:
 
 
 def _routes() -> list[ProviderRoute]:
-    primary = ProviderRoute("primary", settings.llm_base_url, settings.llm_api_key,
-                            settings.chat_model, settings.tool_calling_model or settings.chat_model)
+    primary = ProviderRoute("primary", settings.llm_base_url, settings.llm_api_key, settings.chat_model)
     routes = [primary]
     if settings.llm_fallback_base_url.strip() and settings.llm_fallback_chat_model.strip():
         routes.append(ProviderRoute("fallback", settings.llm_fallback_base_url, settings.llm_fallback_api_key,
-                                    settings.llm_fallback_chat_model,
-                                    settings.llm_fallback_tool_calling_model or settings.llm_fallback_chat_model))
+                                    settings.llm_fallback_chat_model))
     return routes
 
 

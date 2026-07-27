@@ -47,21 +47,22 @@ public class KnowledgeOpenChunksAgentTool implements AgentTool {
                 invocation.arguments().get("chunkUids"), "chunkUids");
         List<String> authorizedChunkUids = invocation.state().authorizeKnowledgeChunkOpen(requestedChunkUids);
         if (authorizedChunkUids.isEmpty()) {
-            return new AgentToolResult(Map.of("status", "NO_AUTHORIZED_CANDIDATES", "chunks", List.of()), 0,
+            return AgentToolResult.of(Map.of("status", "NO_AUTHORIZED_CANDIDATES", "chunks", List.of()),
                     Map.of("knowledge_status", "NO_AUTHORIZED_CANDIDATES", "candidate_count", 0, "opened_chunk_count", 0));
         }
         // Recheck ACL before reading chunk content.
-        List<Long> documentIds = kbDocumentService.listAccessibleReadyDocumentIds(invocation.actor());
-        if (documentIds.isEmpty()) {
-            return new AgentToolResult(Map.of("status", "NO_ACCESSIBLE_DOCUMENTS", "chunks", List.of()), 0,
+        Map<Long, String> documentVersions = kbDocumentService.listAccessibleDocumentVersions(invocation.actor());
+        if (documentVersions.isEmpty()) {
+            return AgentToolResult.of(Map.of("status", "NO_ACCESSIBLE_DOCUMENTS", "chunks", List.of()),
                     Map.of("knowledge_status", "NO_ACCESSIBLE_DOCUMENTS", "candidate_count", 0, "opened_chunk_count", 0));
         }
-        List<AiServiceClient.KnowledgeChunk> chunks = aiServiceClient.openKnowledgeChunks(authorizedChunkUids, documentIds);
+        List<AiServiceClient.KnowledgeChunk> chunks = aiServiceClient.openKnowledgeChunks(
+                authorizedChunkUids, documentVersions);
         invocation.state().registerOpenedKnowledgeChunks(chunks.stream().map(AiServiceClient.KnowledgeChunk::chunkUid).toList());
-        chunks.stream().map(this::toQaSource).forEach(invocation.openedSources()::add);
+        List<QaSourceVO> sources = chunks.stream().map(this::toQaSource).toList();
         List<Map<String, Object>> evidence = chunks.stream().map(EvidenceCard::from).map(EvidenceCard::toToolPayload).toList();
         String status = evidence.isEmpty() ? "NO_MATCH" : "OK";
-        return new AgentToolResult(Map.of("status", status, "chunks", evidence), evidence.size(), Map.of(
+        return AgentToolResult.withSources(Map.of("status", status, "chunks", evidence), sources, Map.of(
                 "knowledge_status", status,
                 "candidate_count", 0,
                 "opened_chunk_count", evidence.size()

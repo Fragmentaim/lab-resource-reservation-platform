@@ -1,6 +1,6 @@
 # 实验室智能预约与知识库 Agent 平台（后端）
 
-面向实验室资源预约、制度问答和业务查询场景的后端项目。仓库由 **Spring Boot 业务服务**与 **FastAPI AI 服务**组成，不包含前端；重点展示预约一致性、可靠异步链路、原生 LLM Function Calling、RAG 权限控制、上下文管理和可观测性。
+面向实验室资源预约、制度问答和业务查询场景的后端项目。仓库由 **Spring Boot + Spring AI Agent 服务**与 **FastAPI RAG 服务**组成，不包含前端；重点展示预约一致性、可靠异步链路、原生 LLM Function Calling、RAG 权限控制、上下文管理和可观测性。
 
 ## 系统架构
 
@@ -9,10 +9,10 @@ flowchart LR
     Client[API Client] --> Java[Spring Boot Business Service]
     Java --> Auth[JWT / RBAC / Document ACL]
     Java --> Booking[Reservation Domain]
-    Java --> Agent[Agent Runtime]
+    Java --> Agent[Spring AI Agent Runtime]
     Agent --> Tools[Business and RAG Tools]
     Tools --> AI[FastAPI AI Service]
-    AI --> Parser[Parser / Chunker / OCR]
+    AI --> Parser[Docling / HybridChunker]
     AI --> Retrieval[Vector + BM25 / RRF / Rerank]
     Java --> MySQL[(MySQL)]
     Java --> Redis[(Redis)]
@@ -22,7 +22,7 @@ flowchart LR
     AI --> ES[(Elasticsearch)]
 ```
 
-Java 服务负责身份、权限、预约业务、文档元数据、工具执行与审计；Python 服务负责文档解析、切片、向量检索、重排、上下文摘要和模型调用。业务权限始终由 Java 侧校验，模型不能绕过服务层直接访问数据库。
+Java 服务负责身份、权限、预约业务、文档元数据、Spring AI 工具编排与审计；Python 服务负责文档解析、切片、向量检索、重排和会话摘要。业务权限始终由 Java 侧校验，模型不能绕过服务层直接访问数据库。
 
 ## 核心设计
 
@@ -47,13 +47,13 @@ RAG 不是固定前置步骤，而是 Agent 可按需调用的工具。当前工
 | `knowledge_search` | 在有权限的文档范围内召回候选片段 | 返回候选定位信息 |
 | `knowledge_open_chunks` | 打开已召回候选的完整正文 | 只能读取本轮候选 chunk |
 
-模型通过 OpenAI-compatible `tools/tool_calls` 协议选择工具；Java 运行时负责工具白名单、参数校验、权限检查、调用执行和结果回传。知识库回答采用“先检索候选、再打开证据”的两阶段读取，减少无关文本进入上下文并保留引用来源。
+Spring AI 负责模型调用、`tools/tool_calls` 解析和多轮工具循环；Java 业务工具继续负责参数校验、权限检查、执行、审计和结果裁剪。知识库回答采用“先检索候选、再打开证据”的两阶段读取，减少无关文本进入上下文并保留引用来源。
 
 预约写操作采用两阶段确认：Agent 只能用 `reservation_create_draft` 生成一个绑定当前用户、默认 10 分钟有效的确认令牌；前端展示资源、时段与余量后，用户点击确认并调用 `POST /knowledge/tools/reservation-drafts/{confirmationToken}/confirm`（请求体为 `{"confirmed": true}`）。确认接口会校验令牌归属、保证同一令牌不重复执行，并重新进入 `ReservationService.createReservation`，由原有的权限、余量、限流、Redis 预占和 MQ 异步链路作最终裁决。
 
 ### 3. 会话上下文与可观测性
 
-- 根据模型能力配置动态计算上下文预算，组织系统提示、最近原始对话、可扩展 Markdown 会话交接、工具结果和证据；窗口不足时同步重写交接记录，并校验关键业务锚点。
+- 根据模型能力配置动态计算上下文预算，组织系统提示、最近原始对话、可扩展 Markdown 会话交接、工具结果和证据；窗口不足时由 LLM 同步理解并重写完整交接记录。
 - 当历史内容逼近窗口时，由模型同步重写会话交接；旧交接与新增对话继续合并，避免只依赖固定轮数截断。
 - 大型工具结果保留摘要和结果标识，需要细节时再按需打开，降低上下文噪声。
 - `Agent Run / Step` 记录路由、工具调用、检索、模型执行、耗时、token 使用和异常，支持按 `traceId` 回溯完整链路。
@@ -61,16 +61,17 @@ RAG 不是固定前置步骤，而是 Agent 可按需调用的工具。当前工
 ### 4. 多格式知识入库与文档 ACL
 
 - 支持 PDF、Word、Excel、Markdown、纯文本和图片入库，保留页码、标题路径、表格位置和 chunk 标识等元数据。
-- PDF 按页执行 Native / Hybrid / OCR 路由：文本页直接解析，图文混排页仅 OCR 图片区域，扫描页执行整页 OCR。
-- PaddleOCR 按需加载，可配置 GPU/CPU；解析结果记录路由、字符数、图片数、置信度和警告信息。
+- 文档解析统一采用 Docling，覆盖 PDF、Word、Excel、Markdown、纯文本和图片；同一结构化文档模型中保留标题层级、页码、表格、公式、图片及来源位置。
+- PDF 与图片由 Docling 完成版面分析、OCR、表格结构恢复、公式增强和图片分类；可选接入本地 VLM 或 OpenAI-compatible 多模态 API 生成图片语义描述。
+- 使用 Docling `HybridChunker` 按模型 Token 上限进行结构感知切片，保留标题上下文、表头和 DocItem 来源引用，避免自研字符切片破坏表格与章节语义。
 - 文档访问范围支持公开、管理员、上传者和指定用户；向量检索前先计算可访问文档集合并下推过滤条件。
 - 检索采用 Qdrant 向量召回与 Elasticsearch BM25 双路召回，将文档 ACL 过滤同时下推到两条检索链路；候选结果经加权 RRF 融合后统一 Rerank，最终只向 Agent 返回配置的 TopK 证据。
 - 文档上传、解析、切片和索引构建通过 RocketMQ + Outbox 异步执行，失败任务保留重试次数与处理轨迹。
 
 ## 技术栈
 
-- Java 17、Spring Boot 4、MyBatis-Plus、MySQL、Redis、RocketMQ、JWT
-- Python 3.11+、FastAPI、Qdrant、Elasticsearch、PaddleOCR、Sentence Transformers
+- Java 17、Spring Boot 4、Spring AI 2、MyBatis-Plus、MySQL、Redis、RocketMQ、JWT
+- Python 3.11+、FastAPI、Docling、Qdrant、Elasticsearch、Sentence Transformers
 - MinIO、Maven、Docker、Git
 
 ## 仓库结构
@@ -97,7 +98,7 @@ docker compose up --build
 
 首次启动会初始化演示数据库。默认端口为：后端 `8081`、AI 服务 `8000`、MinIO Console `9001`、Qdrant `6333`、Elasticsearch `9200`；可在根目录 `.env` 覆盖。后端健康检查为 `GET /system/health`，AI 服务健康检查为 `GET /api/v1/ai/health`。
 
-`.env.example` 中是仅供本地演示的默认值，部署前必须替换数据库密码、MinIO 密码和 JWT 密钥。LLM/Embedding 可填写任意 OpenAI-compatible 服务；未配置模型时，文档及基础设施服务仍可启动，但模型相关接口会处于降级状态。
+`.env.example` 中是仅供本地演示的默认值，部署前必须替换数据库密码、MinIO 密码和 JWT 密钥。`AGENT_LLM_*` 配置 Spring AI 使用的 OpenAI-compatible 模型，Embedding/Rerank 仍由 FastAPI 配置；未配置模型时，文档及基础设施服务仍可启动，但模型相关接口不可用。
 
 ### 2. 手动启动基础设施
 
@@ -139,13 +140,13 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate
 # Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
-# 可选：在支持 CUDA 的 OCR 工作节点安装 GPU OCR 依赖
-# pip install -r requirements-ocr-gpu.txt
+# 可选：在支持 CUDA 的文档处理节点恢复 GPU PyTorch 运行时
+# pip install -r requirements-docling-gpu.txt
 cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-在 `.env` 中配置 OpenAI-compatible 模型接口、Embedding、Rerank、Qdrant、Elasticsearch 和 OCR。密钥及本地模型目录不会提交到仓库。
+在 `.env` 中配置 OpenAI-compatible 模型接口、Embedding、Rerank、Qdrant、Elasticsearch 和 Docling。图片描述支持关闭、本地 VLM 或 OpenAI-compatible 多模态 API 三种模式；密钥及本地模型目录不会提交到仓库。
 
 关键词检索默认使用 Elasticsearch 内置 `cjk` analyzer，无须安装插件即可运行。若部署环境已安装与 Elasticsearch **完全同版本**的 IK Analysis 插件，可将 `ELASTICSEARCH_INDEX_ANALYZER` / `ELASTICSEARCH_SEARCH_ANALYZER` 分别改为 `ik_max_word` / `ik_smart`；分析器变更后需要重建索引。
 
@@ -169,7 +170,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-当前 Java 测试集覆盖预约状态、权限边界、工具调用、上下文规划、文档 ACL、异步任务和异常路径；AI 测试覆盖解析路由、上下文裁剪、重排回退、混合检索融合与 ACL 检索门槛。以 CI 实际结果为准，不在 README 固化会过期的性能或测试数量。
+当前 Java 测试集覆盖预约状态、权限边界、工具调用、上下文规划、文档 ACL、异步任务和异常路径；AI 测试覆盖 Docling 结构映射、上下文裁剪、重排回退、混合检索融合与 ACL 检索门槛。以 CI 实际结果为准，不在 README 固化会过期的性能或测试数量。
 
 每次推送和 PR 会由 GitHub Actions 运行 Java 测试、Python 编译检查、Docker Compose 配置校验和敏感信息扫描。实际容器联调依赖 Docker Daemon 与外部模型配置，因此只在本地或部署环境完成。
 
@@ -201,12 +202,13 @@ Agent Run 在规划和每次工具执行状态变化后写入短时 checkpoint�
 
 ## 代码导航
 
-- Agent 工具编排：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/tool/`、`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/NativeToolCallingServiceImpl.java`
+- Agent 模型入口：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/SpringAiAgentService.java`
+- Agent 工具定义与执行：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/tool/`
 - Agent 运行轨迹：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/AgentRunServiceImpl.java`
 - 会话上下文：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/`
 - 文档权限与知识库：`backend/src/main/java/com/fragment/labbooking/knowledge/`
-- 文档解析与 OCR：`ai-service/app/core/parser.py`、`ai-service/app/core/ocr_engine.py`
-- 检索与切片：`ai-service/app/core/chunker.py`、`ai-service/app/core/rag_pipeline.py`、`ai-service/app/core/elasticsearch_store.py`、`ai-service/app/core/reranker.py`
+- 文档解析与切片：`ai-service/app/core/docling_pipeline.py`
+- 混合检索：`ai-service/app/core/rag_pipeline.py`、`ai-service/app/core/elasticsearch_store.py`、`ai-service/app/core/vectorstore.py`、`ai-service/app/core/reranker.py`
 - 检索质量门槛：`ai-service/app/core/retrieval_eval.py`、`ai-service/evals/`
 - 数据库脚本：`sql/`
 

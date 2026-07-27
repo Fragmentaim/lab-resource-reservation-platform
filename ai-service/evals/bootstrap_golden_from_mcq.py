@@ -28,8 +28,7 @@ from typing import Any
 import httpx
 from openpyxl import load_workbook
 
-from app.core.chunker import chunk_document
-from app.core.parser import parse_file
+from app.core.docling_pipeline import process_file
 
 
 DEFAULT_MODELS = ["deepseek-v4-pro", "glm-5.1", "MiniMax-M3", "kimi-k2.6"]
@@ -216,8 +215,8 @@ def parse_args() -> argparse.Namespace:
 def build_chunks(corpus_dir: Path) -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
     for document_index, pdf_path in enumerate(sorted(corpus_dir.glob("*.pdf")), start=1):
-        parsed = parse_file(str(pdf_path), "PDF")
-        for chunk in chunk_document(parsed):
+        processed = process_file(pdf_path, "PDF")
+        for chunk in processed.chunks:
             chunks.append({
                 "chunk_id": f"D{document_index}-C{chunk['chunk_index']:04d}",
                 "document_name": pdf_path.name,

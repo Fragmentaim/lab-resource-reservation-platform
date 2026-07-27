@@ -1,6 +1,7 @@
 from app.config import settings
 from app.core import model_gateway
 from app.core.anthropic_compat import response_text, to_anthropic_messages
+from app.core.model_text import visible_model_text
 from typing import Iterator, List, Optional
 
 
@@ -32,7 +33,7 @@ def chat_with_usage(
     messages.append({"role": "user", "content": user_message})
 
     if settings.llm_api_mode == "responses":
-        response, route = model_gateway.invoke("chat", model, lambda client, resolved_model: client.responses.create(
+        response, route = model_gateway.invoke(model, lambda client, resolved_model: client.responses.create(
             model=resolved_model,
             instructions=system_prompt,
             input=[
@@ -44,25 +45,28 @@ def chat_with_usage(
                 if message["role"] != "system"
             ],
         ))
-        return response.output_text or "", _usage_snapshot(getattr(response, "usage", None), route)
+        return visible_model_text(response.output_text or ""), _usage_snapshot(getattr(response, "usage", None), route)
 
     if settings.llm_api_mode == "anthropic":
         system = "\n\n".join(message["content"] for message in messages if message["role"] == "system")
-        response, route = model_gateway.invoke("chat", model, lambda client, resolved_model: client.messages.create(
+        response, route = model_gateway.invoke(model, lambda client, resolved_model: client.messages.create(
             model=resolved_model,
             max_tokens=max(1, settings.max_output_tokens),
             system=system,
             messages=to_anthropic_messages(messages),
             **model_gateway.anthropic_message_options(),
         ))
-        return response_text(response), _usage_snapshot(getattr(response, "usage", None), route)
+        return visible_model_text(response_text(response)), _usage_snapshot(getattr(response, "usage", None), route)
 
-    response, route = model_gateway.invoke("chat", model, lambda client, resolved_model: client.chat.completions.create(
+    response, route = model_gateway.invoke(model, lambda client, resolved_model: client.chat.completions.create(
         model=resolved_model,
         messages=messages,
         **model_gateway.chat_completion_options(),
     ))
-    return response.choices[0].message.content or "", _usage_snapshot(getattr(response, "usage", None), route)
+    return visible_model_text(response.choices[0].message.content or ""), _usage_snapshot(
+        getattr(response, "usage", None),
+        route,
+    )
 
 
 def _usage_snapshot(usage, route: Optional[dict] = None) -> dict:
@@ -116,7 +120,7 @@ def chat_stream(
             yield result
         return
 
-    stream, _ = model_gateway.invoke("chat", model, lambda client, resolved_model: client.chat.completions.create(
+    stream, _ = model_gateway.invoke(model, lambda client, resolved_model: client.chat.completions.create(
         model=resolved_model,
         messages=messages,
         stream=True,

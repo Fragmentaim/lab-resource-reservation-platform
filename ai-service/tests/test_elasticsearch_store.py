@@ -97,6 +97,49 @@ def test_elasticsearch_delete_uses_document_filter(monkeypatch):
     assert client.delete_request["query"] == {"term": {"document_id": 12}}
 
 
+def test_elasticsearch_search_filters_each_document_by_active_version(monkeypatch):
+    client = _FakeClient()
+    monkeypatch.setattr(elasticsearch_store, "get_client", lambda: client)
+    monkeypatch.setattr(elasticsearch_store, "ensure_index", lambda: None)
+
+    elasticsearch_store.search(
+        query="规则",
+        top_k=5,
+        document_ids=[12, 18],
+        document_versions={12: "v1", 18: "v3"},
+    )
+
+    scopes = client.search_request["query"]["bool"]["filter"][0]["bool"]
+    assert scopes["minimum_should_match"] == 1
+    assert scopes["should"] == [
+        {"bool": {"must": [
+            {"term": {"document_id": 12}},
+            {"term": {"doc_version": "v1"}},
+        ]}},
+        {"bool": {"must": [
+            {"term": {"document_id": 18}},
+            {"term": {"doc_version": "v3"}},
+        ]}},
+    ]
+
+
+def test_elasticsearch_delete_can_target_one_document_version(monkeypatch):
+    client = _FakeClient()
+    monkeypatch.setattr(elasticsearch_store, "get_client", lambda: client)
+    monkeypatch.setattr(elasticsearch_store, "ensure_index", lambda: None)
+
+    elasticsearch_store.delete_by_document_version(12, "v2")
+
+    assert client.delete_request["query"] == {
+        "bool": {
+            "must": [
+                {"term": {"document_id": 12}},
+                {"term": {"doc_version": "v2"}},
+            ]
+        }
+    }
+
+
 def test_migration_skips_invalid_payloads_and_uses_stable_chunk_ids(monkeypatch):
     captured = {}
 

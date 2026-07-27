@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from app.config import settings
 from app.core.vectorstore import ensure_collection
 from app.core import elasticsearch_store
-from app.api import documents, qa, health, tool_calling
+from app.api import documents, qa, health
 
 
 @asynccontextmanager
@@ -55,7 +55,6 @@ async def require_service_token(request: Request, call_next):
 app.include_router(documents.router, prefix="/api/v1/ai")
 app.include_router(qa.router, prefix="/api/v1/ai")
 app.include_router(health.router, prefix="/api/v1/ai")
-app.include_router(tool_calling.router, prefix="/api/v1/ai")
 
 
 @app.get("/")

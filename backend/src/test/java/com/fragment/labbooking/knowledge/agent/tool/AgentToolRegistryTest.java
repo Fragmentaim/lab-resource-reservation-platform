@@ -1,6 +1,5 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
-import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.agent.PolicyContext;
 import org.junit.jupiter.api.Test;
 
@@ -21,10 +20,6 @@ class AgentToolRegistryTest {
 
         PolicyContext userPolicy = new PolicyContext(7L, "USER", false);
         assertThat(toolNames(registry, userPolicy)).containsExactly("reservation_context");
-        assertThat(registry.resolve("reservation_context", userPolicy).name()).isEqualTo("reservation_context");
-        assertThatThrownBy(() -> registry.resolve("admin_only", userPolicy))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("不允许调用");
 
         PolicyContext adminPolicy = new PolicyContext(1L, "ADMIN", true);
         assertThat(toolNames(registry, adminPolicy)).containsExactly("admin_only", "reservation_context");
@@ -61,8 +56,8 @@ class AgentToolRegistryTest {
     }
 
     private List<String> toolNames(AgentToolRegistry registry, PolicyContext policy) {
-        return registry.definitionsFor(policy).stream()
-                .map(definition -> String.valueOf(((Map<?, ?>) definition.get("function")).get("name")))
+        return registry.toolsFor(policy).stream()
+                .map(AgentTool::name)
                 .toList();
     }
 }

@@ -42,11 +42,11 @@ public class ResourceAvailabilityAgentTool implements AgentTool {
         String keyword = AgentToolArguments.optionalText(invocation.arguments().get("keyword"), 40);
         ResourceAvailabilityToolVO value = resourceAvailabilityToolService.findAvailableSlots(
                 keyword, 5);
-        return new AgentToolResult(Map.of(
+        return AgentToolResult.of(Map.of(
                 "resultCount", value.getResultCount(),
                 "slots", value.getSlots(),
                 "generatedAt", value.getGeneratedAt()
-        ), 0, Map.of(
+        ), Map.of(
                 "result_type", "RESOURCE_AVAILABILITY",
                 "result_count", value.getResultCount(),
                 "keyword", StringUtils.hasText(keyword) ? keyword : ""

@@ -2,15 +2,17 @@ from datetime import datetime, timezone
 from threading import Lock
 from uuid import uuid4
 
+import httpx
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException
 from starlette.concurrency import run_in_threadpool
 from app.models.schemas import (
     ChunkResult,
+    ProcessByUrlRequest,
     ProcessResponse,
     ProcessTaskResponse,
     DeleteVectorsResponse,
 )
-from app.core import parser, chunker, embedder, vectorstore, elasticsearch_store
+from app.core import docling_pipeline, embedder, vectorstore, elasticsearch_store
 from app.config import settings
 import tempfile
 import os
@@ -40,6 +42,23 @@ async def process_document(
         )
     finally:
         os.unlink(tmp_path)
+
+
+@router.post("/process-by-url", response_model=ProcessResponse)
+async def process_document_by_url(request: ProcessByUrlRequest):
+    """Download a trusted backend-provided URL, then run the normal ingestion pipeline."""
+    tmp_path = await _download_to_temp(str(request.file_url), request.file_type)
+    try:
+        return await run_in_threadpool(
+            _process_file,
+            request.document_id,
+            request.file_type,
+            request.doc_version,
+            tmp_path,
+        )
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 @router.post("/process-async", response_model=ProcessTaskResponse)
@@ -78,12 +97,80 @@ async def delete_document_vectors(document_id: int):
     return DeleteVectorsResponse(deleted_count=count)
 
 
+@router.delete(
+    "/{document_id}/versions/{doc_version}",
+    response_model=DeleteVectorsResponse,
+)
+async def delete_document_version(document_id: int, doc_version: str):
+    """Delete one staged or retired document version from both indexes."""
+    count = vectorstore.delete_by_document_version(document_id, doc_version)
+    elasticsearch_store.delete_by_document_version(document_id, doc_version)
+    return DeleteVectorsResponse(deleted_count=count)
+
+
 async def _save_upload(file: UploadFile, file_type: str) -> str:
-    suffix = f".{file_type.lower()}"
+    suffix = f".{_safe_suffix(file_type)}"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         while content := await file.read(1024 * 1024):
             tmp.write(content)
         return tmp.name
+
+
+async def _download_to_temp(file_url: str, file_type: str) -> str:
+    suffix = f".{_safe_suffix(file_type)}"
+    max_bytes = max(1, settings.document_download_max_bytes)
+    timeout = httpx.Timeout(max(1.0, settings.document_download_timeout_seconds))
+    tmp_path = ""
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            max_redirects=3,
+            trust_env=False,
+        ) as client:
+            async with client.stream("GET", file_url) as response:
+                response.raise_for_status()
+                declared_size = response.headers.get("content-length")
+                if declared_size and int(declared_size) > max_bytes:
+                    raise HTTPException(status_code=413, detail="Document exceeds download size limit")
+
+                downloaded = 0
+                with open(tmp_path, "wb") as tmp:
+                    async for content in response.aiter_bytes(1024 * 1024):
+                        downloaded += len(content)
+                        if downloaded > max_bytes:
+                            raise HTTPException(status_code=413, detail="Document exceeds download size limit")
+                        tmp.write(content)
+        return tmp_path
+    except HTTPException:
+        _delete_temp_file(tmp_path)
+        raise
+    except httpx.TimeoutException as exc:
+        _delete_temp_file(tmp_path)
+        raise HTTPException(status_code=504, detail="Document download timed out") from exc
+    except httpx.HTTPStatusError as exc:
+        _delete_temp_file(tmp_path)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Document storage returned HTTP {exc.response.status_code}",
+        ) from exc
+    except (httpx.RequestError, OSError, ValueError) as exc:
+        _delete_temp_file(tmp_path)
+        raise HTTPException(status_code=502, detail=f"Document download failed: {exc}") from exc
+
+
+def _safe_suffix(file_type: str) -> str:
+    suffix = "".join(character for character in (file_type or "").lower() if character.isalnum())
+    return suffix or "bin"
+
+
+def _delete_temp_file(file_path: str) -> None:
+    if file_path and os.path.exists(file_path):
+        os.unlink(file_path)
 
 
 def _process_file(
@@ -94,9 +181,9 @@ def _process_file(
     progress=None,
 ) -> ProcessResponse:
     if progress:
-        progress(stage="PARSING", message="Parsing document")
-    parsed = parser.parse_file(file_path, file_type)
-    if parsed.is_empty:
+        progress(stage="PARSING", message="Parsing document with Docling")
+    processed = docling_pipeline.process_file(file_path, file_type)
+    if processed.is_empty:
         return ProcessResponse(
             document_id=document_id,
             doc_version=doc_version,
@@ -104,13 +191,19 @@ def _process_file(
             chunk_ids=[],
             vector_ids=[],
             chunks=[],
-            parse_quality=parsed.quality.as_dict(),
+            parse_quality=processed.quality,
             status="READY",
         )
 
     if progress:
-        progress(stage="CHUNKING", message=f"Chunking {len(parsed.blocks)} parsed blocks")
-    chunks = chunker.chunk_document(parsed)
+        progress(
+            stage="CHUNKING",
+            message=(
+                f"Docling HybridChunker produced "
+                f"{len(processed.chunks)} chunks"
+            ),
+        )
+    chunks = processed.chunks
     texts = [c["content"] for c in chunks]
 
     if progress:
@@ -164,7 +257,7 @@ def _process_file(
         chunk_ids=[chunk["chunk_id"] for chunk in chunks],
         vector_ids=vector_ids,
         chunks=chunk_results,
-        parse_quality=parsed.quality.as_dict(),
+        parse_quality=processed.quality,
         status="READY",
     )
 

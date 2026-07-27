@@ -123,7 +123,7 @@ def _login(client: httpx.Client, base_url: str, username: str, password: str) ->
 def _user_turns(case: dict[str, Any]) -> list[str]:
     """Render user turns without relying on model-generated filler.
 
-    Long-context cases carry short, human-authored anchors plus deterministic
+    Long-context cases carry short, human-authored facts plus deterministic
     neutral meeting notes.  The notes make window pressure reproducible but do
     not repeat the facts scored at the final checkpoint.
     """
@@ -225,6 +225,31 @@ def _tool_names(calls: list[dict[str, Any]]) -> list[str]:
     return [call["tool_name"] for call in calls if call.get("tool_name")]
 
 
+def _required_tool_coverage(case: dict[str, Any], turns: list[dict[str, Any]]) -> tuple[bool, dict[str, dict[str, int | bool]]]:
+    expected = case.get("expectedToolMinimumCounts")
+    if not isinstance(expected, dict) or not expected:
+        return True, {}
+    observed_names = [
+        name
+        for turn in turns
+        for name in _tool_names(turn.get("tool_calls") or [])
+    ]
+    coverage: dict[str, dict[str, int | bool]] = {}
+    all_satisfied = True
+    for raw_name, raw_minimum in expected.items():
+        name = str(raw_name)
+        minimum = max(0, _int(raw_minimum))
+        observed = observed_names.count(name)
+        satisfied = observed >= minimum
+        coverage[name] = {
+            "minimum": minimum,
+            "observed": observed,
+            "satisfied": satisfied,
+        }
+        all_satisfied &= satisfied
+    return all_satisfied, coverage
+
+
 def _text_signals(answer: str, calls: list[dict[str, Any]]) -> str:
     # Only for scoring.  The raw answer is never written to the report.
     return answer + " " + json.dumps(calls, ensure_ascii=False)
@@ -247,6 +272,7 @@ def _case_result(case: dict[str, Any], turns: list[dict[str, Any]], error: str |
     expected_tool = EXPECTED_TOOLS.get(expected_task)
     answer_nonblank = bool(final.get("answer_nonblank"))
     task_tool_ok = expected_tool is None or expected_tool in final_names
+    required_tools_ok, required_tool_coverage = _required_tool_coverage(case, turns)
     retained = {
         key: _constraint_match(key, value, str(final.get("scoring_text") or ""), final_calls)
         for key, value in expected.items()
@@ -260,7 +286,7 @@ def _case_result(case: dict[str, Any], turns: list[dict[str, Any]], error: str |
     critical_retained = all(retained.get(key, False) for key in critical_keys)
     # This is deliberately conservative: a non-empty answer without the
     # expected business tool is not counted as a completed business task.
-    task_success = error is None and answer_nonblank and task_tool_ok and critical_retained
+    task_success = error is None and answer_nonblank and task_tool_ok and required_tools_ok and critical_retained
     summary_turn = next((turn for turn in turns if turn.get("summary_triggered")), None)
     return {
         "case_id": case.get("caseId"),
@@ -285,7 +311,9 @@ def _case_result(case: dict[str, Any], turns: list[dict[str, Any]], error: str |
         "retained_constraints": retained,
         "retained_constraint_count": sum(1 for value in retained.values() if value),
         "constraint_count": len(retained),
-        "reference_resolved": task_tool_ok and answer_nonblank and critical_retained,
+        "required_tool_coverage": required_tool_coverage,
+        "required_tools_satisfied": required_tools_ok,
+        "reference_resolved": task_tool_ok and required_tools_ok and answer_nonblank and critical_retained,
         "final_task_succeeded": task_success,
         "summary_triggered": summary_turn is not None,
         "history_tokens_before_summary": _int(summary_turn.get("history_tokens_before")) if summary_turn else 0,

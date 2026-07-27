@@ -20,7 +20,7 @@ public class MessageOutboxProperties {
 
     @Data
     public static class Outbox {
-        private long relayDelayMillis = 1000L;
+        private long dispatchDelayMillis = 1000L;
         private int batchSize = 20;
         private int maxRetryCount = 10;
         private long initialRetryDelayMillis = 1000L;

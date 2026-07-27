@@ -1,6 +1,5 @@
-from pydantic import BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
 
 
 # ---- Document Processing ----
@@ -8,6 +7,14 @@ from pydantic import BaseModel, Field
 class ProcessRequest(BaseModel):
     document_id: int
     file_type: str  # PDF/DOCX/MD/TXT
+
+
+class ProcessByUrlRequest(BaseModel):
+    document_id: int = Field(gt=0)
+    file_url: AnyHttpUrl
+    file_name: str = Field(min_length=1, max_length=255)
+    file_type: str = Field(min_length=1, max_length=32)
+    doc_version: str = Field(default="v1", min_length=1, max_length=32)
 
 
 class ChunkResult(BaseModel):
@@ -37,12 +44,16 @@ class ParseQualityReport(BaseModel):
     heading_count: int = 0
     table_count: int = 0
     image_count: int = 0
-    scanned_unit_count: int = 0
-    ocr_unit_count: int = 0
-    ocr_character_count: int = 0
+    scanned_unit_count: Optional[int] = None
+    ocr_unit_count: Optional[int] = None
+    ocr_character_count: Optional[int] = None
     ocr_average_confidence: Optional[float] = None
+    parse_average_confidence: Optional[float] = None
+    layout_average_confidence: Optional[float] = None
+    table_average_confidence: Optional[float] = None
     empty_unit_count: int = 0
-    quality_score: float
+    quality_score: Optional[float] = None
+    quality_low_score: Optional[float] = None
     warnings: List[str] = Field(default_factory=list)
     decisions: List[dict] = Field(default_factory=list)
 
@@ -91,6 +102,7 @@ class ChatMessage(BaseModel):
 class KnowledgeSearchRequest(BaseModel):
     question: str
     document_ids: List[int] = Field(default_factory=list)
+    document_versions: Dict[int, str] = Field(default_factory=dict)
     top_k: Optional[int] = None
     score_threshold: Optional[float] = None
 
@@ -121,6 +133,7 @@ class KnowledgeSearchResponse(BaseModel):
 class KnowledgeOpenChunksRequest(BaseModel):
     chunk_uids: List[str] = Field(default_factory=list)
     document_ids: List[int] = Field(default_factory=list)
+    document_versions: Dict[int, str] = Field(default_factory=dict)
 
 
 class KnowledgeChunk(BaseModel):

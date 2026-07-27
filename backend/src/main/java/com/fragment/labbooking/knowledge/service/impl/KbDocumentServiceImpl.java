@@ -235,12 +235,17 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     }
 
     @Override
-    public List<Long> listAccessibleReadyDocumentIds(LoginUser actor) {
+    public Map<Long, String> listAccessibleDocumentVersions(LoginUser actor) {
         LambdaQueryWrapper<KbDocument> wrapper = new LambdaQueryWrapper<KbDocument>()
-                .select(KbDocument::getId)
-                .eq(KbDocument::getStatus, DocumentStatusConstants.READY);
+                .select(KbDocument::getId, KbDocument::getDocVersion)
+                .gt(KbDocument::getChunkCount, 0);
         applyAccessFilter(wrapper, actor);
-        return list(wrapper).stream().map(KbDocument::getId).toList();
+        return list(wrapper).stream().collect(Collectors.toMap(
+                KbDocument::getId,
+                document -> StringUtils.hasText(document.getDocVersion()) ? document.getDocVersion() : "v1",
+                (left, right) -> left,
+                LinkedHashMap::new
+        ));
     }
 
     @Override
@@ -267,10 +272,6 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
 
         String traceId = UUID.randomUUID().toString();
         doc.setStatus(DocumentStatusConstants.PENDING);
-        doc.setDocVersion(nextDocVersion(doc.getDocVersion()));
-        doc.setParserProvider(null);
-        doc.setParserVersion(null);
-        doc.setParseQuality(null);
         doc.setErrorMessage(null);
         doc.setProcessTraceId(traceId);
         doc.setRetryCount(0);
@@ -317,43 +318,43 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             if (claimed == null) {
                 return;
             }
-            String docVersion = StringUtils.hasText(claimed.getDocVersion()) ? claimed.getDocVersion() : "v1";
+            String activeVersion = hasActiveVersion(claimed) ? claimed.getDocVersion() : null;
+            String buildVersion = activeVersion == null
+                    ? (StringUtils.hasText(claimed.getDocVersion()) ? claimed.getDocVersion() : "v1")
+                    : nextDocVersion(activeVersion);
 
             recordProcessEvent(claimed, attempt, "CLAIMED", "RUNNING", "处理任务已被 worker 获取", Map.of());
-            recordProcessEvent(claimed, attempt, "VECTOR_CLEANUP", "RUNNING", "清理当前文档的旧向量与旧分块", Map.of());
-            aiServiceClient.deleteDocumentVectors(documentId);
-            deleteChunks(documentId);
+            recordProcessEvent(claimed, attempt, "VERSION_PREPARE", "RUNNING", "清理目标版本的残留索引",
+                    Map.of("build_version", buildVersion));
+            aiServiceClient.deleteDocumentVersion(documentId, buildVersion);
+            deleteChunks(documentId, buildVersion);
             recordProcessEvent(claimed, attempt, "PARSING", "RUNNING", "调用 AI 服务解析、分块、向量化",
-                    Map.of("file_type", claimed.getFileType()));
-            AiServiceClient.ProcessResult result = processStoredFile(claimed, docVersion);
-            if (result == null) {
-                throw new BusinessException("AI-service 返回空处理结果");
+                    Map.of("file_type", claimed.getFileType(), "build_version", buildVersion));
+            AiServiceClient.ProcessResult result = processStoredFile(claimed, buildVersion);
+            if (result == null || result.chunkCount() <= 0 || result.chunks() == null || result.chunks().isEmpty()) {
+                throw new BusinessException("AI-service 未生成可用文档分块");
+            }
+            if (!buildVersion.equals(result.docVersion())) {
+                throw new BusinessException("AI-service 返回了错误的文档版本");
             }
             recordProcessEvent(claimed, attempt, "PERSISTING_CHUNKS", "RUNNING", "持久化文档分块和来源元数据",
-                    Map.of("chunk_count", result.chunkCount()));
+                    Map.of("chunk_count", result.chunkCount(), "build_version", buildVersion));
             saveChunks(documentId, result);
 
-            KbDocument latest = getById(documentId);
-            if (latest == null) {
-                return;
+            if (!activateDocumentVersion(documentId, traceId, buildVersion, result)) {
+                throw new BusinessException("文档版本切换失败，处理任务已过期");
             }
-            latest.setChunkCount(result.chunkCount());
-            latest.setStatus(StringUtils.hasText(result.status()) ? result.status() : DocumentStatusConstants.READY);
-            latest.setDocVersion(StringUtils.hasText(result.docVersion()) ? result.docVersion() : docVersion);
-            applyParseQuality(latest, result.parseQuality());
-            latest.setErrorMessage(null);
-            latest.setProcessFinishedAt(LocalDateTime.now());
-            latest.setUpdatedAt(LocalDateTime.now());
-            updateById(latest);
+            KbDocument latest = getById(documentId);
             recordProcessEvent(latest, attempt, "COMPLETED", "SUCCEEDED", "文档已完成处理，可以参与问答",
                     completionDetail(latest, result));
             log.info("Document processing completed: id={}, docVersion={}, chunks={}",
-                    documentId, latest.getDocVersion(), result.chunkCount());
+                    documentId, buildVersion, result.chunkCount());
+            cleanupRetiredVersion(documentId, activeVersion, attempt, latest);
         } catch (Exception e) {
             boolean finalAttempt = attempt >= Math.max(1, documentProcessProperties.getMaxRetryAttempts());
-            markProcessingFailed(documentId, finalAttempt, e.getMessage());
+            markProcessingFailed(documentId, traceId, finalAttempt, e.getMessage());
             KbDocument failed = getById(documentId);
-            if (failed != null) {
+            if (failed != null && traceId.equals(failed.getProcessTraceId())) {
                 recordProcessEvent(failed, attempt, finalAttempt ? "FAILED" : "RETRY_PENDING",
                         finalAttempt ? "FAILED" : "PENDING",
                         finalAttempt ? "处理失败，已达到最大重试次数" : "本次处理失败，等待消息队列重试",
@@ -412,17 +413,24 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         );
     }
 
-    private void markProcessingFailed(Long documentId, boolean finalAttempt, String errorMessage) {
+    private void markProcessingFailed(Long documentId, String traceId, boolean finalAttempt, String errorMessage) {
         LocalDateTime now = LocalDateTime.now();
         KbDocument failed = getById(documentId);
-        if (failed == null) {
+        if (failed == null || !traceId.equals(failed.getProcessTraceId())) {
             return;
         }
-        failed.setStatus(finalAttempt ? DocumentStatusConstants.FAILED : DocumentStatusConstants.PENDING);
-        failed.setErrorMessage(TruncateUtil.truncate("文档异步处理失败: " + errorMessage, 512));
-        failed.setProcessFinishedAt(finalAttempt ? now : null);
-        failed.setUpdatedAt(now);
-        updateById(failed);
+        boolean activeVersionAvailable = hasActiveVersion(failed);
+        baseMapper.update(null, new LambdaUpdateWrapper<KbDocument>()
+                .eq(KbDocument::getId, documentId)
+                .eq(KbDocument::getProcessTraceId, traceId)
+                .eq(KbDocument::getStatus, DocumentStatusConstants.PROCESSING)
+                .set(KbDocument::getStatus, finalAttempt
+                        ? (activeVersionAvailable ? DocumentStatusConstants.READY : DocumentStatusConstants.FAILED)
+                        : DocumentStatusConstants.PENDING)
+                .set(KbDocument::getErrorMessage,
+                        TruncateUtil.truncate("文档异步处理失败: " + errorMessage, 512))
+                .set(KbDocument::getProcessFinishedAt, finalAttempt ? now : null)
+                .set(KbDocument::getUpdatedAt, now));
     }
 
     private AiServiceClient.ProcessResult processStoredFile(KbDocument doc, String docVersion) {
@@ -477,15 +485,6 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                 .stream()
                 .map(this::toProcessEventVO)
                 .toList();
-    }
-
-    private void applyParseQuality(KbDocument document, AiServiceClient.ParseQuality quality) {
-        if (quality == null) {
-            return;
-        }
-        document.setParserProvider(quality.provider());
-        document.setParserVersion(quality.providerVersion());
-        document.setParseQuality(quality.reportJson());
     }
 
     private Map<String, Object> completionDetail(KbDocument document, AiServiceClient.ProcessResult result) {
@@ -658,6 +657,12 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                 .eq(KbChunk::getDocumentId, documentId));
     }
 
+    private void deleteChunks(Long documentId, String docVersion) {
+        kbChunkMapper.delete(new LambdaQueryWrapper<KbChunk>()
+                .eq(KbChunk::getDocumentId, documentId)
+                .eq(KbChunk::getDocVersion, docVersion));
+    }
+
     private void saveChunks(Long documentId, AiServiceClient.ProcessResult result) {
         if (result == null || result.chunks() == null || result.chunks().isEmpty()) {
             return;
@@ -698,6 +703,57 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             return "v" + (current + 1);
         }
         return "v" + System.currentTimeMillis();
+    }
+
+    private boolean hasActiveVersion(KbDocument document) {
+        return document != null
+                && document.getChunkCount() != null
+                && document.getChunkCount() > 0
+                && StringUtils.hasText(document.getDocVersion());
+    }
+
+    private boolean activateDocumentVersion(Long documentId, String traceId, String buildVersion,
+                                            AiServiceClient.ProcessResult result) {
+        LocalDateTime now = LocalDateTime.now();
+        AiServiceClient.ParseQuality quality = result.parseQuality();
+        int updated = baseMapper.update(null, new LambdaUpdateWrapper<KbDocument>()
+                .eq(KbDocument::getId, documentId)
+                .eq(KbDocument::getProcessTraceId, traceId)
+                .eq(KbDocument::getStatus, DocumentStatusConstants.PROCESSING)
+                .set(KbDocument::getDocVersion, buildVersion)
+                .set(KbDocument::getChunkCount, result.chunkCount())
+                .set(KbDocument::getParserProvider, quality == null ? null : quality.provider())
+                .set(KbDocument::getParserVersion, quality == null ? null : quality.providerVersion())
+                .set(KbDocument::getParseQuality, quality == null ? null : quality.reportJson())
+                .set(KbDocument::getStatus, DocumentStatusConstants.READY)
+                .set(KbDocument::getErrorMessage, null)
+                .set(KbDocument::getProcessFinishedAt, now)
+                .set(KbDocument::getUpdatedAt, now));
+        return updated == 1;
+    }
+
+    private void cleanupRetiredVersion(Long documentId, String retiredVersion, int attempt,
+                                       KbDocument document) {
+        if (!StringUtils.hasText(retiredVersion)
+                || retiredVersion.equals(document == null ? null : document.getDocVersion())) {
+            return;
+        }
+        try {
+            aiServiceClient.deleteDocumentVersion(documentId, retiredVersion);
+            deleteChunks(documentId, retiredVersion);
+            recordProcessEvent(document, attempt, "RETIRED_VERSION_CLEANUP", "SUCCEEDED",
+                    "旧文档版本已清理", Map.of("retired_version", retiredVersion));
+        } catch (Exception cleanupError) {
+            String cleanupMessage = StringUtils.hasText(cleanupError.getMessage())
+                    ? cleanupError.getMessage()
+                    : cleanupError.getClass().getSimpleName();
+            log.warn("Document version activated but retired version cleanup failed. documentId={}, version={}, error={}",
+                    documentId, retiredVersion, cleanupMessage);
+            recordProcessEvent(document, attempt, "RETIRED_VERSION_CLEANUP", "WARNING",
+                    "新版本已生效，旧版本清理失败", Map.of(
+                            "retired_version", retiredVersion,
+                            "error", TruncateUtil.truncate(cleanupMessage, 256)));
+        }
     }
 
     private void validateFile(MultipartFile file) {

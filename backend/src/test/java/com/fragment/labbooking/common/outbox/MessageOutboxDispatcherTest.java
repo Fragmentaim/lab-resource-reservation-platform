@@ -1,74 +1,77 @@
 package com.fragment.labbooking.common.outbox;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.entity.MessageOutbox;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class MessageOutboxRelayTest {
+class MessageOutboxDispatcherTest {
 
     @Test
-    void relayPendingMessagesShouldMarkSentAfterSuccessfulPublish() {
+    void dispatchShouldMarkSentAfterSuccessfulPublish() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
-        MessageOutboxMqPublisher publisher = mock(MessageOutboxMqPublisher.class);
         MessageOutboxProperties properties = enabledProperties(20);
-        MessageOutboxRelay relay = new MessageOutboxRelay(outboxService, publisher, properties);
+        MessageOutboxDispatcher dispatcher = spy(
+                new MessageOutboxDispatcher(outboxService, new ObjectMapper(), properties));
         MessageOutbox outbox = outbox();
         MessageOutboxEnvelope envelope = envelope();
 
         when(outboxService.findPendingDueBatch(20)).thenReturn(List.of(outbox));
         when(outboxService.markSending(outbox)).thenReturn(true);
         when(outboxService.toEnvelope(outbox)).thenReturn(envelope);
-        when(publisher.publish(envelope, "reservation-events", "reservation-create", "REQ-100"))
-                .thenReturn(true);
+        doReturn(true).when(dispatcher)
+                .publish(envelope, "reservation-events", "reservation-create", "REQ-100");
 
-        relay.relayPendingMessages();
+        dispatcher.dispatchPendingMessages();
 
         verify(outboxService).markSent(outbox);
         verify(outboxService, never()).markRetryFailure(outbox, "publish returned false");
     }
 
     @Test
-    void relayPendingMessagesShouldMarkRetryFailureWhenPublishReturnsFalse() {
+    void dispatchShouldMarkRetryFailureWhenPublishReturnsFalse() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
-        MessageOutboxMqPublisher publisher = mock(MessageOutboxMqPublisher.class);
         MessageOutboxProperties properties = enabledProperties(20);
-        MessageOutboxRelay relay = new MessageOutboxRelay(outboxService, publisher, properties);
+        MessageOutboxDispatcher dispatcher = spy(
+                new MessageOutboxDispatcher(outboxService, new ObjectMapper(), properties));
         MessageOutbox outbox = outbox();
         MessageOutboxEnvelope envelope = envelope();
 
         when(outboxService.findPendingDueBatch(20)).thenReturn(List.of(outbox));
         when(outboxService.markSending(outbox)).thenReturn(true);
         when(outboxService.toEnvelope(outbox)).thenReturn(envelope);
-        when(publisher.publish(envelope, "reservation-events", "reservation-create", "REQ-100"))
-                .thenReturn(false);
+        doReturn(false).when(dispatcher)
+                .publish(envelope, "reservation-events", "reservation-create", "REQ-100");
 
-        relay.relayPendingMessages();
+        dispatcher.dispatchPendingMessages();
 
         verify(outboxService).markRetryFailure(outbox, "publish returned false");
         verify(outboxService, never()).markSent(outbox);
     }
 
     @Test
-    void relayPendingMessagesShouldSkipWhenLockWasNotAcquired() {
+    void dispatchShouldSkipWhenLockWasNotAcquired() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
-        MessageOutboxMqPublisher publisher = mock(MessageOutboxMqPublisher.class);
         MessageOutboxProperties properties = enabledProperties(20);
-        MessageOutboxRelay relay = new MessageOutboxRelay(outboxService, publisher, properties);
+        MessageOutboxDispatcher dispatcher = spy(
+                new MessageOutboxDispatcher(outboxService, new ObjectMapper(), properties));
         MessageOutbox outbox = outbox();
 
         when(outboxService.findPendingDueBatch(20)).thenReturn(List.of(outbox));
         when(outboxService.markSending(outbox)).thenReturn(false);
 
-        relay.relayPendingMessages();
+        dispatcher.dispatchPendingMessages();
 
-        verify(publisher, never()).publish(
+        verify(dispatcher, never()).publish(
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),

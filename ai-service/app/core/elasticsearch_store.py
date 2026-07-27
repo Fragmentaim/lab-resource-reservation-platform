@@ -126,6 +126,7 @@ def search(
     query: str,
     top_k: int,
     document_ids: Optional[List[int]] = None,
+    document_versions: Optional[dict[int, str]] = None,
 ) -> list[dict]:
     if document_ids is not None and not document_ids:
         return []
@@ -146,7 +147,26 @@ def search(
             }
         }]
     }
-    if document_ids is not None:
+    if document_versions:
+        allowed_ids = set(document_ids) if document_ids is not None else None
+        scopes = [
+            {
+                "bool": {
+                    "must": [
+                        {"term": {"document_id": document_id}},
+                        {"term": {"doc_version": doc_version}},
+                    ]
+                }
+            }
+            for document_id, doc_version in document_versions.items()
+            if doc_version and (allowed_ids is None or document_id in allowed_ids)
+        ]
+        if not scopes:
+            return []
+        bool_query["filter"] = [{
+            "bool": {"should": scopes, "minimum_should_match": 1}
+        }]
+    elif document_ids is not None:
         bool_query["filter"] = [{"terms": {"document_id": document_ids}}]
 
     response = get_client().search(
@@ -170,10 +190,25 @@ def search(
 
 
 def delete_by_document(document_id: int) -> int:
+    return _delete_by_query({"term": {"document_id": document_id}})
+
+
+def delete_by_document_version(document_id: int, doc_version: str) -> int:
+    return _delete_by_query({
+        "bool": {
+            "must": [
+                {"term": {"document_id": document_id}},
+                {"term": {"doc_version": doc_version}},
+            ]
+        }
+    })
+
+
+def _delete_by_query(query: dict) -> int:
     ensure_index()
     response = get_client().delete_by_query(
         index=settings.elasticsearch_index,
-        query={"term": {"document_id": document_id}},
+        query=query,
         conflicts="proceed",
         refresh=True,
     )

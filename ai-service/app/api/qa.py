@@ -17,6 +17,7 @@ async def retrieve_candidates(request: KnowledgeSearchRequest):
         rag_pipeline.retrieve_candidates,
         question=request.question,
         document_ids=request.document_ids,
+        document_versions=request.document_versions,
         top_k=request.top_k,
         score_threshold=request.score_threshold,
     )
@@ -49,6 +50,7 @@ async def open_chunks(request: KnowledgeOpenChunksRequest):
         vectorstore.get_chunks_by_ids,
         chunk_ids=request.chunk_uids,
         document_ids=request.document_ids,
+        document_versions=request.document_versions,
     )
     return KnowledgeOpenChunksResponse(chunks=[KnowledgeChunk(
         chunk_uid=result["chunk_id"],

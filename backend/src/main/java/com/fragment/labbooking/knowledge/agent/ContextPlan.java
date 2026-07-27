@@ -1,7 +1,5 @@
 package com.fragment.labbooking.knowledge.agent;
 
-import com.fragment.labbooking.knowledge.service.NativeToolCallingClient;
-
 import java.util.List;
 import java.util.Map;
 
@@ -18,20 +16,6 @@ public record ContextPlan(int round, String model, List<String> requestedTools, 
 
     public ContextPlan(int round, String model, List<String> requestedTools, Map<String, Object> providerUsage) {
         this(round, model, requestedTools, providerUsage, 0);
-    }
-
-    public static ContextPlan from(int round, NativeToolCallingClient.ToolRound result) {
-        return from(round, result, 0);
-    }
-
-    public static ContextPlan from(int round, NativeToolCallingClient.ToolRound result, int modelDecisionLatencyMs) {
-        List<String> tools = result.toolCalls() == null ? List.of() : result.toolCalls().stream()
-                .map(NativeToolCallingClient.PlannedToolCall::name)
-                .filter(name -> name != null && !name.isBlank())
-                .distinct()
-                .toList();
-        return new ContextPlan(round, result.model() == null ? "" : result.model(), tools, result.providerUsage(),
-                Math.max(0, modelDecisionLatencyMs));
     }
 
     public Map<String, Object> safeDetail() {

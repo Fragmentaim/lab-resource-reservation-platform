@@ -30,7 +30,7 @@ class ReservationCreateDraftAgentToolTest {
                 org.mockito.ArgumentMatchers.eq(22L))).thenReturn(draft);
 
         ReservationCreateDraftAgentTool tool = new ReservationCreateDraftAgentTool(service);
-        var result = tool.execute(new AgentToolInvocation(user(), "帮我预约", state(), java.util.List.of(),
+        var result = tool.execute(new AgentToolInvocation(user(), "帮我预约", state(),
                 Map.of("resourceId", 11, "slotId", 22)));
 
         assertThat(tool.name()).isEqualTo("reservation_create_draft");

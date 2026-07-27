@@ -18,7 +18,7 @@ def test_retrieval_can_bypass_reranker_for_baseline_comparison(monkeypatch):
     monkeypatch.setattr(
         rag_pipeline.vectorstore,
         "search_by_keywords",
-        lambda _keywords, top_k, document_ids: [
+        lambda _keywords, top_k, document_ids, document_versions=None: [
             _result("first", "第一条", 9.0),
             _result("second", "第二条", 8.0),
         ],

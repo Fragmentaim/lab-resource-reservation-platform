@@ -13,16 +13,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.URI;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -109,46 +103,10 @@ public class AiServiceClientImpl implements AiServiceClient {
                     .retrieve()
                     .body(String.class);
             return parseProcessResult(response, docVersion);
-        } catch (RestClientResponseException e) {
-            if (e.getStatusCode().value() == 404 || e.getStatusCode().value() == 405) {
-                log.warn("AI service does not support process-by-url yet, falling back to multipart. documentId={}",
-                        documentId);
-                return processDocumentUrlByMultipartFallback(documentId, fileUrl, fileName, fileType, docVersion);
-            }
-            log.error("Failed to process document {} by URL via AI service: {}", documentId, e.getMessage());
-            throw new BusinessException("文档 URL 处理失败: " + e.getMessage());
         } catch (Exception e) {
             log.error("Failed to process document {} by URL via AI service: {}", documentId, e.getMessage());
             throw new BusinessException("文档 URL 处理失败: " + e.getMessage());
         }
-    }
-
-    private ProcessResult processDocumentUrlByMultipartFallback(Long documentId, String fileUrl, String fileName,
-                                                                String fileType, String docVersion) {
-        Path tempFile = null;
-        try {
-            tempFile = Files.createTempFile("knowledge-doc-", "." + safeSuffix(fileType));
-            try (InputStream inputStream = URI.create(fileUrl).toURL().openStream()) {
-                Files.copy(inputStream, tempFile, StandardCopyOption.REPLACE_EXISTING);
-            }
-            return processDocument(documentId, tempFile.toFile(), fileName, fileType, docVersion);
-        } catch (Exception e) {
-            throw new BusinessException("文档 URL 兼容处理失败: " + e.getMessage());
-        } finally {
-            if (tempFile != null) {
-                try {
-                    Files.deleteIfExists(tempFile);
-                } catch (IOException ignored) {
-                }
-            }
-        }
-    }
-
-    private String safeSuffix(String fileType) {
-        if (fileType == null || fileType.isBlank()) {
-            return "txt";
-        }
-        return fileType.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
     }
 
     private ProcessResult doProcessDocumentMultipart(Long documentId, Object fileResource, String fileName,
@@ -228,11 +186,13 @@ public class AiServiceClientImpl implements AiServiceClient {
     }
 
     @Override
-    public KnowledgeSearchResult retrieveKnowledge(String question, List<Long> documentIds) {
+    public KnowledgeSearchResult retrieveKnowledge(String question, Map<Long, String> documentVersions) {
         try {
+            Map<Long, String> scopes = documentVersions == null ? Collections.emptyMap() : documentVersions;
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("question", question);
-            request.put("document_ids", documentIds == null ? Collections.emptyList() : documentIds);
+            request.put("document_ids", scopes.keySet());
+            request.put("document_versions", scopes);
             String response = restClient.post()
                     .uri("/api/v1/ai/qa/retrieve")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -263,19 +223,28 @@ public class AiServiceClientImpl implements AiServiceClient {
                 nullableInt(node, "table_count"),
                 nullableInt(node, "image_count"),
                 nullableInt(node, "scanned_unit_count"),
+                nullableInt(node, "ocr_unit_count"),
+                nullableInt(node, "ocr_character_count"),
+                nullableDouble(node, "ocr_average_confidence"),
+                nullableDouble(node, "parse_average_confidence"),
+                nullableDouble(node, "layout_average_confidence"),
+                nullableDouble(node, "table_average_confidence"),
                 nullableInt(node, "empty_unit_count"),
                 nullableDouble(node, "quality_score"),
+                nullableDouble(node, "quality_low_score"),
                 parseStringArray(node.path("warnings")),
                 node.toString()
         );
     }
 
     @Override
-    public List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, List<Long> documentIds) {
+    public List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, Map<Long, String> documentVersions) {
         try {
+            Map<Long, String> scopes = documentVersions == null ? Collections.emptyMap() : documentVersions;
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("chunk_uids", chunkUids == null ? Collections.emptyList() : chunkUids);
-            request.put("document_ids", documentIds == null ? Collections.emptyList() : documentIds);
+            request.put("document_ids", scopes.keySet());
+            request.put("document_versions", scopes);
             String response = restClient.post()
                     .uri("/api/v1/ai/qa/chunks/open")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -329,7 +298,22 @@ public class AiServiceClientImpl implements AiServiceClient {
             return node.path("deleted_count").asInt();
         } catch (Exception e) {
             log.error("Failed to delete vectors for document {}: {}", documentId, e.getMessage());
-            return 0;
+            throw new BusinessException("删除文档索引失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public int deleteDocumentVersion(Long documentId, String docVersion) {
+        try {
+            String response = restClient.delete()
+                    .uri("/api/v1/ai/documents/{id}/versions/{version}", documentId, docVersion)
+                    .retrieve()
+                    .body(String.class);
+            return objectMapper.readTree(response).path("deleted_count").asInt();
+        } catch (Exception e) {
+            log.error("Failed to delete document version. documentId={}, version={}, error={}",
+                    documentId, docVersion, e.getMessage());
+            throw new BusinessException("删除文档版本索引失败: " + e.getMessage());
         }
     }
 

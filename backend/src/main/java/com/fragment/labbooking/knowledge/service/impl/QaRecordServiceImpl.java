@@ -26,7 +26,7 @@ import com.fragment.labbooking.knowledge.mapper.QaSessionMapper;
 import com.fragment.labbooking.knowledge.mapper.QaSourceMapper;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
-import com.fragment.labbooking.knowledge.service.NativeToolCallingService;
+import com.fragment.labbooking.knowledge.service.AgentChatService;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
 import com.fragment.labbooking.knowledge.service.SessionEventService;
 import com.fragment.labbooking.knowledge.service.ToolRouteResult;
@@ -71,7 +71,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     private AiServiceClient aiServiceClient;
 
     @Autowired
-    private NativeToolCallingService nativeToolCallingService;
+    private AgentChatService agentChatService;
 
     @Autowired
     private QaSourceMapper qaSourceMapper;
@@ -125,25 +125,22 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
 
         long routeStartedAt = System.nanoTime();
-        java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
+        ToolRouteResult routed = agentChatService.answer(
                 record.getQuestion(), actor, record.getSessionId(), record.getTraceId(),
                 new AgentConversationContext(prepared.session().getSummary(), sessionPlan.historyMessages()));
-        if (routed.isEmpty()) {
-            throw new BusinessException("运行恢复后未得到可用 Agent 结果，请重新提问");
-        }
         QaAnswerVO answer = new QaAnswerVO();
-        answer.setAnswer(routed.get().answer());
+        answer.setAnswer(routed.answer());
         answer.setLatencyMs(elapsedMs(routeStartedAt));
-        answer.setModelName(toolRouteModel(routed.get()));
+        answer.setModelName(toolRouteModel(routed));
         answer.setQuestionType("TOOL");
-        answer.setSources(routed.get().sources());
-        answer.setClientActions(routed.get().clientActions());
+        answer.setSources(routed.sources());
+        answer.setClientActions(routed.clientActions());
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("route", "permission_scoped_tool_resume");
-        stats.put("tool_calls", routed.get().toolCalls());
-        stats.put("runtime_managed", routed.get().runtimeManaged());
-        stats.put("selected_source_count", routed.get().sourceCount());
-        attachProviderUsage(stats, routed.get().providerUsage(), prepared.summaryProviderUsage());
+        stats.put("tool_calls", routed.toolCalls());
+        stats.put("runtime_managed", routed.runtimeManaged());
+        stats.put("selected_source_count", routed.sourceCount());
+        attachProviderUsage(stats, routed.providerUsage(), prepared.summaryProviderUsage());
         stats.put("session_context_plan", sessionPlan.safeDetail());
         answer.setContextStats(stats);
         finishToolAnswer(record, answer, record.getSessionId(), actor.getId(), record.getQuestion(), nextTurnNo(prepared.session()));
@@ -215,29 +212,26 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
 
         long routeStartedAt = System.nanoTime();
         try {
-            java.util.Optional<ToolRouteResult> routed = nativeToolCallingService.tryAnswer(
+            ToolRouteResult routed = agentChatService.answer(
                     dto.getQuestion(), actor, sessionId, record.getTraceId(),
                     new AgentConversationContext(session.getSummary(), chatHistory));
-            if (routed.isPresent()) {
-                QaAnswerVO answer = new QaAnswerVO();
-                answer.setAnswer(routed.get().answer());
-                answer.setLatencyMs(elapsedMs(routeStartedAt));
-                answer.setModelName(toolRouteModel(routed.get()));
-                answer.setQuestionType("TOOL");
-                answer.setSources(routed.get().sources());
-                answer.setClientActions(routed.get().clientActions());
-                Map<String, Object> toolStats = new LinkedHashMap<>();
-                toolStats.put("route", "permission_scoped_tool");
-                toolStats.put("tool_calls", routed.get().toolCalls());
-                toolStats.put("runtime_managed", routed.get().runtimeManaged());
-                toolStats.put("selected_source_count", routed.get().sourceCount());
-                attachProviderUsage(toolStats, routed.get().providerUsage(), preparedContext.summaryProviderUsage());
-                toolStats.put("session_context_plan", sessionPlan.safeDetail());
-                answer.setContextStats(toolStats);
-                finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
-                return new RoutedAnswer(answer);
-            }
-            throw new BusinessException("原生 Agent 当前不可用，请稍后重试");
+            QaAnswerVO answer = new QaAnswerVO();
+            answer.setAnswer(routed.answer());
+            answer.setLatencyMs(elapsedMs(routeStartedAt));
+            answer.setModelName(toolRouteModel(routed));
+            answer.setQuestionType("TOOL");
+            answer.setSources(routed.sources());
+            answer.setClientActions(routed.clientActions());
+            Map<String, Object> toolStats = new LinkedHashMap<>();
+            toolStats.put("route", "spring_ai_agent");
+            toolStats.put("tool_calls", routed.toolCalls());
+            toolStats.put("runtime_managed", routed.runtimeManaged());
+            toolStats.put("selected_source_count", routed.sourceCount());
+            attachProviderUsage(toolStats, routed.providerUsage(), preparedContext.summaryProviderUsage());
+            toolStats.put("session_context_plan", sessionPlan.safeDetail());
+            answer.setContextStats(toolStats);
+            finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
+            return new RoutedAnswer(answer);
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -274,9 +268,9 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     }
 
     private String toolRouteModel(ToolRouteResult result) {
-        boolean nativeFunctionCalling = result.toolCalls().stream()
-                .anyMatch(call -> "native_function_calling".equals(call.get("protocol")));
-        return nativeFunctionCalling ? "native-function-calling" : "java-tool-router";
+        Object model = result.providerUsage().get("model");
+        return model == null || !StringUtils.hasText(String.valueOf(model))
+                ? "spring-ai-agent" : String.valueOf(model);
     }
 
     @Override

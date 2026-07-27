@@ -1,6 +1,6 @@
 {
   "conversation_suite_version": "context-compaction-v2-8",
-  "purpose": "Evaluate rolling working-memory compaction with human-authored anchors and deterministic neutral long-context notes. The notes never repeat scored anchors.",
+  "purpose": "Evaluate rolling working-memory compaction with human-authored facts and deterministic neutral long-context notes. The notes never repeat scored facts.",
   "conversation_cases": [
     {
       "caseId": "plan-constraints-01",
