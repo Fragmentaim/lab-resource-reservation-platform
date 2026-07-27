@@ -56,7 +56,7 @@ public class ReservationPersistenceHelper {
 
     /**
      * Save a Reservation, retrying on reservation-no unique-key conflicts
-     * (snowflake ID collision). Throws BusinessException on duplicate active
+     * (generated number collision). Throws BusinessException on duplicate active
      * reservation or after exhausting retries.
      */
     public void saveWithRetry(Reservation reservation) {

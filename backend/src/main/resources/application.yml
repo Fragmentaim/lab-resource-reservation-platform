@@ -90,9 +90,6 @@ app:
         fail-once-enabled: false
         fail-once-match:
         fail-always-match:
-  snowflake:
-    worker-id: 1
-    datacenter-id: 1
   resource-cache:
     enabled: false
     ttl-seconds: 300
