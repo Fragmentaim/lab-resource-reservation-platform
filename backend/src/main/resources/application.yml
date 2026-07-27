@@ -93,6 +93,7 @@ app:
   resource-cache:
     enabled: ${RESOURCE_CACHE_ENABLED:false}
     ttl-seconds: ${RESOURCE_CACHE_TTL_SECONDS:300}
+    double-delete-delay-millis: ${RESOURCE_CACHE_DOUBLE_DELETE_DELAY_MILLIS:500}
   knowledge:
     ai-service:
       base-url: ${AI_SERVICE_BASE_URL:http://127.0.0.1:8000}
