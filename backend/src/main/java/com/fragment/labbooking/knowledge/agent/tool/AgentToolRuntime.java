@@ -1,7 +1,5 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.knowledge.agent.AgentExecutionContext;
@@ -9,6 +7,7 @@ import com.fragment.labbooking.knowledge.agent.AgentToolExecution;
 import com.fragment.labbooking.knowledge.agent.ToolResultContextPacker;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.AiToolCallAuditService;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -18,30 +17,32 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 
-/** Executes one model-selected domain tool and records its auditable result. */
+/** Adds domain auditing and context packing around a Spring AI annotated tool. */
 @Component
-public class AgentToolExecutor {
+public class AgentToolRuntime {
 
-    private final ObjectMapper objectMapper;
+    public static final String EXECUTION_CONTEXT_KEY = "agentExecutionContext";
+
     private final ToolResultContextPacker contextPacker;
     private final AiToolCallAuditService auditService;
     private final AgentRunService runService;
     private final boolean captureArguments;
 
-    public AgentToolExecutor(ObjectMapper objectMapper, ToolResultContextPacker contextPacker,
-                             AiToolCallAuditService auditService, AgentRunService runService,
-                             @Value("${app.knowledge.agent-evaluation.capture-arguments:false}")
-                             boolean captureArguments) {
-        this.objectMapper = objectMapper;
+    public AgentToolRuntime(ToolResultContextPacker contextPacker, AiToolCallAuditService auditService,
+                            AgentRunService runService,
+                            @Value("${app.knowledge.agent-evaluation.capture-arguments:false}")
+                            boolean captureArguments) {
         this.contextPacker = contextPacker;
         this.auditService = auditService;
         this.runService = runService;
         this.captureArguments = captureArguments;
     }
 
-    public String execute(AgentTool tool, String jsonInput, AgentExecutionContext context) {
-        Map<String, Object> arguments = parseArguments(jsonInput);
+    public Map<String, Object> execute(String toolName, String accessScope, Map<String, Object> arguments,
+                                       AgentExecutionContext context, Supplier<AgentToolResult> action) {
+        Map<String, Object> safeArguments = arguments == null ? Map.of() : arguments;
         int callNumber = context.beginToolCall();
         String toolTraceId = UUID.randomUUID().toString();
         long startedAt = System.nanoTime();
@@ -52,52 +53,46 @@ public class AgentToolExecutor {
         recordState(context);
 
         try {
-            AgentToolResult result = tool.execute(new AgentToolInvocation(
-                    context.actor(), context.question(), context.state(), arguments));
+            AgentToolResult result = action.get();
             long latencyMs = elapsedMs(startedAt);
-            auditService.recordSuccess(toolTraceId, tool.name(), context.actor(), context.actor().getId(),
-                    tool.accessScope(), latencyMs, summarize(arguments));
+            auditService.recordSuccess(toolTraceId, toolName, context.actor(), context.actor().getId(),
+                    accessScope, latencyMs, summarize(safeArguments));
 
-            ToolResultContextPacker.PackedToolResult packed = contextPacker.pack(tool.name(), result.output());
-            Map<String, Object> trace = trace(tool.name(), toolTraceId, latencyMs, "SUCCESS", arguments);
-            context.addToolResult(trace, result.sources(), reservationDraftAction(tool.name(), result.output()));
-            recordExecution(context, tool.name(), toolTraceId, latencyMs, "SUCCESS", result.output(),
-                    result.executionDetail(), packed.safeDetail(), arguments);
-            context.state().completeTool(tool.name());
+            ToolResultContextPacker.PackedToolResult packed = contextPacker.pack(toolName, result.output());
+            context.addToolResult(trace(toolName, toolTraceId, latencyMs, "SUCCESS", safeArguments),
+                    result.sources(), reservationDraftAction(toolName, result.output()));
+            recordExecution(context, toolName, toolTraceId, latencyMs, "SUCCESS", result.output(),
+                    result.executionDetail(), packed.safeDetail(), safeArguments);
+            context.state().completeTool(toolName);
             recordState(context);
-            return objectMapper.writeValueAsString(packed.modelOutput());
+            return packed.modelOutput();
         } catch (BusinessException exception) {
             long latencyMs = elapsedMs(startedAt);
-            auditService.recordFailure(toolTraceId, tool.name(), context.actor(), context.actor().getId(), latencyMs,
-                    summarize(arguments), exception.getMessage());
+            auditService.recordFailure(toolTraceId, toolName, context.actor(), context.actor().getId(), latencyMs,
+                    summarize(safeArguments), exception.getMessage());
             Map<String, Object> rejected = Map.of(
                     "error", "TOOL_EXECUTION_REJECTED",
                     "message", exception.getMessage());
-            context.addToolResult(trace(tool.name(), toolTraceId, latencyMs, "REJECTED", arguments), List.of(), null);
-            recordExecution(context, tool.name(), toolTraceId, latencyMs, "REJECTED", rejected,
-                    Map.of(), Map.of("strategy", "DIRECT"), arguments);
-            context.state().completeTool(tool.name());
+            context.addToolResult(trace(toolName, toolTraceId, latencyMs, "REJECTED", safeArguments), List.of(), null);
+            recordExecution(context, toolName, toolTraceId, latencyMs, "REJECTED", rejected,
+                    Map.of(), Map.of("strategy", "DIRECT"), safeArguments);
+            context.state().completeTool(toolName);
             recordState(context);
-            return writeJson(rejected);
+            return rejected;
         } catch (RuntimeException exception) {
             long latencyMs = elapsedMs(startedAt);
-            auditService.recordFailure(toolTraceId, tool.name(), context.actor(), context.actor().getId(), latencyMs,
-                    summarize(arguments), exception.getMessage());
+            auditService.recordFailure(toolTraceId, toolName, context.actor(), context.actor().getId(), latencyMs,
+                    summarize(safeArguments), exception.getMessage());
             throw exception;
-        } catch (Exception exception) {
-            throw new BusinessException("工具结果序列化失败: " + exception.getMessage());
         }
     }
 
-    private Map<String, Object> parseArguments(String jsonInput) {
-        if (jsonInput == null || jsonInput.isBlank()) {
-            return Map.of();
+    public AgentExecutionContext requireExecutionContext(ToolContext toolContext) {
+        Object value = toolContext == null ? null : toolContext.getContext().get(EXECUTION_CONTEXT_KEY);
+        if (value instanceof AgentExecutionContext context) {
+            return context;
         }
-        try {
-            return objectMapper.readValue(jsonInput, new TypeReference<>() { });
-        } catch (Exception exception) {
-            throw new BusinessException("工具参数不是合法 JSON");
-        }
+        throw new BusinessException("工具缺少服务端执行上下文");
     }
 
     private void recordExecution(AgentExecutionContext context, String toolName, String toolTraceId,
@@ -123,7 +118,7 @@ public class AgentToolExecutor {
         }
         runService.recordToolExecution(context.traceId(), new AgentToolExecution(
                 toolName, status, (int) Math.min(Integer.MAX_VALUE, latencyMs), toolTraceId,
-                "spring_ai_tool_callback", detail));
+                "spring_ai_annotated_tool", detail));
     }
 
     private void recordState(AgentExecutionContext context) {
@@ -139,7 +134,7 @@ public class AgentToolExecutor {
         trace.put("tool_trace_id", toolTraceId);
         trace.put("latency_ms", latencyMs);
         trace.put("result", result);
-        trace.put("protocol", "spring_ai_tool_callback");
+        trace.put("protocol", "spring_ai_annotated_tool");
         if (captureArguments) {
             trace.put("evaluation_arguments", sanitize(arguments));
         }
@@ -172,9 +167,7 @@ public class AgentToolExecutor {
 
     private Map<String, Object> sanitize(Map<String, Object> arguments) {
         Map<String, Object> safe = new LinkedHashMap<>();
-        if (arguments != null) {
-            arguments.forEach((key, value) -> safe.put(key, sanitizeValue(key, value)));
-        }
+        arguments.forEach((key, value) -> safe.put(key, sanitizeValue(key, value)));
         return safe;
     }
 
@@ -200,14 +193,6 @@ public class AgentToolExecutor {
 
     private String summarize(Map<String, Object> arguments) {
         return TruncateUtil.truncate(String.valueOf(sanitize(arguments)), 512);
-    }
-
-    private String writeJson(Map<String, Object> value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        } catch (Exception exception) {
-            return "{\"error\":\"TOOL_RESULT_SERIALIZATION_FAILED\"}";
-        }
     }
 
     private int listSize(Object value) { return value instanceof List<?> list ? list.size() : 0; }

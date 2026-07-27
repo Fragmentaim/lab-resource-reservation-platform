@@ -1,6 +1,5 @@
 package com.fragment.labbooking.knowledge.service.impl;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.agent.AgentConversationContext;
@@ -9,9 +8,9 @@ import com.fragment.labbooking.knowledge.agent.AgentState;
 import com.fragment.labbooking.knowledge.agent.AgentSystemPrompt;
 import com.fragment.labbooking.knowledge.agent.ContextPlan;
 import com.fragment.labbooking.knowledge.agent.PolicyContext;
-import com.fragment.labbooking.knowledge.agent.tool.AgentToolExecutor;
-import com.fragment.labbooking.knowledge.agent.tool.AgentToolRegistry;
-import com.fragment.labbooking.knowledge.agent.tool.SpringAiToolCallback;
+import com.fragment.labbooking.knowledge.agent.tool.AgentToolRuntime;
+import com.fragment.labbooking.knowledge.agent.tool.KnowledgeAgentTools;
+import com.fragment.labbooking.knowledge.agent.tool.ReservationAgentTools;
 import com.fragment.labbooking.knowledge.service.AgentChatService;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
@@ -25,7 +24,6 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -40,21 +38,18 @@ import java.util.Map;
 public class SpringAiAgentService implements AgentChatService {
 
     private final ChatClient chatClient;
-    private final AgentToolRegistry toolRegistry;
-    private final AgentToolExecutor toolExecutor;
+    private final ReservationAgentTools reservationTools;
+    private final KnowledgeAgentTools knowledgeTools;
     private final AgentRunService runService;
-    private final ObjectMapper objectMapper;
     private final int maxToolCalls;
 
-    public SpringAiAgentService(ChatClient.Builder chatClientBuilder, AgentToolRegistry toolRegistry,
-                                AgentToolExecutor toolExecutor, AgentRunService runService,
-                                ObjectMapper objectMapper,
+    public SpringAiAgentService(ChatClient.Builder chatClientBuilder, ReservationAgentTools reservationTools,
+                                KnowledgeAgentTools knowledgeTools, AgentRunService runService,
                                 @Value("${app.knowledge.agent.max-tool-calls:8}") int maxToolCalls) {
         this.chatClient = chatClientBuilder.build();
-        this.toolRegistry = toolRegistry;
-        this.toolExecutor = toolExecutor;
+        this.reservationTools = reservationTools;
+        this.knowledgeTools = knowledgeTools;
         this.runService = runService;
-        this.objectMapper = objectMapper;
         this.maxToolCalls = Math.max(1, maxToolCalls);
     }
 
@@ -79,9 +74,6 @@ public class SpringAiAgentService implements AgentChatService {
             runService.recordRuntimeState(traceId, state);
         }
 
-        List<ToolCallback> callbacks = toolRegistry.toolsFor(policy).stream()
-                .map(tool -> (ToolCallback) new SpringAiToolCallback(tool, toolExecutor, execution, objectMapper))
-                .toList();
         List<Message> messages = buildMessages(conversationContext, state);
 
         long modelStartedAt = System.nanoTime();
@@ -89,8 +81,9 @@ public class SpringAiAgentService implements AgentChatService {
                 .system(AgentSystemPrompt.TEXT)
                 .messages(messages)
                 .user(question)
-                .toolCallbacks(callbacks)
+                .tools(reservationTools, knowledgeTools)
                 .toolContext(Map.of(
+                        AgentToolRuntime.EXECUTION_CONTEXT_KEY, execution,
                         "traceId", traceId == null ? "" : traceId,
                         "sessionId", sessionId == null ? "" : sessionId,
                         "actorId", actor.getId()))
