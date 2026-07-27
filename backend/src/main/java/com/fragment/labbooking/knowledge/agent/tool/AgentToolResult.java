@@ -1,8 +1,8 @@
 package com.fragment.labbooking.knowledge.agent.tool;
 
+import com.fragment.labbooking.knowledge.agent.model.AgentModelGuard;
 import com.fragment.labbooking.knowledge.vo.QaSourceVO;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -11,9 +11,9 @@ public record AgentToolResult(Map<String, Object> output, List<QaSourceVO> sourc
                               Map<String, Object> executionDetail) {
 
     public AgentToolResult {
-        output = output == null ? Map.of() : Collections.unmodifiableMap(output);
-        sources = sources == null ? List.of() : List.copyOf(sources);
-        executionDetail = executionDetail == null ? Map.of() : Collections.unmodifiableMap(executionDetail);
+        output = AgentModelGuard.map(output);
+        sources = AgentModelGuard.list(sources);
+        executionDetail = AgentModelGuard.map(executionDetail);
     }
 
     public static AgentToolResult of(Map<String, Object> output) {

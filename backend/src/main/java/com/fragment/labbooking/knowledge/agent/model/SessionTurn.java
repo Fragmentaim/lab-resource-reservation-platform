@@ -9,12 +9,18 @@ import java.util.List;
 /** A complete user turn. Tool activity is represented by its final answer, never as an orphaned message. */
 public record SessionTurn(Long recordId, String traceId, String question, String answer) {
 
+    public SessionTurn {
+        traceId = AgentModelGuard.text(traceId);
+        question = AgentModelGuard.text(question);
+        answer = AgentModelGuard.text(answer);
+    }
+
     public List<AiServiceClient.ChatMessage> messages() {
         List<AiServiceClient.ChatMessage> messages = new ArrayList<>();
-        if (question != null && !question.isBlank()) {
+        if (!question.isBlank()) {
             messages.add(new AiServiceClient.ChatMessage("user", question));
         }
-        if (answer != null && !answer.isBlank()) {
+        if (!answer.isBlank()) {
             messages.add(new AiServiceClient.ChatMessage("assistant", answer));
         }
         return messages;

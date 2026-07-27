@@ -10,6 +10,14 @@ import java.util.Map;
 public record ContextPlan(int round, String model, List<String> requestedTools, Map<String, Object> providerUsage,
                           int modelDecisionLatencyMs) {
 
+    public ContextPlan {
+        round = Math.max(0, round);
+        model = AgentModelGuard.text(model);
+        requestedTools = AgentModelGuard.list(requestedTools);
+        providerUsage = AgentModelGuard.map(providerUsage);
+        modelDecisionLatencyMs = Math.max(0, modelDecisionLatencyMs);
+    }
+
     public ContextPlan(int round, String model, List<String> requestedTools) {
         this(round, model, requestedTools, Map.of(), 0);
     }
@@ -24,7 +32,7 @@ public record ContextPlan(int round, String model, List<String> requestedTools, 
         detail.put("model", model);
         detail.put("requested_tools", requestedTools);
         detail.put("requested_tool_count", requestedTools.size());
-        detail.put("provider_usage", providerUsage == null ? Map.of("reported", false) : providerUsage);
+        detail.put("provider_usage", providerUsage.isEmpty() ? Map.of("reported", false) : providerUsage);
         detail.put("model_decision_latency_ms", modelDecisionLatencyMs);
         return detail;
     }

@@ -1,6 +1,7 @@
 package com.fragment.labbooking.knowledge.agent.runtime;
 
 import com.fragment.labbooking.knowledge.agent.model.PolicyContext;
+import com.fragment.labbooking.knowledge.agent.model.AgentModelGuard;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -149,10 +150,11 @@ public final class AgentState {
             List<String> openedChunkUids
     ) {
         public Checkpoint {
-            completedTools = completedTools == null ? List.of() : List.copyOf(completedTools);
-            searchableChunkDocumentIds = searchableChunkDocumentIds == null
-                    ? Map.of() : Map.copyOf(searchableChunkDocumentIds);
-            openedChunkUids = openedChunkUids == null ? List.of() : List.copyOf(openedChunkUids);
+            traceId = AgentModelGuard.text(traceId);
+            sessionId = AgentModelGuard.text(sessionId);
+            completedTools = AgentModelGuard.list(completedTools);
+            searchableChunkDocumentIds = AgentModelGuard.map(searchableChunkDocumentIds);
+            openedChunkUids = AgentModelGuard.list(openedChunkUids);
         }
     }
 }

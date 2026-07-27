@@ -7,8 +7,8 @@ import java.util.List;
 /** Context supplied to the native tool-planning model for the active session only. */
 public record AgentConversationContext(String workingMemory, List<AiServiceClient.ChatMessage> history) {
     public AgentConversationContext {
-        workingMemory = workingMemory == null ? "" : workingMemory;
-        history = history == null ? List.of() : List.copyOf(history);
+        workingMemory = AgentModelGuard.text(workingMemory);
+        history = AgentModelGuard.list(history);
     }
 
     public static AgentConversationContext empty() {

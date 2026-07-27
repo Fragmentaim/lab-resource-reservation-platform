@@ -388,43 +388,7 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     private AgentState.Checkpoint deserializeCheckpoint(String json) throws Exception {
-        Map<String, Object> value = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
-        String traceId = safeText(value.get("traceId"));
-        String sessionId = safeText(value.get("sessionId"));
-        Long actorId = longValue(value.get("actorId"));
-        AgentState.Phase phase = AgentState.Phase.valueOf(safeText(value.get("phase")));
-        int round = intValue(value.get("round"));
-        List<String> completedTools = stringList(value.get("completedTools"));
-        List<String> openedChunkUids = stringList(value.get("openedChunkUids"));
-        Map<String, Long> candidates = new LinkedHashMap<>();
-        Object candidateValue = value.get("searchableChunkDocumentIds");
-        if (candidateValue instanceof Map<?, ?> rawCandidates) {
-            rawCandidates.forEach((key, documentId) -> {
-                Long parsedId = longValue(documentId);
-                if (key != null && parsedId != null) {
-                    candidates.put(String.valueOf(key), parsedId);
-                }
-            });
-        }
-        return new AgentState.Checkpoint(traceId, sessionId, actorId, phase, round, completedTools, candidates, openedChunkUids);
-    }
-
-    private List<String> stringList(Object raw) {
-        if (!(raw instanceof List<?> values)) {
-            return List.of();
-        }
-        return values.stream().filter(String.class::isInstance).map(String.class::cast).toList();
-    }
-
-    private Long longValue(Object value) {
-        if (value instanceof Number number) {
-            return number.longValue();
-        }
-        try {
-            return value == null ? null : Long.parseLong(String.valueOf(value));
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
+        return objectMapper.readValue(json, AgentState.Checkpoint.class);
     }
 
     private void clearCheckpoint(String traceId) {

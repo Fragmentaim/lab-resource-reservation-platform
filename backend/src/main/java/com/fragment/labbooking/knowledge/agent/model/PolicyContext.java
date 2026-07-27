@@ -10,11 +10,16 @@ import java.util.Map;
  */
 public record PolicyContext(Long userId, String role, boolean admin) {
 
+    public PolicyContext {
+        userId = AgentModelGuard.requiredId(userId, "userId");
+        role = AgentModelGuard.text(role);
+    }
+
     public static PolicyContext from(LoginUser actor) {
         if (actor == null || actor.getId() == null) {
             throw new IllegalArgumentException("Agent execution requires an authenticated user");
         }
-        return new PolicyContext(actor.getId(), actor.getRole() == null ? "" : actor.getRole(), actor.isAdmin());
+        return new PolicyContext(actor.getId(), actor.getRole(), actor.isAdmin());
     }
 
     public Map<String, Object> safeAttributes() {

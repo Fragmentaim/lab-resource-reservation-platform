@@ -19,6 +19,11 @@ public record SessionContextPlan(
         int deferredTurnCount,
         boolean compactionRecommended
 ) {
+    public SessionContextPlan {
+        includedTurns = AgentModelGuard.list(includedTurns);
+        deferredTurns = AgentModelGuard.list(deferredTurns);
+    }
+
     public List<AiServiceClient.ChatMessage> historyMessages() {
         return includedTurns.stream().flatMap(turn -> turn.messages().stream()).toList();
     }
