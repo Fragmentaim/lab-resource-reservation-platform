@@ -13,7 +13,6 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.id.ReservationNoGenerator;
 import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
-import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationCreateEvent;
 import com.fragment.labbooking.common.reservation.ReservationMqPublisher;
@@ -48,7 +47,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
     private final ResourceSlotService resourceSlotService;
     private final ReservationReminderTaskService reservationReminderTaskService;
     private final HotReservationRedisService hotReservationRedisService;
-    private final ResourceRedisCacheService resourceRedisCacheService;
     private final ReservationPersistenceHelper reservationPersistenceHelper;
     private final ReservationNoGenerator reservationNoGenerator;
     private final ReservationAutoCancelService reservationAutoCancelService;
@@ -63,7 +61,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
                                          ResourceSlotService resourceSlotService,
                                          ReservationReminderTaskService reservationReminderTaskService,
                                          HotReservationRedisService hotReservationRedisService,
-                                         ResourceRedisCacheService resourceRedisCacheService,
                                          ReservationPersistenceHelper reservationPersistenceHelper,
                                          ReservationNoGenerator reservationNoGenerator,
                                          ReservationAutoCancelService reservationAutoCancelService,
@@ -77,7 +74,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
         this.resourceSlotService = resourceSlotService;
         this.reservationReminderTaskService = reservationReminderTaskService;
         this.hotReservationRedisService = hotReservationRedisService;
-        this.resourceRedisCacheService = resourceRedisCacheService;
         this.reservationPersistenceHelper = reservationPersistenceHelper;
         this.reservationNoGenerator = reservationNoGenerator;
         this.reservationAutoCancelService = reservationAutoCancelService;
@@ -248,7 +244,6 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
             reservationPersistenceHelper.saveWithRetry(reservation);
             reservationReminderTaskService.createBeforeStartReminder(reservation);
             reservationAutoCancelService.schedule(reservation);
-            resourceRedisCacheService.invalidateResourceSlotList(request.getResourceId());
             markSuccess(request, reservation);
         } catch (BusinessException exception) {
             if (quotaDeducted) {

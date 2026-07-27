@@ -6,7 +6,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.audit.AdminAuditHelper;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
+import com.fragment.labbooking.common.redis.ResourceCatalogCache;
 import com.fragment.labbooking.common.util.TextUtil;
 import com.fragment.labbooking.dto.ResourceAddDTO;
 import com.fragment.labbooking.dto.ResourcePageQueryDTO;
@@ -49,7 +49,7 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
     private ReservationMapper reservationMapper;
 
     @Autowired
-    private ResourceRedisCacheService resourceRedisCacheService;
+    private ResourceCatalogCache resourceCatalogCache;
 
     @Autowired
     private AdminAuditHelper adminAuditHelper;
@@ -57,29 +57,10 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
     @Override
     public List<ResourceVO> search(ResourceQueryDTO queryDTO) {
         ResourceQueryDTO actualQuery = queryDTO == null ? new ResourceQueryDTO() : queryDTO;
-        String queryKey = resourceRedisCacheService.buildResourceListQueryKey(
-                actualQuery.getName(),
-                actualQuery.getType(),
-                actualQuery.getStatus()
-        );
-
-        return resourceRedisCacheService.getResourceList(queryKey, () -> {
-            List<Resource> resources = this.list(new LambdaQueryWrapper<Resource>()
-                    .like(StringUtils.hasText(actualQuery.getName()),
-                            Resource::getResourceName, actualQuery.getName())
-                    .eq(StringUtils.hasText(actualQuery.getType()),
-                            Resource::getResourceType, actualQuery.getType())
-                    .eq(StringUtils.hasText(actualQuery.getStatus()),
-                            Resource::getStatus, actualQuery.getStatus())
-                    .orderByAsc(Resource::getResourceCode));
-
-            Map<String, String> resourceTypeLabelMap = sysDictDataService.getDictLabelMap(RESOURCE_TYPE_DICT);
-            Map<String, String> resourceStatusLabelMap = sysDictDataService.getDictLabelMap(RESOURCE_STATUS_DICT);
-
-            return resources.stream()
-                    .map(resource -> toResourceVO(resource, resourceTypeLabelMap, resourceStatusLabelMap))
-                    .collect(Collectors.toList());
-        });
+        if (hasResourceFilters(actualQuery)) {
+            return loadResourceList(actualQuery);
+        }
+        return resourceCatalogCache.getHomeResourceList(() -> loadResourceList(actualQuery));
     }
 
     @Override
@@ -137,21 +118,14 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
             throw new BusinessException("资源ID不能为空");
         }
 
-        ResourceVO resourceVO = resourceRedisCacheService.getResourceDetail(id, () -> {
-            Resource resource = this.getById(id);
-            if (resource == null) {
-                return null;
-            }
-
-            Map<String, String> resourceTypeLabelMap = sysDictDataService.getDictLabelMap(RESOURCE_TYPE_DICT);
-            Map<String, String> resourceStatusLabelMap = sysDictDataService.getDictLabelMap(RESOURCE_STATUS_DICT);
-            return toResourceVO(resource, resourceTypeLabelMap, resourceStatusLabelMap);
-        });
-
-        if (resourceVO == null) {
+        Resource resource = this.getById(id);
+        if (resource == null) {
             throw new BusinessException("资源不存在");
         }
-        return resourceVO;
+
+        Map<String, String> resourceTypeLabelMap = sysDictDataService.getDictLabelMap(RESOURCE_TYPE_DICT);
+        Map<String, String> resourceStatusLabelMap = sysDictDataService.getDictLabelMap(RESOURCE_STATUS_DICT);
+        return toResourceVO(resource, resourceTypeLabelMap, resourceStatusLabelMap);
     }
 
     @Override
@@ -188,7 +162,7 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
                         throw new BusinessException("新增资源失败");
                     }
 
-                    resourceRedisCacheService.invalidateResourceCaches(resource.getId());
+                    resourceCatalogCache.invalidateHomeResourceList();
                 }
         );
     }
@@ -230,7 +204,7 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
                         throw new BusinessException("更新资源失败");
                     }
 
-                    resourceRedisCacheService.invalidateResourceCaches(existing.getId());
+                    resourceCatalogCache.invalidateHomeResourceList();
                 }
         );
     }
@@ -283,7 +257,7 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
                         throw new BusinessException("删除资源失败");
                     }
 
-                    resourceRedisCacheService.invalidateResourceCaches(id);
+                    resourceCatalogCache.invalidateHomeResourceList();
                 }
         );
     }
@@ -300,6 +274,29 @@ public class ResourceServiceImpl extends ServiceImpl<ResourceMapper, Resource>
         if (count > 0) {
             throw new BusinessException("资源编号已存在");
         }
+    }
+
+    private boolean hasResourceFilters(ResourceQueryDTO queryDTO) {
+        return StringUtils.hasText(queryDTO.getName())
+                || StringUtils.hasText(queryDTO.getType())
+                || StringUtils.hasText(queryDTO.getStatus());
+    }
+
+    private List<ResourceVO> loadResourceList(ResourceQueryDTO queryDTO) {
+        List<Resource> resources = this.list(new LambdaQueryWrapper<Resource>()
+                .like(StringUtils.hasText(queryDTO.getName()),
+                        Resource::getResourceName, queryDTO.getName())
+                .eq(StringUtils.hasText(queryDTO.getType()),
+                        Resource::getResourceType, queryDTO.getType())
+                .eq(StringUtils.hasText(queryDTO.getStatus()),
+                        Resource::getStatus, queryDTO.getStatus())
+                .orderByAsc(Resource::getResourceCode));
+
+        Map<String, String> resourceTypeLabelMap = sysDictDataService.getDictLabelMap(RESOURCE_TYPE_DICT);
+        Map<String, String> resourceStatusLabelMap = sysDictDataService.getDictLabelMap(RESOURCE_STATUS_DICT);
+        return resources.stream()
+                .map(resource -> toResourceVO(resource, resourceTypeLabelMap, resourceStatusLabelMap))
+                .collect(Collectors.toList());
     }
 
     private void validateDictValueExists(String dictType, String dictValue, String message) {

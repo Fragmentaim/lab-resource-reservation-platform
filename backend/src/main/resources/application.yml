@@ -91,8 +91,8 @@ app:
         fail-once-match:
         fail-always-match:
   resource-cache:
-    enabled: false
-    ttl-seconds: 300
+    enabled: ${RESOURCE_CACHE_ENABLED:false}
+    ttl-seconds: ${RESOURCE_CACHE_TTL_SECONDS:300}
   knowledge:
     ai-service:
       base-url: ${AI_SERVICE_BASE_URL:http://127.0.0.1:8000}

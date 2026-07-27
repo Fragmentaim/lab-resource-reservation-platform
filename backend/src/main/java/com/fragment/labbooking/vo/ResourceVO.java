@@ -2,10 +2,11 @@ package com.fragment.labbooking.vo;
 
 import lombok.Data;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 
 @Data
-public class ResourceVO {
+public class ResourceVO implements Serializable {
     private Long id;
     private String resourceCode;
     private String resourceName;

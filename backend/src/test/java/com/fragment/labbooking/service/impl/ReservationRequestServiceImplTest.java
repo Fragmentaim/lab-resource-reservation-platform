@@ -9,7 +9,6 @@ import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
 import com.fragment.labbooking.common.id.ReservationNoGenerator;
 import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
-import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.entity.Reservation;
@@ -52,7 +51,6 @@ class ReservationRequestServiceImplTest {
         ResourceSlotService resourceSlotService = mock(ResourceSlotService.class);
         ReservationReminderTaskService reminderTaskService = mock(ReservationReminderTaskService.class);
         HotReservationRedisService hotReservationRedisService = mock(HotReservationRedisService.class);
-        ResourceRedisCacheService resourceRedisCacheService = mock(ResourceRedisCacheService.class);
         ReservationNoGenerator reservationNoGenerator = mock(ReservationNoGenerator.class);
         MessageOutboxService messageOutboxService = mock(MessageOutboxService.class);
 
@@ -68,7 +66,6 @@ class ReservationRequestServiceImplTest {
                 resourceSlotService,
                 reminderTaskService,
                 hotReservationRedisService,
-                resourceRedisCacheService,
                 reservationNoGenerator,
                 messageOutboxService,
                 false
@@ -93,7 +90,6 @@ class ReservationRequestServiceImplTest {
                 mock(ResourceSlotService.class),
                 mock(ReservationReminderTaskService.class),
                 mock(HotReservationRedisService.class),
-                mock(ResourceRedisCacheService.class),
                 mock(ReservationNoGenerator.class),
                 mock(MessageOutboxService.class),
                 false
@@ -125,7 +121,6 @@ class ReservationRequestServiceImplTest {
                 mock(ResourceSlotService.class),
                 mock(ReservationReminderTaskService.class),
                 mock(HotReservationRedisService.class),
-                mock(ResourceRedisCacheService.class),
                 reservationNoGenerator,
                 messageOutboxService,
                 true
@@ -176,7 +171,6 @@ class ReservationRequestServiceImplTest {
                 mock(ResourceSlotService.class),
                 mock(ReservationReminderTaskService.class),
                 mock(HotReservationRedisService.class),
-                mock(ResourceRedisCacheService.class),
                 reservationNoGenerator,
                 messageOutboxService,
                 true
@@ -210,7 +204,6 @@ class ReservationRequestServiceImplTest {
                 mock(ResourceSlotService.class),
                 mock(ReservationReminderTaskService.class),
                 mock(HotReservationRedisService.class),
-                mock(ResourceRedisCacheService.class),
                 reservationNoGenerator,
                 messageOutboxService,
                 true
@@ -234,7 +227,6 @@ class ReservationRequestServiceImplTest {
                 mock(ResourceSlotService.class),
                 mock(ReservationReminderTaskService.class),
                 hotReservationRedisService,
-                mock(ResourceRedisCacheService.class),
                 mock(ReservationNoGenerator.class),
                 mock(MessageOutboxService.class),
                 false
@@ -265,7 +257,6 @@ class ReservationRequestServiceImplTest {
                 resourceSlotService,
                 mock(ReservationReminderTaskService.class),
                 hotReservationRedisService,
-                mock(ResourceRedisCacheService.class),
                 reservationNoGenerator,
                 mock(MessageOutboxService.class),
                 false
@@ -307,7 +298,6 @@ class ReservationRequestServiceImplTest {
         ResourceService resourceService = mock(ResourceService.class);
         ResourceSlotService resourceSlotService = mock(ResourceSlotService.class);
         ReservationReminderTaskService reminderTaskService = mock(ReservationReminderTaskService.class);
-        ResourceRedisCacheService resourceRedisCacheService = mock(ResourceRedisCacheService.class);
         ReservationNoGenerator reservationNoGenerator = mock(ReservationNoGenerator.class);
         ReservationAutoCancelService reservationAutoCancelService = mock(ReservationAutoCancelService.class);
         ReservationRequestServiceImpl service = buildService(
@@ -317,7 +307,6 @@ class ReservationRequestServiceImplTest {
                 resourceSlotService,
                 reminderTaskService,
                 mock(HotReservationRedisService.class),
-                resourceRedisCacheService,
                 reservationNoGenerator,
                 mock(MessageOutboxService.class),
                 reservationAutoCancelService,
@@ -354,7 +343,6 @@ class ReservationRequestServiceImplTest {
         verify(reservationAutoCancelService).fillAutoCancelDeadline(any(Reservation.class));
         verify(reservationAutoCancelService).schedule(any(Reservation.class));
         verify(reminderTaskService).createBeforeStartReminder(any(Reservation.class));
-        verify(resourceRedisCacheService).invalidateResourceSlotList(1L);
     }
 
     @Test
@@ -368,7 +356,6 @@ class ReservationRequestServiceImplTest {
                 mock(ResourceSlotService.class),
                 mock(ReservationReminderTaskService.class),
                 hotReservationRedisService,
-                mock(ResourceRedisCacheService.class),
                 mock(ReservationNoGenerator.class),
                 mock(MessageOutboxService.class),
                 false
@@ -401,7 +388,6 @@ class ReservationRequestServiceImplTest {
                 mock(ResourceSlotService.class),
                 mock(ReservationReminderTaskService.class),
                 hotReservationRedisService,
-                mock(ResourceRedisCacheService.class),
                 mock(ReservationNoGenerator.class),
                 mock(MessageOutboxService.class),
                 false
@@ -426,7 +412,6 @@ class ReservationRequestServiceImplTest {
                                                        ResourceSlotService resourceSlotService,
                                                        ReservationReminderTaskService reminderTaskService,
                                                        HotReservationRedisService hotReservationRedisService,
-                                                       ResourceRedisCacheService resourceRedisCacheService,
                                                        ReservationNoGenerator reservationNoGenerator,
                                                        MessageOutboxService messageOutboxService,
                                                        boolean delayMessageEnabled) {
@@ -437,7 +422,6 @@ class ReservationRequestServiceImplTest {
                 resourceSlotService,
                 reminderTaskService,
                 hotReservationRedisService,
-                resourceRedisCacheService,
                 reservationNoGenerator,
                 messageOutboxService,
                 mock(ReservationAutoCancelService.class),
@@ -451,7 +435,6 @@ class ReservationRequestServiceImplTest {
                                                        ResourceSlotService resourceSlotService,
                                                        ReservationReminderTaskService reminderTaskService,
                                                        HotReservationRedisService hotReservationRedisService,
-                                                       ResourceRedisCacheService resourceRedisCacheService,
                                                        ReservationNoGenerator reservationNoGenerator,
                                                        MessageOutboxService messageOutboxService,
                                                        ReservationAutoCancelService reservationAutoCancelService,
@@ -465,7 +448,6 @@ class ReservationRequestServiceImplTest {
                 resourceSlotService,
                 reminderTaskService,
                 hotReservationRedisService,
-                resourceRedisCacheService,
                 reservationPersistenceHelper,
                 reservationNoGenerator,
                 reservationAutoCancelService,

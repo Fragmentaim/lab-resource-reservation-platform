@@ -171,6 +171,8 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-lab_password_change_me}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      RESOURCE_CACHE_ENABLED: ${RESOURCE_CACHE_ENABLED:-true}
+      RESOURCE_CACHE_TTL_SECONDS: ${RESOURCE_CACHE_TTL_SECONDS:-300}
       ROCKETMQ_NAMESERVER: rocketmq-namesrv:9876
       AI_SERVICE_BASE_URL: http://ai-service:8000
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-change-me-before-production}

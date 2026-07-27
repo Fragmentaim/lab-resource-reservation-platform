@@ -8,7 +8,6 @@ import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
 import com.fragment.labbooking.common.delay.ReservationAutoCancelDelayPayload;
 import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
-import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.service.ResourceSlotService;
@@ -40,8 +39,6 @@ class ReservationAutoCancelServiceTest {
     @Mock
     private HotReservationRedisService hotReservationRedisService;
     @Mock
-    private ResourceRedisCacheService resourceRedisCacheService;
-    @Mock
     private UserNotificationService userNotificationService;
     @Mock
     private MessageOutboxService messageOutboxService;
@@ -55,7 +52,6 @@ class ReservationAutoCancelServiceTest {
                 reservationMapper,
                 resourceSlotService,
                 hotReservationRedisService,
-                resourceRedisCacheService,
                 userNotificationService,
                 messageOutboxService,
                 "reservation-delay",
@@ -100,7 +96,6 @@ class ReservationAutoCancelServiceTest {
 
         assertThat(cancelled).isTrue();
         verify(resourceSlotService).restoreQuota(10L);
-        verify(resourceRedisCacheService).invalidateResourceSlotList(1L);
         verify(hotReservationRedisService).releaseAfterSuccessfulCancellation(ResourceSlotTypeConstants.HOT, 10L, 7L);
         verify(userNotificationService).createAutoCancelNotification(reservation);
     }

@@ -7,7 +7,6 @@ import com.fragment.labbooking.common.delay.DelayMessageTags;
 import com.fragment.labbooking.common.delay.ReservationAutoCancelDelayPayload;
 import com.fragment.labbooking.common.outbox.MessageOutboxService;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
-import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.service.ResourceSlotService;
@@ -26,7 +25,6 @@ public class ReservationAutoCancelService {
     private final ReservationMapper reservationMapper;
     private final ResourceSlotService resourceSlotService;
     private final HotReservationRedisService hotReservationRedisService;
-    private final ResourceRedisCacheService resourceRedisCacheService;
     private final UserNotificationService userNotificationService;
     private final MessageOutboxService messageOutboxService;
     private final String delayTopic;
@@ -36,7 +34,6 @@ public class ReservationAutoCancelService {
     public ReservationAutoCancelService(ReservationMapper reservationMapper,
                                         ResourceSlotService resourceSlotService,
                                         HotReservationRedisService hotReservationRedisService,
-                                        ResourceRedisCacheService resourceRedisCacheService,
                                         UserNotificationService userNotificationService,
                                         MessageOutboxService messageOutboxService,
                                         @Value("${app.message-outbox.delay-topic:reservation-delay}") String delayTopic,
@@ -45,7 +42,6 @@ public class ReservationAutoCancelService {
         this.reservationMapper = reservationMapper;
         this.resourceSlotService = resourceSlotService;
         this.hotReservationRedisService = hotReservationRedisService;
-        this.resourceRedisCacheService = resourceRedisCacheService;
         this.userNotificationService = userNotificationService;
         this.messageOutboxService = messageOutboxService;
         this.delayTopic = delayTopic;
@@ -125,7 +121,6 @@ public class ReservationAutoCancelService {
         }
 
         resourceSlotService.restoreQuota(reservation.getSlotId());
-        resourceRedisCacheService.invalidateResourceSlotList(reservation.getResourceId());
         hotReservationRedisService.releaseAfterSuccessfulCancellation(
                 reservation.getSourceType(),
                 reservation.getSlotId(),

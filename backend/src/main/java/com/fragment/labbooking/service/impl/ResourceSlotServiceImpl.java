@@ -10,7 +10,6 @@ import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
-import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.util.TextUtil;
 import com.fragment.labbooking.dto.ResourceSlotAddDTO;
 import com.fragment.labbooking.dto.ResourceSlotPageQueryDTO;
@@ -44,17 +43,14 @@ public class ResourceSlotServiceImpl extends ServiceImpl<ResourceSlotMapper, Res
     private HotReservationRedisService hotReservationRedisService;
 
     @Autowired
-    private ResourceRedisCacheService resourceRedisCacheService;
-
-    @Autowired
     private AdminAuditHelper adminAuditHelper;
 
     @Override
     public List<ResourceSlot> getSlotsByResourceId(Long resourceId) {
-        return resourceRedisCacheService.getResourceSlots(resourceId, () -> this.list(new LambdaQueryWrapper<ResourceSlot>()
+        return this.list(new LambdaQueryWrapper<ResourceSlot>()
                 .eq(ResourceSlot::getResourceId, resourceId)
                 .eq(ResourceSlot::getStatus, ResourceSlotStatusConstants.OPEN)
-                .orderByAsc(ResourceSlot::getStartDatetime)));
+                .orderByAsc(ResourceSlot::getStartDatetime));
     }
 
     @Override
@@ -133,7 +129,6 @@ public class ResourceSlotServiceImpl extends ServiceImpl<ResourceSlotMapper, Res
                     }
 
                     hotReservationRedisService.syncSlotCache(slot);
-                    resourceRedisCacheService.invalidateResourceSlotList(slot.getResourceId());
                 }
         );
     }
@@ -185,7 +180,6 @@ public class ResourceSlotServiceImpl extends ServiceImpl<ResourceSlotMapper, Res
                     }
 
                     hotReservationRedisService.syncSlotCache(existing);
-                    resourceRedisCacheService.invalidateResourceSlotList(existing.getResourceId());
                 }
         );
     }
@@ -229,7 +223,6 @@ public class ResourceSlotServiceImpl extends ServiceImpl<ResourceSlotMapper, Res
                     }
 
                     hotReservationRedisService.invalidateSlotCache(id);
-                    resourceRedisCacheService.invalidateResourceSlotList(existing.getResourceId());
                 }
         );
     }

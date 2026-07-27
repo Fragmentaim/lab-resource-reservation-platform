@@ -10,7 +10,6 @@ import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ReservationRateLimiter;
-import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
@@ -62,7 +61,6 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
     private final SysUserService sysUserService;
     private final HotReservationRedisService hotReservationRedisService;
     private final ReservationRateLimiter reservationRateLimiter;
-    private final ResourceRedisCacheService resourceRedisCacheService;
     private final ReservationPersistenceHelper reservationPersistenceHelper;
     private final ReservationReminderTaskService reservationReminderTaskService;
     private final ReservationAutoCancelService reservationAutoCancelService;
@@ -77,7 +75,6 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
             SysUserService sysUserService,
             HotReservationRedisService hotReservationRedisService,
             ReservationRateLimiter reservationRateLimiter,
-            ResourceRedisCacheService resourceRedisCacheService,
             ReservationPersistenceHelper reservationPersistenceHelper,
             ReservationReminderTaskService reservationReminderTaskService,
             ReservationAutoCancelService reservationAutoCancelService,
@@ -90,7 +87,6 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
         this.sysUserService = sysUserService;
         this.hotReservationRedisService = hotReservationRedisService;
         this.reservationRateLimiter = reservationRateLimiter;
-        this.resourceRedisCacheService = resourceRedisCacheService;
         this.reservationPersistenceHelper = reservationPersistenceHelper;
         this.reservationReminderTaskService = reservationReminderTaskService;
         this.reservationAutoCancelService = reservationAutoCancelService;
@@ -173,7 +169,6 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
         reservationPersistenceHelper.saveWithRetry(reservation);
         reservationReminderTaskService.createBeforeStartReminder(reservation);
         reservationAutoCancelService.schedule(reservation);
-        resourceRedisCacheService.invalidateResourceSlotList(dto.getResourceId());
         return buildSyncSubmitVO(reservation);
     }
 
@@ -248,7 +243,6 @@ public class ReservationServiceImpl extends ServiceImpl<ReservationMapper, Reser
 
         resourceSlotService.restoreQuota(reservation.getSlotId());
         reservationReminderTaskService.cancelPendingByReservationId(reservation.getId());
-        resourceRedisCacheService.invalidateResourceSlotList(reservation.getResourceId());
         hotReservationRedisService.releaseAfterSuccessfulCancellation(
                 reservation.getSourceType(),
                 reservation.getSlotId(),

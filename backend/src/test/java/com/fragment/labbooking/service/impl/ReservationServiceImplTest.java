@@ -9,7 +9,6 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.id.ReservationNoGenerator;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ReservationRateLimiter;
-import com.fragment.labbooking.common.redis.ResourceRedisCacheService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
@@ -64,8 +63,6 @@ class ReservationServiceImplTest {
     @Mock
     private ReservationRateLimiter reservationRateLimiter;
     @Mock
-    private ResourceRedisCacheService resourceRedisCacheService;
-    @Mock
     private ReservationNoGenerator reservationNoGenerator;
     @Mock
     private ReservationReminderTaskService reservationReminderTaskService;
@@ -93,7 +90,6 @@ class ReservationServiceImplTest {
                 sysUserService,
                 hotReservationRedisService,
                 reservationRateLimiter,
-                resourceRedisCacheService,
                 reservationPersistenceHelper,
                 reservationReminderTaskService,
                 reservationAutoCancelService,
@@ -142,7 +138,6 @@ class ReservationServiceImplTest {
         verify(reservationReminderTaskService).createBeforeStartReminder(savedReservation);
         verify(reservationAutoCancelService).fillAutoCancelDeadline(savedReservation);
         verify(reservationAutoCancelService).schedule(savedReservation);
-        verify(resourceRedisCacheService).invalidateResourceSlotList(1L);
     }
 
     @Test
@@ -251,7 +246,6 @@ class ReservationServiceImplTest {
 
         verify(resourceSlotService).restoreQuota(10L);
         verify(reservationReminderTaskService).cancelPendingByReservationId(55L);
-        verify(resourceRedisCacheService).invalidateResourceSlotList(1L);
         verify(hotReservationRedisService).releaseAfterSuccessfulCancellation(ResourceSlotTypeConstants.HOT, 10L, 7L);
     }
 
