@@ -118,14 +118,15 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             answer.setContextStats(toolStats);
             finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
             return answer;
-        } catch (BusinessException e) {
-            throw e;
         } catch (Exception e) {
             record.setStatus("FAILED");
-            record.setAnswer("抱歉，问答服务暂时不可用: " + e.getMessage());
+            record.setAnswer("抱歉，问答服务暂时不可用");
             updateById(record);
             agentRunService.fail(record, e);
-            throw new RuntimeException(e);
+            if (e instanceof BusinessException businessException) {
+                throw businessException;
+            }
+            throw new BusinessException("问答服务暂时不可用");
         }
     }
 

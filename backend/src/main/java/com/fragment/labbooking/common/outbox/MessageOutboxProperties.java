@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 public class MessageOutboxProperties {
 
     private boolean enabled = false;
-    private String nameServer = "127.0.0.1:9876";
     private String producerGroup = "lab-booking-message-outbox-producer-group";
     private int maxReconsumeTimes = -1;
     private String delayTopic = "reservation-delay";

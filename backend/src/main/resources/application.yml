@@ -2,6 +2,86 @@ server:
   port: ${SERVER_PORT:8081}
 
 spring:
+  cloud:
+    function:
+      definition: reservationCreateConsumer;reservationDelayConsumer;adminAuditConsumer;documentProcessConsumer
+      # Spring AI's OpenAI client requires Jackson 2 Kotlin support; use Gson for
+      # the Stream binder's independent message conversion to avoid mixing it with tools.jackson.
+      preferred-json-mapper: gson
+    stream:
+      rocketmq:
+        binder:
+          name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
+        bindings:
+          reservationCreateConsumer-in-0:
+            consumer:
+              subscription: reservation-create
+              push:
+                max-reconsume-times: ${app.reservation.async.max-reconsume-times:-1}
+          reservationDelayConsumer-in-0:
+            consumer:
+              subscription: '*'
+              push:
+                max-reconsume-times: ${app.message-outbox.max-reconsume-times:-1}
+          adminAuditConsumer-in-0:
+            consumer:
+              subscription: admin-audit
+              push:
+                max-reconsume-times: ${app.audit.mq.max-reconsume-times:-1}
+          documentProcessConsumer-in-0:
+            consumer:
+              subscription: ${app.knowledge.document-processing.tag:KNOWLEDGE_DOCUMENT_PROCESS}
+              push:
+                max-reconsume-times: ${app.knowledge.document-processing.max-reconsume-times:-1}
+          reservationCreate-out-0:
+            producer:
+              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
+          reservationDelay-out-0:
+            producer:
+              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
+          adminAudit-out-0:
+            producer:
+              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
+          documentProcess-out-0:
+            producer:
+              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
+      bindings:
+        reservationCreateConsumer-in-0:
+          destination: ${app.reservation.async.topic:reservation-create}
+          group: ${app.reservation.async.consumer-group:lab-booking-reservation-consumer-group}
+          content-type: application/json
+          consumer:
+            auto-startup: ${app.reservation.async.enabled:false}
+        reservationDelayConsumer-in-0:
+          destination: ${app.message-outbox.delay-topic:reservation-delay}
+          group: ${app.message-outbox.delay-consumer-group:lab-booking-delay-consumer-group}
+          content-type: application/json
+          consumer:
+            auto-startup: ${app.message-outbox.enabled:false}
+        adminAuditConsumer-in-0:
+          destination: ${app.audit.mq.topic:admin-audit-log}
+          group: ${app.audit.mq.consumer-group:lab-booking-audit-consumer-group}
+          content-type: application/json
+          consumer:
+            auto-startup: ${app.audit.mq.enabled:false}
+        documentProcessConsumer-in-0:
+          destination: ${app.knowledge.document-processing.topic:knowledge-document-process}
+          group: ${app.knowledge.document-processing.consumer-group:lab-booking-knowledge-document-consumer-group}
+          content-type: application/json
+          consumer:
+            auto-startup: ${app.knowledge.document-processing.enabled:false}
+        reservationCreate-out-0:
+          destination: ${app.reservation.async.topic:reservation-create}
+          content-type: application/json
+        reservationDelay-out-0:
+          destination: ${app.message-outbox.delay-topic:reservation-delay}
+          content-type: application/json
+        adminAudit-out-0:
+          destination: ${app.audit.mq.topic:admin-audit-log}
+          content-type: application/json
+        documentProcess-out-0:
+          destination: ${app.knowledge.document-processing.topic:knowledge-document-process}
+          content-type: application/json
   ai:
     openai:
       base-url: ${AGENT_LLM_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11434/v1}}
@@ -39,7 +119,6 @@ app:
     hot-cache-retention-hours: 24
     async:
       enabled: false
-      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
       topic: reservation-create
       consumer-group: lab-booking-reservation-consumer-group
       max-reconsume-times: -1
@@ -70,7 +149,6 @@ app:
       check-in-before-start-minutes: 30
   message-outbox:
     enabled: false
-    name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
     producer-group: lab-booking-message-outbox-producer-group
     max-reconsume-times: -1
     lock-seconds: 60
@@ -83,7 +161,6 @@ app:
     enabled: true
     mq:
       enabled: false
-      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
       topic: admin-audit-log
       consumer-group: lab-booking-audit-consumer-group
       max-reconsume-times: -1
@@ -112,7 +189,6 @@ app:
         presign-expiry-seconds: 900
     document-processing:
       enabled: false
-      name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
       topic: knowledge-document-process
       tag: KNOWLEDGE_DOCUMENT_PROCESS
       event-type: KNOWLEDGE_DOCUMENT_PROCESS

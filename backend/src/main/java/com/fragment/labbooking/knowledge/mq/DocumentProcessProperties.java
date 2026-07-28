@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 public class DocumentProcessProperties {
 
     private boolean enabled = false;
-    private String nameServer = "127.0.0.1:9876";
     private String topic = "knowledge-document-process";
     private String tag = "KNOWLEDGE_DOCUMENT_PROCESS";
     private String eventType = "KNOWLEDGE_DOCUMENT_PROCESS";

@@ -1,6 +1,5 @@
 package com.fragment.labbooking.common.outbox;
 
-import com.fragment.labbooking.common.mq.OutboxMqPublisher;
 import com.fragment.labbooking.entity.MessageOutbox;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -20,11 +19,11 @@ public class MessageOutboxDispatcher {
 
     private final MessageOutboxService outboxService;
     private final MessageOutboxProperties properties;
-    private final OutboxMqPublisher publisher;
+    private final OutboxStreamPublisher publisher;
 
     public MessageOutboxDispatcher(MessageOutboxService outboxService,
                                    MessageOutboxProperties properties,
-                                   OutboxMqPublisher publisher) {
+                                   OutboxStreamPublisher publisher) {
         this.outboxService = outboxService;
         this.properties = properties;
         this.publisher = publisher;
@@ -50,11 +49,8 @@ public class MessageOutboxDispatcher {
 
         try {
             MessageOutboxEnvelope envelope = outboxService.toEnvelope(outbox);
-            if (publisher.publish(envelope, outbox.getTopic(), outbox.getTag(), outbox.getMessageKey())) {
-                outboxService.markSent(outbox);
-            } else {
-                outboxService.markRetryFailure(outbox, "publish returned false");
-            }
+            publisher.publish(outbox, envelope);
+            outboxService.markSent(outbox);
         } catch (Exception exception) {
             outboxService.markRetryFailure(outbox, exception.getMessage());
             log.warn("Failed to dispatch outbox event, will retry later. eventId={}",

@@ -34,14 +34,7 @@ public class AiServiceClientImpl implements AiServiceClient {
 
     @Override
     public ProcessResult processDocument(Long documentId, MultipartFile file, String fileType) {
-        try {
-            return processDocument(documentId, file.getBytes(), file.getOriginalFilename(), fileType);
-        } catch (BusinessException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to process document {} via AI service: {}", documentId, e.getMessage());
-            throw new BusinessException("文档处理失败: " + e.getMessage());
-        }
+        return call("文档处理", () -> processDocument(documentId, file.getBytes(), file.getOriginalFilename(), fileType));
     }
 
     @Override
@@ -51,14 +44,8 @@ public class AiServiceClientImpl implements AiServiceClient {
 
     @Override
     public ProcessResult processDocument(Long documentId, File file, String fileName, String fileType, String docVersion) {
-        try {
-            return doProcessDocumentMultipart(documentId, new FileSystemResource(file), fileType, docVersion);
-        } catch (BusinessException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to reprocess document {} via AI service: {}", documentId, e.getMessage());
-            throw new BusinessException("文档重处理失败: " + e.getMessage());
-        }
+        return call("文档重处理", () -> doProcessDocumentMultipart(
+                documentId, new FileSystemResource(file), fileType, docVersion));
     }
 
     @Override
@@ -68,7 +55,7 @@ public class AiServiceClientImpl implements AiServiceClient {
 
     @Override
     public ProcessResult processDocument(Long documentId, byte[] bytes, String fileName, String fileType, String docVersion) {
-        try {
+        return call("文档处理", () -> {
             ByteArrayResource resource = new ByteArrayResource(bytes) {
                 @Override
                 public String getFilename() {
@@ -76,23 +63,19 @@ public class AiServiceClientImpl implements AiServiceClient {
                 }
             };
             return doProcessDocumentMultipart(documentId, resource, fileType, docVersion);
-        } catch (Exception e) {
-            log.error("Failed to process document {} via AI service: {}", documentId, e.getMessage());
-            throw new BusinessException("文档处理失败: " + e.getMessage());
-        }
+        });
     }
 
     @Override
     public ProcessResult processDocumentByUrl(Long documentId, String fileUrl, String fileName, String fileType,
                                               String docVersion) {
-        try {
+        return call("文档 URL 处理", () -> {
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("document_id", documentId);
             request.put("file_url", fileUrl);
             request.put("file_name", fileName);
             request.put("file_type", fileType);
             request.put("doc_version", docVersion);
-
             ProcessResult response = restClient.post()
                     .uri("/api/v1/ai/documents/process-by-url")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -100,33 +83,12 @@ public class AiServiceClientImpl implements AiServiceClient {
                     .retrieve()
                     .body(ProcessResult.class);
             return normalizeProcessResult(requireBody(response, "AI-service 返回空处理结果"), docVersion);
-        } catch (Exception e) {
-            log.error("Failed to process document {} by URL via AI service: {}", documentId, e.getMessage());
-            throw new BusinessException("文档 URL 处理失败: " + e.getMessage());
-        }
-    }
-
-    private ProcessResult doProcessDocumentMultipart(Long documentId, Object fileResource,
-                                                     String fileType, String docVersion) {
-        MultiValueMap<String, Object> formData = new LinkedMultiValueMap<>();
-        formData.add("document_id", documentId.toString());
-        formData.add("file_type", fileType);
-        formData.add("doc_version", docVersion);
-        formData.add("file", fileResource);
-
-        ProcessResult response = restClient.post()
-                .uri("/api/v1/ai/documents/process")
-                .contentType(MediaType.MULTIPART_FORM_DATA)
-                .body(formData)
-                .retrieve()
-                .body(ProcessResult.class);
-
-        return normalizeProcessResult(requireBody(response, "AI-service 返回空处理结果"), docVersion);
+        });
     }
 
     @Override
     public KnowledgeSearchResult retrieveKnowledge(String question, Map<Long, String> documentVersions) {
-        try {
+        return call("知识库候选检索", () -> {
             Map<Long, String> scopes = documentVersions == null ? Collections.emptyMap() : documentVersions;
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("question", question);
@@ -139,17 +101,13 @@ public class AiServiceClientImpl implements AiServiceClient {
                     .retrieve()
                     .body(KnowledgeSearchResult.class);
             KnowledgeSearchResult result = requireBody(response, "AI-service 返回空检索结果");
-            return StringUtils.hasText(result.query()) ? result
-                    : new KnowledgeSearchResult(question, result.candidates());
-        } catch (Exception e) {
-            log.error("Failed to retrieve knowledge candidates via AI service: {}", e.getMessage());
-            throw new BusinessException("知识库候选检索失败: " + e.getMessage());
-        }
+            return StringUtils.hasText(result.query()) ? result : new KnowledgeSearchResult(question, result.candidates());
+        });
     }
 
     @Override
     public List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, Map<Long, String> documentVersions) {
-        try {
+        return call("知识库正文读取", () -> {
             Map<Long, String> scopes = documentVersions == null ? Collections.emptyMap() : documentVersions;
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("chunk_uids", chunkUids == null ? Collections.emptyList() : chunkUids);
@@ -162,19 +120,15 @@ public class AiServiceClientImpl implements AiServiceClient {
                     .retrieve()
                     .body(KnowledgeChunksResponse.class);
             return requireBody(response, "AI-service 返回空正文结果").chunks();
-        } catch (Exception e) {
-            log.error("Failed to open knowledge chunks via AI service: {}", e.getMessage());
-            throw new BusinessException("知识库正文读取失败: " + e.getMessage());
-        }
+        });
     }
 
     @Override
     public SummaryResult summarizeSession(String existingSummary, List<ChatMessage> newTurns) {
-        try {
+        return call("会话摘要更新", () -> {
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("existing_summary", existingSummary);
             request.put("new_turns", newTurns == null ? Collections.emptyList() : newTurns);
-
             SummaryResult response = restClient.post()
                     .uri("/api/v1/ai/qa/sessions/summarize")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -182,52 +136,56 @@ public class AiServiceClientImpl implements AiServiceClient {
                     .retrieve()
                     .body(SummaryResult.class);
             return requireBody(response, "AI-service 返回空摘要结果");
-        } catch (Exception e) {
-            log.warn("Failed to summarize session via AI service: {}", e.getMessage());
-            throw new BusinessException("会话摘要更新失败: " + e.getMessage());
-        }
+        });
     }
 
     @Override
     public int deleteDocumentVectors(Long documentId) {
-        try {
-            DeleteResponse response = restClient.delete()
-                    .uri("/api/v1/ai/documents/{id}/vectors", documentId)
-                    .retrieve()
-                    .body(DeleteResponse.class);
-            return requireBody(response, "AI-service 返回空删除结果").deletedCount();
-        } catch (Exception e) {
-            log.error("Failed to delete vectors for document {}: {}", documentId, e.getMessage());
-            throw new BusinessException("删除文档索引失败: " + e.getMessage());
-        }
+        return delete("删除文档索引", "/api/v1/ai/documents/{id}/vectors", documentId);
     }
 
     @Override
     public int deleteDocumentVersion(Long documentId, String docVersion) {
-        try {
+        return call("删除文档版本索引", () -> {
             DeleteResponse response = restClient.delete()
                     .uri("/api/v1/ai/documents/{id}/versions/{version}", documentId, docVersion)
                     .retrieve()
                     .body(DeleteResponse.class);
             return requireBody(response, "AI-service 返回空删除结果").deletedCount();
-        } catch (Exception e) {
-            log.error("Failed to delete document version. documentId={}, version={}, error={}",
-                    documentId, docVersion, e.getMessage());
-            throw new BusinessException("删除文档版本索引失败: " + e.getMessage());
-        }
+        });
     }
 
     @Override
     public boolean checkHealth() {
         try {
-            HealthResponse response = restClient.get()
-                    .uri("/api/v1/ai/health")
-                    .retrieve()
-                    .body(HealthResponse.class);
+            HealthResponse response = restClient.get().uri("/api/v1/ai/health").retrieve().body(HealthResponse.class);
             return response != null && "ok".equals(response.status());
-        } catch (Exception e) {
+        } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private ProcessResult doProcessDocumentMultipart(Long documentId, Object fileResource,
+                                                     String fileType, String docVersion) {
+        MultiValueMap<String, Object> formData = new LinkedMultiValueMap<>();
+        formData.add("document_id", documentId.toString());
+        formData.add("file_type", fileType);
+        formData.add("doc_version", docVersion);
+        formData.add("file", fileResource);
+        ProcessResult response = restClient.post()
+                .uri("/api/v1/ai/documents/process")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(formData)
+                .retrieve()
+                .body(ProcessResult.class);
+        return normalizeProcessResult(requireBody(response, "AI-service 返回空处理结果"), docVersion);
+    }
+
+    private int delete(String operation, String path, Long documentId) {
+        return call(operation, () -> {
+            DeleteResponse response = restClient.delete().uri(path, documentId).retrieve().body(DeleteResponse.class);
+            return requireBody(response, "AI-service 返回空删除结果").deletedCount();
+        });
     }
 
     private ProcessResult normalizeProcessResult(ProcessResult result, String fallbackDocVersion) {
@@ -242,6 +200,22 @@ public class AiServiceClientImpl implements AiServiceClient {
             throw new BusinessException(message);
         }
         return body;
+    }
+
+    private <T> T call(String operation, RemoteCall<T> remoteCall) {
+        try {
+            return remoteCall.call();
+        } catch (BusinessException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            log.warn("AI service call failed. operation={}", operation, exception);
+            throw new BusinessException(operation + "失败，请稍后重试");
+        }
+    }
+
+    @FunctionalInterface
+    private interface RemoteCall<T> {
+        T call() throws Exception;
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

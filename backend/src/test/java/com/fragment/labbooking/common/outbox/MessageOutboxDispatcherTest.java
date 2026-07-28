@@ -1,6 +1,5 @@
 package com.fragment.labbooking.common.outbox;
 
-import com.fragment.labbooking.common.mq.OutboxMqPublisher;
 import com.fragment.labbooking.entity.MessageOutbox;
 import org.junit.jupiter.api.Test;
 
@@ -9,6 +8,7 @@ import java.util.List;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -17,7 +17,7 @@ class MessageOutboxDispatcherTest {
     @Test
     void dispatchShouldMarkSentAfterSuccessfulPublish() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
-        OutboxMqPublisher publisher = mock(OutboxMqPublisher.class);
+        OutboxStreamPublisher publisher = mock(OutboxStreamPublisher.class);
         MessageOutboxProperties properties = enabledProperties(20);
         MessageOutboxDispatcher dispatcher = new MessageOutboxDispatcher(outboxService, properties, publisher);
         MessageOutbox outbox = outbox();
@@ -26,19 +26,16 @@ class MessageOutboxDispatcherTest {
         when(outboxService.findPendingDueBatch(20)).thenReturn(List.of(outbox));
         when(outboxService.markSending(outbox)).thenReturn(true);
         when(outboxService.toEnvelope(outbox)).thenReturn(envelope);
-        when(publisher.publish(envelope, "reservation-events", "reservation-create", "REQ-100"))
-                .thenReturn(true);
-
         dispatcher.dispatchPendingMessages();
 
         verify(outboxService).markSent(outbox);
-        verify(outboxService, never()).markRetryFailure(outbox, "publish returned false");
+        verify(publisher).publish(outbox, envelope);
     }
 
     @Test
-    void dispatchShouldMarkRetryFailureWhenPublishReturnsFalse() {
+    void dispatchShouldMarkRetryFailureWhenPublishThrows() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
-        OutboxMqPublisher publisher = mock(OutboxMqPublisher.class);
+        OutboxStreamPublisher publisher = mock(OutboxStreamPublisher.class);
         MessageOutboxProperties properties = enabledProperties(20);
         MessageOutboxDispatcher dispatcher = new MessageOutboxDispatcher(outboxService, properties, publisher);
         MessageOutbox outbox = outbox();
@@ -47,19 +44,18 @@ class MessageOutboxDispatcherTest {
         when(outboxService.findPendingDueBatch(20)).thenReturn(List.of(outbox));
         when(outboxService.markSending(outbox)).thenReturn(true);
         when(outboxService.toEnvelope(outbox)).thenReturn(envelope);
-        when(publisher.publish(envelope, "reservation-events", "reservation-create", "REQ-100"))
-                .thenReturn(false);
+        doThrow(new IllegalStateException("broker unavailable")).when(publisher).publish(outbox, envelope);
 
         dispatcher.dispatchPendingMessages();
 
-        verify(outboxService).markRetryFailure(outbox, "publish returned false");
+        verify(outboxService).markRetryFailure(outbox, "broker unavailable");
         verify(outboxService, never()).markSent(outbox);
     }
 
     @Test
     void dispatchShouldSkipWhenLockWasNotAcquired() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
-        OutboxMqPublisher publisher = mock(OutboxMqPublisher.class);
+        OutboxStreamPublisher publisher = mock(OutboxStreamPublisher.class);
         MessageOutboxProperties properties = enabledProperties(20);
         MessageOutboxDispatcher dispatcher = new MessageOutboxDispatcher(outboxService, properties, publisher);
         MessageOutbox outbox = outbox();
@@ -69,12 +65,7 @@ class MessageOutboxDispatcherTest {
 
         dispatcher.dispatchPendingMessages();
 
-        verify(publisher, never()).publish(
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any()
-        );
+        verify(publisher, never()).publish(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         verify(outboxService, never()).markSent(outbox);
     }
 
