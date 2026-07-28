@@ -221,6 +221,10 @@ public class ReservationRequestServiceImpl implements ReservationRequestService 
             markFailedAndRelease(request, "时段不可预约或余量不足");
             return;
         }
+        if (slot.getEndDatetime() == null || !LocalDateTime.now().isBefore(slot.getEndDatetime())) {
+            markFailedAndRelease(request, "时段已结束");
+            return;
+        }
         if (!ResourceSlotTypeConstants.HOT.equals(slot.getSlotType())) {
             markFailedAndRelease(request, "当前请求不是热门预约时段");
             return;

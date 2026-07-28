@@ -1,16 +1,14 @@
 package com.fragment.labbooking.common.outbox;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fragment.labbooking.common.mq.OutboxMqPublisher;
 import com.fragment.labbooking.entity.MessageOutbox;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -19,17 +17,17 @@ class MessageOutboxDispatcherTest {
     @Test
     void dispatchShouldMarkSentAfterSuccessfulPublish() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
+        OutboxMqPublisher publisher = mock(OutboxMqPublisher.class);
         MessageOutboxProperties properties = enabledProperties(20);
-        MessageOutboxDispatcher dispatcher = spy(
-                new MessageOutboxDispatcher(outboxService, new ObjectMapper(), properties));
+        MessageOutboxDispatcher dispatcher = new MessageOutboxDispatcher(outboxService, properties, publisher);
         MessageOutbox outbox = outbox();
         MessageOutboxEnvelope envelope = envelope();
 
         when(outboxService.findPendingDueBatch(20)).thenReturn(List.of(outbox));
         when(outboxService.markSending(outbox)).thenReturn(true);
         when(outboxService.toEnvelope(outbox)).thenReturn(envelope);
-        doReturn(true).when(dispatcher)
-                .publish(envelope, "reservation-events", "reservation-create", "REQ-100");
+        when(publisher.publish(envelope, "reservation-events", "reservation-create", "REQ-100"))
+                .thenReturn(true);
 
         dispatcher.dispatchPendingMessages();
 
@@ -40,17 +38,17 @@ class MessageOutboxDispatcherTest {
     @Test
     void dispatchShouldMarkRetryFailureWhenPublishReturnsFalse() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
+        OutboxMqPublisher publisher = mock(OutboxMqPublisher.class);
         MessageOutboxProperties properties = enabledProperties(20);
-        MessageOutboxDispatcher dispatcher = spy(
-                new MessageOutboxDispatcher(outboxService, new ObjectMapper(), properties));
+        MessageOutboxDispatcher dispatcher = new MessageOutboxDispatcher(outboxService, properties, publisher);
         MessageOutbox outbox = outbox();
         MessageOutboxEnvelope envelope = envelope();
 
         when(outboxService.findPendingDueBatch(20)).thenReturn(List.of(outbox));
         when(outboxService.markSending(outbox)).thenReturn(true);
         when(outboxService.toEnvelope(outbox)).thenReturn(envelope);
-        doReturn(false).when(dispatcher)
-                .publish(envelope, "reservation-events", "reservation-create", "REQ-100");
+        when(publisher.publish(envelope, "reservation-events", "reservation-create", "REQ-100"))
+                .thenReturn(false);
 
         dispatcher.dispatchPendingMessages();
 
@@ -61,9 +59,9 @@ class MessageOutboxDispatcherTest {
     @Test
     void dispatchShouldSkipWhenLockWasNotAcquired() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
+        OutboxMqPublisher publisher = mock(OutboxMqPublisher.class);
         MessageOutboxProperties properties = enabledProperties(20);
-        MessageOutboxDispatcher dispatcher = spy(
-                new MessageOutboxDispatcher(outboxService, new ObjectMapper(), properties));
+        MessageOutboxDispatcher dispatcher = new MessageOutboxDispatcher(outboxService, properties, publisher);
         MessageOutbox outbox = outbox();
 
         when(outboxService.findPendingDueBatch(20)).thenReturn(List.of(outbox));
@@ -71,7 +69,7 @@ class MessageOutboxDispatcherTest {
 
         dispatcher.dispatchPendingMessages();
 
-        verify(dispatcher, never()).publish(
+        verify(publisher, never()).publish(
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),

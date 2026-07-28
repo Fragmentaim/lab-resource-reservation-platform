@@ -36,6 +36,7 @@ app:
   reservation:
     hot-redis-enabled: false
     hot-init-wait-millis: 1000
+    hot-cache-retention-hours: 24
     async:
       enabled: false
       name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}

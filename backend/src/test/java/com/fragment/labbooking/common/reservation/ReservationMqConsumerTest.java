@@ -17,7 +17,7 @@ import static org.mockito.Mockito.verify;
 class ReservationMqConsumerTest {
 
     @Test
-    void consumeMessagesShouldProcessRequestAndReturnSuccessForValidPayload() throws Exception {
+    void consumeMessagesShouldRejectLegacyPayloadWithoutEnvelope() throws Exception {
         ReservationRequestService requestService = mock(ReservationRequestService.class);
         ReservationMqConsumer consumer = new ReservationMqConsumer(
                 new ObjectMapper(),
@@ -36,8 +36,7 @@ class ReservationMqConsumerTest {
 
         ConsumeConcurrentlyStatus status = consumer.consumeMessages(List.of(message));
 
-        assertThat(status).isEqualTo(ConsumeConcurrentlyStatus.CONSUME_SUCCESS);
-        verify(requestService).processPendingHotRequest("REQ-6001");
+        assertThat(status).isEqualTo(ConsumeConcurrentlyStatus.RECONSUME_LATER);
     }
 
     @Test
@@ -58,6 +57,7 @@ class ReservationMqConsumerTest {
         event.setRequestNo("REQ-6002");
         MessageOutboxEnvelope envelope = new MessageOutboxEnvelope();
         envelope.setEventId("RESERVATION_CREATE:RESERVATION_REQUEST:REQ-6002");
+        envelope.setEventType("RESERVATION_CREATE");
         envelope.setPayload(objectMapper.writeValueAsString(event));
         MessageExt message = new MessageExt();
         message.setBody(objectMapper.writeValueAsBytes(envelope));

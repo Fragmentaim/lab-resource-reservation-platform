@@ -38,8 +38,12 @@ class AdminAuditMqConsumerTest {
         AdminAuditLogEvent event = new AdminAuditLogEvent();
         event.setEventId("AUDIT-300");
         event.setCreatedAt(LocalDateTime.now());
+        MessageOutboxEnvelope envelope = new MessageOutboxEnvelope();
+        envelope.setEventId("ADMIN_AUDIT_LOG:ADMIN_AUDIT:AUDIT-300");
+        envelope.setEventType("ADMIN_AUDIT_LOG");
+        envelope.setPayload(objectMapper.writeValueAsString(event));
         MessageExt message = new MessageExt();
-        message.setBody(objectMapper.writeValueAsBytes(event));
+        message.setBody(objectMapper.writeValueAsBytes(envelope));
 
         doThrow(new DuplicateKeyException("duplicate")).when(logWriter).write(any());
 
@@ -70,6 +74,7 @@ class AdminAuditMqConsumerTest {
         event.setCreatedAt(LocalDateTime.now());
         MessageOutboxEnvelope envelope = new MessageOutboxEnvelope();
         envelope.setEventId("ADMIN_AUDIT_LOG:ADMIN_AUDIT:AUDIT-301");
+        envelope.setEventType("ADMIN_AUDIT_LOG");
         envelope.setPayload(objectMapper.writeValueAsString(event));
         MessageExt message = new MessageExt();
         message.setBody(objectMapper.writeValueAsBytes(envelope));

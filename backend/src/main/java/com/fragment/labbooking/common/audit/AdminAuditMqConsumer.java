@@ -1,10 +1,9 @@
 package com.fragment.labbooking.common.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fragment.labbooking.common.outbox.MessageOutboxEnvelope;
+import com.fragment.labbooking.common.mq.AbstractRocketMqConsumer;
+import com.fragment.labbooking.common.mq.OutboxMessageDecoder;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.rocketmq.client.consumer.DefaultMQPushConsumer;
-import org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyContext;
 import org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyStatus;
 import org.apache.rocketmq.common.message.MessageExt;
 import org.springframework.dao.DuplicateKeyException;
@@ -12,30 +11,22 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 @Slf4j
-public class AdminAuditMqConsumer {
+public class AdminAuditMqConsumer extends AbstractRocketMqConsumer {
 
     private static final String TAG_EXPRESSION = "admin-audit";
 
     private final ObjectMapper objectMapper;
     private final AdminAuditLogWriter adminAuditLogWriter;
-    private final boolean enabled;
-    private final String nameServer;
-    private final String topic;
-    private final String consumerGroup;
-    private final int maxReconsumeTimes;
     private final boolean demoFailOnceEnabled;
     private final String demoFailOnceMatch;
     private final String demoFailAlwaysMatch;
 
-    private volatile DefaultMQPushConsumer consumer;
     private final Set<String> retriedDemoEventIds = ConcurrentHashMap.newKeySet();
 
     public AdminAuditMqConsumer(ObjectMapper objectMapper,
@@ -48,54 +39,17 @@ public class AdminAuditMqConsumer {
                                 @Value("${app.audit.mq.demo.fail-once-enabled:false}") boolean demoFailOnceEnabled,
                                 @Value("${app.audit.mq.demo.fail-once-match:}") String demoFailOnceMatch,
                                 @Value("${app.audit.mq.demo.fail-always-match:}") String demoFailAlwaysMatch) {
+        super("Admin audit", enabled, nameServer, topic, TAG_EXPRESSION,
+                consumerGroup, maxReconsumeTimes);
         this.objectMapper = objectMapper;
         this.adminAuditLogWriter = adminAuditLogWriter;
-        this.enabled = enabled;
-        this.nameServer = nameServer;
-        this.topic = topic;
-        this.consumerGroup = consumerGroup;
-        this.maxReconsumeTimes = maxReconsumeTimes;
         this.demoFailOnceEnabled = demoFailOnceEnabled;
         this.demoFailOnceMatch = demoFailOnceMatch;
         this.demoFailAlwaysMatch = demoFailAlwaysMatch;
     }
 
-    @PostConstruct
-    public void start() {
-        if (!enabled) {
-            return;
-        }
-        if (!StringUtils.hasText(nameServer)) {
-            log.warn("Admin audit MQ is enabled but NameServer address is empty, consumer will not start.");
-            return;
-        }
-
-        try {
-            DefaultMQPushConsumer mqConsumer = new DefaultMQPushConsumer(consumerGroup);
-            mqConsumer.setNamesrvAddr(nameServer);
-            if (maxReconsumeTimes >= 0) {
-                mqConsumer.setMaxReconsumeTimes(maxReconsumeTimes);
-            }
-            mqConsumer.subscribe(topic, TAG_EXPRESSION);
-            mqConsumer.registerMessageListener((List<MessageExt> messages, ConsumeConcurrentlyContext context) ->
-                    consumeMessages(messages));
-            mqConsumer.start();
-            consumer = mqConsumer;
-            log.info("Admin audit MQ consumer started. nameServer={}, topic={}, consumerGroup={}, maxReconsumeTimes={}",
-                    nameServer, topic, consumerGroup, maxReconsumeTimes);
-        } catch (Exception exception) {
-            log.error("Failed to start admin audit MQ consumer. Audit logging will continue to use fallback direct DB write.", exception);
-        }
-    }
-
-    @PreDestroy
-    public void shutdown() {
-        if (consumer != null) {
-            consumer.shutdown();
-        }
-    }
-
-    ConsumeConcurrentlyStatus consumeMessages(List<MessageExt> messages) {
+    @Override
+    protected ConsumeConcurrentlyStatus consumeMessages(List<MessageExt> messages) {
         for (MessageExt message : messages) {
             AdminAuditLogEvent event = null;
             try {
@@ -123,15 +77,7 @@ public class AdminAuditMqConsumer {
     }
 
     private AdminAuditLogEvent parseEvent(MessageExt message) throws Exception {
-        try {
-            MessageOutboxEnvelope envelope = objectMapper.readValue(message.getBody(), MessageOutboxEnvelope.class);
-            if (StringUtils.hasText(envelope.getPayload())) {
-                return objectMapper.readValue(envelope.getPayload(), AdminAuditLogEvent.class);
-            }
-        } catch (Exception exception) {
-            log.debug("Admin audit message is not an outbox envelope, trying legacy payload format.");
-        }
-        return objectMapper.readValue(message.getBody(), AdminAuditLogEvent.class);
+        return OutboxMessageDecoder.payload(objectMapper, message, AdminAuditLogEvent.class);
     }
 
     private boolean shouldSimulateRetry(AdminAuditLogEvent event) {
