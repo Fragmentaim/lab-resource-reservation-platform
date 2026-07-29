@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.dto.NotificationPageQueryDTO;
+import com.fragment.labbooking.common.reservation.ReservationResultEvent;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationReminderTask;
 import com.fragment.labbooking.entity.UserNotification;
@@ -13,6 +14,7 @@ import com.fragment.labbooking.service.UserNotificationService;
 import com.fragment.labbooking.vo.UserNotificationVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -23,6 +25,8 @@ public class UserNotificationServiceImpl extends ServiceImpl<UserNotificationMap
 
     private static final String TYPE_RESERVATION_REMINDER = "RESERVATION_REMINDER";
     private static final String TYPE_RESERVATION_AUTO_CANCEL = "RESERVATION_AUTO_CANCEL";
+    private static final String TYPE_RESERVATION_CONFIRMED = "RESERVATION_CONFIRMED";
+    private static final String TYPE_RESERVATION_REJECTED = "RESERVATION_REJECTED";
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     @Override
@@ -111,6 +115,29 @@ public class UserNotificationServiceImpl extends ServiceImpl<UserNotificationMap
         notification.setRelatedReservationId(reservation.getId());
         notification.setIsRead(0);
         this.save(notification);
+    }
+
+    @Override
+    public void createReservationResultNotification(String eventId, ReservationResultEvent event) {
+        if (eventId == null || event == null || event.userId() == null) {
+            return;
+        }
+        UserNotification notification = new UserNotification();
+        notification.setEventId(eventId);
+        notification.setUserId(event.userId());
+        notification.setType("CONFIRMED".equals(event.status())
+                ? TYPE_RESERVATION_CONFIRMED : TYPE_RESERVATION_REJECTED);
+        notification.setTitle("CONFIRMED".equals(event.status()) ? "预约成功" : "预约未通过");
+        notification.setContent("CONFIRMED".equals(event.status())
+                ? "预约已确认，预约编号：" + event.reservationNo()
+                : (event.rejectReason() == null ? "预约请求未通过最终确认" : event.rejectReason()));
+        notification.setRelatedReservationId(event.reservationId());
+        notification.setIsRead(0);
+        try {
+            this.save(notification);
+        } catch (DuplicateKeyException ignored) {
+            // event_id makes result-event redelivery idempotent.
+        }
     }
 
     private UserNotificationVO toVO(UserNotification notification) {

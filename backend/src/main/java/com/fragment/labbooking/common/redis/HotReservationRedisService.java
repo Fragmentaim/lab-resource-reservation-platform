@@ -5,14 +5,14 @@ import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
+import com.fragment.labbooking.common.reservation.ReservationResultEvent;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.mapper.ResourceSlotMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -27,24 +27,36 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Owns the Redis state machine for preheated hot slots.
+ *
+ * <p>Request threads never rebuild a missing hot snapshot. Startup and committed
+ * administrator changes prepare the snapshot; Lua is the only reservation
+ * mutation path.</p>
+ */
 @Component
+@Slf4j
 public class HotReservationRedisService {
 
-    private static final Logger log = LoggerFactory.getLogger(HotReservationRedisService.class);
+    private static final String SNAPSHOT_PREFIX = "reservation:hot:v2:snapshot:";
+    private static final String STOCK_PREFIX = "reservation:hot:v2:stock:";
+    private static final String USERS_PREFIX = "reservation:hot:v2:users:";
+    private static final String REQUEST_PREFIX = "reservation:request:v2:";
+    private static final String PENDING_KEY = "reservation:pending:v2";
+    private static final String INIT_LOCK_PREFIX = "lock:reservation:hot:v2:init:";
 
-    private static final String SNAPSHOT_KEY_PREFIX = "reservation:hot:snapshot:";
-    private static final String STOCK_KEY_PREFIX = "reservation:hot:stock:";
-    private static final String USERS_KEY_PREFIX = "reservation:hot:users:";
-    private static final String INIT_LOCK_KEY_PREFIX = "lock:reservation:hot:init:";
-
-    private static final long RESERVE_SUCCESS = 0L;
-    private static final long RESERVE_OUT_OF_STOCK = 1L;
-    private static final long RESERVE_DUPLICATE = 2L;
-    private static final long RESERVE_NOT_READY = 3L;
-    private static final long RESERVE_RESOURCE_MISMATCH = 4L;
-    private static final long RESERVE_NOT_BOOKABLE = 5L;
+    private static final long ACCEPTED = 0L;
+    private static final long OUT_OF_STOCK = 1L;
+    private static final long DUPLICATE_USER = 2L;
+    private static final long NOT_READY = 3L;
+    private static final long RESOURCE_MISMATCH = 4L;
+    private static final long NOT_BOOKABLE = 5L;
+    private static final long IDEMPOTENCY_CONFLICT = 6L;
+    private static final long IDEMPOTENT_REPLAY = 10L;
     private static final long MIN_CACHE_TTL_MILLIS = 60_000L;
 
     private final StringRedisTemplate redisTemplate;
@@ -54,9 +66,12 @@ public class HotReservationRedisService {
     private final boolean enabled;
     private final long initWaitMillis;
     private final Duration retentionAfterSlotEnd;
-    private final DefaultRedisScript<Long> initializeScript = buildInitializeScript();
-    private final DefaultRedisScript<Long> reserveScript = buildReserveScript();
-    private final DefaultRedisScript<Long> releaseScript = buildReleaseScript();
+    private final Duration requestRetention;
+    private final DefaultRedisScript<Long> initializeScript = initializeScript();
+    private final DefaultRedisScript<Long> acceptScript = acceptScript();
+    private final DefaultRedisScript<Long> publishAttemptScript = publishAttemptScript();
+    private final DefaultRedisScript<Long> completeScript = completeScript();
+    private final DefaultRedisScript<Long> releaseConfirmedScript = releaseConfirmedScript();
 
     public HotReservationRedisService(StringRedisTemplate redisTemplate,
                                       RedissonClient redissonClient,
@@ -64,7 +79,8 @@ public class HotReservationRedisService {
                                       ResourceSlotMapper resourceSlotMapper,
                                       @Value("${app.reservation.hot-redis-enabled:true}") boolean enabled,
                                       @Value("${app.reservation.hot-init-wait-millis:1000}") long initWaitMillis,
-                                      @Value("${app.reservation.hot-cache-retention-hours:24}") long retentionHours) {
+                                      @Value("${app.reservation.hot-cache-retention-hours:24}") long retentionHours,
+                                      @Value("${app.reservation.hot-request-retention-hours:24}") long requestRetentionHours) {
         this.redisTemplate = redisTemplate;
         this.redissonClient = redissonClient;
         this.reservationMapper = reservationMapper;
@@ -72,69 +88,126 @@ public class HotReservationRedisService {
         this.enabled = enabled;
         this.initWaitMillis = initWaitMillis;
         this.retentionAfterSlotEnd = Duration.ofHours(Math.max(0, retentionHours));
-    }
-
-    /**
-     * Fast path used before opening a JDBC transaction. A false result only means that this
-     * slot has not been preheated; all authoritative rejection results are raised here.
-     */
-    public boolean reserveIfPreheated(Long resourceId, Long slotId, Long userId) {
-        if (!enabled || resourceId == null || slotId == null || userId == null) {
-            return false;
-        }
-        long result = reserve(resourceId, slotId, userId);
-        if (result == RESERVE_NOT_READY) {
-            return false;
-        }
-        assertReservationResult(result);
-        return true;
+        this.requestRetention = Duration.ofHours(Math.max(1, requestRetentionHours));
     }
 
     public boolean isPreheatedHotSlot(Long slotId) {
-        return enabled && slotId != null && isCacheReady(slotId);
-    }
-
-    public boolean reserveAndRegisterRollback(ResourceSlot slot, Long userId) {
-        if (!shouldUseRedis(slot)) {
+        if (!enabled || slotId == null) {
             return false;
         }
-        assertReservationResult(reserve(slot.getResourceId(), slot.getId(), userId));
-        registerRollbackCompensation(slot.getId(), userId);
-        return true;
-    }
-
-    public void registerPreheatedReservationRollback(Long slotId, Long userId) {
-        if (enabled && slotId != null && userId != null) {
-            registerRollbackCompensation(slotId, userId);
+        try {
+            return Boolean.TRUE.equals(redisTemplate.hasKey(snapshotKey(slotId)));
+        } catch (RuntimeException exception) {
+            // The caller will query the slot type once. NORMAL slots can still
+            // use MySQL; HOT slots fail closed instead of bypassing Redis.
+            log.debug("Unable to inspect HOT slot snapshot. slotId={}, reason={}",
+                    slotId, exception.getMessage());
+            return false;
         }
     }
 
-    private void registerRollbackCompensation(Long slotId, Long userId) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            return;
+    public HotRequestState accept(String requestId, Long userId, Long resourceId, Long slotId,
+                                  long expiresAtEpochMillis) {
+        long now = System.currentTimeMillis();
+        long requestTtl = Math.max(requestRetention.toMillis(), expiresAtEpochMillis - now + requestRetention.toMillis());
+        Long result;
+        try {
+            result = redisTemplate.execute(
+                    acceptScript,
+                    List.of(snapshotKey(slotId), stockKey(slotId), usersKey(slotId),
+                            requestKey(requestId), PENDING_KEY),
+                    requestId,
+                    String.valueOf(userId),
+                    String.valueOf(resourceId),
+                    String.valueOf(slotId),
+                    String.valueOf(now),
+                    String.valueOf(expiresAtEpochMillis),
+                    String.valueOf(requestTtl)
+            );
+        } catch (RuntimeException exception) {
+            throw unavailable(exception);
         }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCompletion(int status) {
-                if (status != STATUS_COMMITTED) {
-                    release(slotId, userId);
-                }
-            }
-        });
+        assertAccepted(result == null ? NOT_READY : result);
+        HotRequestState state = getRequest(requestId);
+        if (state == null) {
+            throw unavailable(null);
+        }
+        return state;
     }
 
-    public void releaseAfterCommit(String slotType, Long slotId, Long userId) {
-        if (!enabled || !ResourceSlotTypeConstants.HOT.equals(slotType)) {
-            return;
+    public void recordPublishAttempt(String requestId, boolean published) {
+        redisTemplate.execute(
+                publishAttemptScript,
+                List.of(requestKey(requestId)),
+                published ? "1" : "0",
+                String.valueOf(System.currentTimeMillis())
+        );
+    }
+
+    public HotRequestState getRequest(String requestId) {
+        Map<Object, Object> values = redisTemplate.opsForHash().entries(requestKey(requestId));
+        if (values == null || values.isEmpty()) {
+            return null;
         }
-        runAfterCommit(() -> release(slotId, userId));
+        return new HotRequestState(
+                text(values, "requestId"),
+                number(values, "userId"),
+                number(values, "resourceId"),
+                number(values, "slotId"),
+                text(values, "status"),
+                longValue(values, "expiresAt", 0L),
+                integer(values, "publishAttempts", 0),
+                longValue(values, "lastPublishedAt", 0L),
+                number(values, "reservationId"),
+                text(values, "reservationNo"),
+                text(values, "rejectCode"),
+                text(values, "rejectReason")
+        );
+    }
+
+    public List<String> findPendingRequestIds(int limit) {
+        Set<String> ids = redisTemplate.opsForZSet().range(PENDING_KEY, 0, Math.max(1, limit) - 1L);
+        return ids == null ? List.of() : List.copyOf(ids);
+    }
+
+    public void removePendingRequest(String requestId) {
+        if (requestId != null) {
+            redisTemplate.opsForZSet().remove(PENDING_KEY, requestId);
+        }
+    }
+
+    public void complete(ReservationResultEvent event) {
+        Long result = redisTemplate.execute(
+                completeScript,
+                List.of(stockKey(event.slotId()), usersKey(event.slotId()),
+                        requestKey(event.requestId()), PENDING_KEY),
+                String.valueOf(event.userId()),
+                event.requestId(),
+                event.status(),
+                value(event.reservationId()),
+                value(event.reservationNo()),
+                value(event.rejectCode()),
+                value(event.rejectReason()),
+                String.valueOf(event.resourceId()),
+                String.valueOf(event.slotId()),
+                String.valueOf(requestRetention.toMillis())
+        );
+        if (result == null) {
+            throw unavailable(null);
+        }
     }
 
     public void releaseAfterSuccessfulCancellation(String slotType, Long slotId, Long userId) {
-        releaseAfterCommit(slotType, slotId, userId);
+        if (!enabled || !ResourceSlotTypeConstants.HOT.equals(slotType) || slotId == null || userId == null) {
+            return;
+        }
+        runAfterCommit(() -> redisTemplate.execute(
+                releaseConfirmedScript,
+                List.of(stockKey(slotId), usersKey(slotId)),
+                String.valueOf(userId)
+        ));
     }
 
-    /** Refreshes a slot only after its database transaction commits. */
     public void syncSlotCache(ResourceSlot slot) {
         if (slot == null || slot.getId() == null) {
             return;
@@ -162,55 +235,20 @@ public class HotReservationRedisService {
                 .eq(ResourceSlot::getSlotType, ResourceSlotTypeConstants.HOT)
                 .eq(ResourceSlot::getStatus, ResourceSlotStatusConstants.OPEN)
                 .gt(ResourceSlot::getEndDatetime, LocalDateTime.now()));
-        for (ResourceSlot slot : slots) {
+        slots.forEach(slot -> {
             try {
                 initializeIfAbsent(slot);
             } catch (RuntimeException exception) {
-                log.warn("Failed to preheat HOT slot cache for slotId={}", slot.getId(), exception);
+                log.warn("Failed to preheat HOT slot cache. slotId={}", slot.getId(), exception);
             }
-        }
+        });
     }
 
-    private long reserve(Long resourceId, Long slotId, Long userId) {
-        try {
-            Long result = redisTemplate.execute(
-                    reserveScript,
-                    List.of(snapshotKey(slotId), stockKey(slotId), usersKey(slotId)),
-                    String.valueOf(resourceId),
-                    String.valueOf(userId),
-                    String.valueOf(System.currentTimeMillis())
-            );
-            return result == null ? RESERVE_NOT_READY : result;
-        } catch (RuntimeException exception) {
-            throw unavailable(exception);
-        }
-    }
-
-    private void assertReservationResult(long result) {
-        if (result == RESERVE_SUCCESS) {
-            return;
-        }
-        if (result == RESERVE_OUT_OF_STOCK) {
-            throw new BusinessException(409, "热门时段余量不足");
-        }
-        if (result == RESERVE_DUPLICATE) {
-            throw new BusinessException(409, "当前用户已预约该时段");
-        }
-        if (result == RESERVE_RESOURCE_MISMATCH) {
-            throw new BusinessException("时段不属于当前资源");
-        }
-        if (result == RESERVE_NOT_BOOKABLE) {
-            throw new BusinessException(409, "热门时段当前不可预约");
-        }
-        throw unavailable(null);
-    }
-
-    /** Cache construction is restricted to startup and committed admin changes. */
     private void initializeIfAbsent(ResourceSlot slot) {
-        if (!isOpenHotSlot(slot) || isCacheReady(slot.getId())) {
+        if (!isOpenHotSlot(slot) || isPreheatedHotSlot(slot.getId())) {
             return;
         }
-        RLock lock = redissonClient.getLock(initLockKey(slot.getId()));
+        RLock lock = redissonClient.getLock(INIT_LOCK_PREFIX + slot.getId());
         boolean acquired;
         try {
             acquired = lock.tryLock(initWaitMillis, TimeUnit.MILLISECONDS);
@@ -219,14 +257,14 @@ public class HotReservationRedisService {
             throw unavailable(exception);
         }
         if (!acquired) {
-            if (!isCacheReady(slot.getId())) {
+            if (!isPreheatedHotSlot(slot.getId())) {
                 throw unavailable(null);
             }
             return;
         }
         try {
-            if (!isCacheReady(slot.getId())) {
-                loadCacheFromDatabase(slot);
+            if (!isPreheatedHotSlot(slot.getId())) {
+                loadCache(slot);
             }
         } finally {
             if (lock.isHeldByCurrentThread()) {
@@ -235,72 +273,67 @@ public class HotReservationRedisService {
         }
     }
 
-    private void loadCacheFromDatabase(ResourceSlot slot) {
+    private void loadCache(ResourceSlot slot) {
         List<Reservation> reservations = reservationMapper.selectList(new LambdaQueryWrapper<Reservation>()
                 .select(Reservation::getUserId)
                 .eq(Reservation::getSlotId, slot.getId())
                 .eq(Reservation::getStatus, ReservationStatusConstants.BOOKED));
 
-        List<String> arguments = new ArrayList<>();
-        arguments.add(String.valueOf(slot.getResourceId()));
-        arguments.add(slot.getStatus());
-        arguments.add(String.valueOf(toEpochMillis(slot.getOpenTime())));
-        arguments.add(String.valueOf(toEpochMillis(slot.getEndDatetime())));
-        arguments.add(String.valueOf(slot.getRemainQuota()));
-        arguments.add(String.valueOf(cacheTtlMillis(slot)));
-        reservations.stream().map(Reservation::getUserId).map(String::valueOf).forEach(arguments::add);
+        List<String> args = new ArrayList<>();
+        args.add(String.valueOf(slot.getResourceId()));
+        args.add(slot.getStatus());
+        args.add(String.valueOf(epochMillis(slot.getOpenTime())));
+        args.add(String.valueOf(epochMillis(slot.getEndDatetime())));
+        args.add(String.valueOf(slot.getRemainQuota()));
+        args.add(String.valueOf(cacheTtlMillis(slot)));
+        reservations.stream().map(Reservation::getUserId).map(String::valueOf).forEach(args::add);
 
         Long result = redisTemplate.execute(
                 initializeScript,
                 List.of(snapshotKey(slot.getId()), stockKey(slot.getId()), usersKey(slot.getId())),
-                arguments.toArray()
+                args.toArray()
         );
         if (result == null) {
             throw unavailable(null);
         }
     }
 
-    private void release(Long slotId, Long userId) {
-        if (slotId == null || userId == null) {
+    private void assertAccepted(long result) {
+        if (result == ACCEPTED || result == IDEMPOTENT_REPLAY) {
             return;
         }
-        try {
-            redisTemplate.execute(
-                    releaseScript,
-                    List.of(stockKey(slotId), usersKey(slotId)),
-                    String.valueOf(userId)
-            );
-        } catch (RuntimeException exception) {
-            log.error("Failed to compensate HOT reservation. slotId={}, userId={}", slotId, userId, exception);
+        if (result == OUT_OF_STOCK) {
+            throw new BusinessException(409, "热门时段余量不足");
         }
-    }
-
-    private boolean shouldUseRedis(ResourceSlot slot) {
-        return enabled && slot != null && ResourceSlotTypeConstants.HOT.equals(slot.getSlotType());
+        if (result == DUPLICATE_USER) {
+            throw new BusinessException(409, "当前用户已提交该时段的预约");
+        }
+        if (result == RESOURCE_MISMATCH) {
+            throw new BusinessException(400, "时段不属于当前资源");
+        }
+        if (result == NOT_BOOKABLE) {
+            throw new BusinessException(409, "热门时段当前不可预约");
+        }
+        if (result == IDEMPOTENCY_CONFLICT) {
+            throw new BusinessException(409, "Idempotency-Key 已用于其他预约请求");
+        }
+        throw unavailable(null);
     }
 
     private boolean isOpenHotSlot(ResourceSlot slot) {
-        return shouldUseRedis(slot)
+        return slot != null
+                && ResourceSlotTypeConstants.HOT.equals(slot.getSlotType())
                 && ResourceSlotStatusConstants.OPEN.equals(slot.getStatus())
                 && slot.getEndDatetime() != null
                 && slot.getEndDatetime().isAfter(LocalDateTime.now());
     }
 
-    private boolean isCacheReady(Long slotId) {
-        return Boolean.TRUE.equals(redisTemplate.hasKey(snapshotKey(slotId)));
-    }
-
     private long cacheTtlMillis(ResourceSlot slot) {
-        long retentionMillis = retentionAfterSlotEnd.toMillis();
-        if (slot.getEndDatetime() == null) {
-            return Math.max(retentionMillis, MIN_CACHE_TTL_MILLIS);
-        }
-        long expiry = slot.getEndDatetime().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                + retentionMillis;
+        long expiry = epochMillis(slot.getEndDatetime()) + retentionAfterSlotEnd.toMillis();
         return Math.max(expiry - System.currentTimeMillis(), MIN_CACHE_TTL_MILLIS);
     }
 
-    private long toEpochMillis(LocalDateTime value) {
+    private long epochMillis(LocalDateTime value) {
         return value == null ? -1L : value.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
     }
 
@@ -308,23 +341,15 @@ public class HotReservationRedisService {
         redisTemplate.delete(List.of(snapshotKey(slotId), stockKey(slotId), usersKey(slotId)));
     }
 
-    private void runAfterCommit(Runnable task) {
-        Runnable safeTask = () -> {
-            try {
-                task.run();
-            } catch (RuntimeException exception) {
-                log.error("Failed to synchronize HOT reservation cache after database commit", exception);
-            }
-        };
-        if (!TransactionSynchronizationManager.isSynchronizationActive()
-                || !TransactionSynchronizationManager.isActualTransactionActive()) {
-            safeTask.run();
+    private void runAfterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            action.run();
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                safeTask.run();
+                action.run();
             }
         });
     }
@@ -338,94 +363,166 @@ public class HotReservationRedisService {
     }
 
     private String snapshotKey(Long slotId) {
-        return SNAPSHOT_KEY_PREFIX + slotId;
+        return SNAPSHOT_PREFIX + slotId;
     }
 
     private String stockKey(Long slotId) {
-        return STOCK_KEY_PREFIX + slotId;
+        return STOCK_PREFIX + slotId;
     }
 
     private String usersKey(Long slotId) {
-        return USERS_KEY_PREFIX + slotId;
+        return USERS_PREFIX + slotId;
     }
 
-    private String initLockKey(Long slotId) {
-        return INIT_LOCK_KEY_PREFIX + slotId;
+    private String requestKey(String requestId) {
+        return REQUEST_PREFIX + requestId;
     }
 
-    private DefaultRedisScript<Long> buildInitializeScript() {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setResultType(Long.class);
-        script.setScriptText("""
-                if redis.call('EXISTS', KEYS[1]) == 1 then
-                    return 0
-                end
+    private String text(Map<Object, Object> values, String key) {
+        Object value = values.get(key);
+        return value == null || value.toString().isBlank() ? null : value.toString();
+    }
+
+    private Long number(Map<Object, Object> values, String key) {
+        String value = text(values, key);
+        return value == null ? null : Long.valueOf(value);
+    }
+
+    private long longValue(Map<Object, Object> values, String key, long fallback) {
+        Long value = number(values, key);
+        return value == null ? fallback : value;
+    }
+
+    private int integer(Map<Object, Object> values, String key, int fallback) {
+        Long value = number(values, key);
+        return value == null ? fallback : value.intValue();
+    }
+
+    private String value(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private DefaultRedisScript<Long> initializeScript() {
+        return script("""
+                if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
                 redis.call('DEL', KEYS[2], KEYS[3])
                 redis.call('HSET', KEYS[1],
-                    'resourceId', ARGV[1],
-                    'status', ARGV[2],
-                    'openAtMillis', ARGV[3],
-                    'endAtMillis', ARGV[4])
+                    'resourceId', ARGV[1], 'status', ARGV[2],
+                    'openAtMillis', ARGV[3], 'endAtMillis', ARGV[4])
                 redis.call('PEXPIRE', KEYS[1], ARGV[6])
                 redis.call('SET', KEYS[2], ARGV[5], 'PX', ARGV[6])
-                if #ARGV > 6 then
-                    for index = 7, #ARGV do
-                        redis.call('SADD', KEYS[3], ARGV[index])
-                    end
-                    redis.call('PEXPIRE', KEYS[3], ARGV[6])
+                for index = 7, #ARGV do
+                    redis.call('HSET', KEYS[3], ARGV[index], 'BOOKED')
                 end
+                if #ARGV >= 7 then redis.call('PEXPIRE', KEYS[3], ARGV[6]) end
                 return 1
                 """);
-        return script;
     }
 
-    private DefaultRedisScript<Long> buildReserveScript() {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setResultType(Long.class);
-        script.setScriptText("""
+    private DefaultRedisScript<Long> acceptScript() {
+        return script("""
+                if redis.call('EXISTS', KEYS[4]) == 1 then
+                    if redis.call('HGET', KEYS[4], 'userId') ~= ARGV[2]
+                        or redis.call('HGET', KEYS[4], 'resourceId') ~= ARGV[3]
+                        or redis.call('HGET', KEYS[4], 'slotId') ~= ARGV[4] then
+                        return 6
+                    end
+                    return 10
+                end
                 if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('EXISTS', KEYS[2]) == 0 then
                     return 3
                 end
-                if redis.call('HGET', KEYS[1], 'resourceId') ~= ARGV[1] then
-                    return 4
-                end
-                if redis.call('HGET', KEYS[1], 'status') ~= 'OPEN' then
-                    return 5
-                end
-                local nowMillis = tonumber(ARGV[3])
-                local openAtMillis = tonumber(redis.call('HGET', KEYS[1], 'openAtMillis') or '-1')
-                local endAtMillis = tonumber(redis.call('HGET', KEYS[1], 'endAtMillis') or '-1')
-                if openAtMillis < 0 or endAtMillis < 0 or nowMillis < openAtMillis or nowMillis >= endAtMillis then
-                    return 5
-                end
-                if redis.call('SISMEMBER', KEYS[3], ARGV[2]) == 1 then
-                    return 2
-                end
+                if redis.call('HGET', KEYS[1], 'resourceId') ~= ARGV[3] then return 4 end
+                if redis.call('HGET', KEYS[1], 'status') ~= 'OPEN' then return 5 end
+                local now = tonumber(ARGV[5])
+                local openAt = tonumber(redis.call('HGET', KEYS[1], 'openAtMillis') or '-1')
+                local endAt = tonumber(redis.call('HGET', KEYS[1], 'endAtMillis') or '-1')
+                if openAt < 0 or endAt < 0 or now < openAt or now >= endAt then return 5 end
+                if redis.call('HEXISTS', KEYS[3], ARGV[2]) == 1 then return 2 end
                 local stock = tonumber(redis.call('GET', KEYS[2]) or '-1')
-                if stock <= 0 then
-                    return 1
-                end
+                if stock <= 0 then return 1 end
+
                 redis.call('DECR', KEYS[2])
-                redis.call('SADD', KEYS[3], ARGV[2])
-                local ttl = redis.call('PTTL', KEYS[2])
-                if ttl > 0 then
-                    redis.call('PEXPIRE', KEYS[3], ttl)
+                redis.call('HSET', KEYS[3], ARGV[2], ARGV[1])
+                local stockTtl = redis.call('PTTL', KEYS[2])
+                if stockTtl > 0 then redis.call('PEXPIRE', KEYS[3], stockTtl) end
+                redis.call('HSET', KEYS[4],
+                    'requestId', ARGV[1], 'userId', ARGV[2],
+                    'resourceId', ARGV[3], 'slotId', ARGV[4],
+                    'status', 'PRE_RESERVED', 'createdAt', ARGV[5],
+                    'expiresAt', ARGV[6], 'publishAttempts', '0',
+                    'lastPublishedAt', '0')
+                redis.call('PEXPIRE', KEYS[4], ARGV[7])
+                redis.call('ZADD', KEYS[5], ARGV[6], ARGV[1])
+                return 0
+                """);
+    }
+
+    private DefaultRedisScript<Long> publishAttemptScript() {
+        return script("""
+                if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+                redis.call('HINCRBY', KEYS[1], 'publishAttempts', 1)
+                redis.call('HSET', KEYS[1], 'lastPublishedAt', ARGV[2])
+                if ARGV[1] == '1' then redis.call('HSET', KEYS[1], 'status', 'PUBLISHED') end
+                return 1
+                """);
+    }
+
+    private DefaultRedisScript<Long> completeScript() {
+        return script("""
+                local current = redis.call('HGET', KEYS[3], 'status')
+                if current == 'CONFIRMED' or current == 'REJECTED' or current == 'EXPIRED' then
+                    redis.call('ZREM', KEYS[4], ARGV[2])
+                    return 0
+                end
+                if ARGV[3] ~= 'CONFIRMED' then
+                    local ownerRequest = redis.call('HGET', KEYS[2], ARGV[1])
+                    if ownerRequest == ARGV[2] then
+                        redis.call('HDEL', KEYS[2], ARGV[1])
+                        if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('INCR', KEYS[1]) end
+                    end
+                end
+                redis.call('HSET', KEYS[3], 'status', ARGV[3],
+                    'requestId', ARGV[2], 'userId', ARGV[1],
+                    'resourceId', ARGV[8], 'slotId', ARGV[9],
+                    'reservationId', ARGV[4], 'reservationNo', ARGV[5],
+                    'rejectCode', ARGV[6], 'rejectReason', ARGV[7])
+                redis.call('PEXPIRE', KEYS[3], ARGV[10])
+                redis.call('ZREM', KEYS[4], ARGV[2])
+                return 1
+                """);
+    }
+
+    private DefaultRedisScript<Long> releaseConfirmedScript() {
+        return script("""
+                if redis.call('HDEL', KEYS[2], ARGV[1]) == 1 then
+                    if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('INCR', KEYS[1]) end
+                    return 1
                 end
                 return 0
                 """);
+    }
+
+    private DefaultRedisScript<Long> script(String text) {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setResultType(Long.class);
+        script.setScriptText(text);
         return script;
     }
 
-    private DefaultRedisScript<Long> buildReleaseScript() {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setResultType(Long.class);
-        script.setScriptText("""
-                if redis.call('EXISTS', KEYS[1]) == 1 and redis.call('SREM', KEYS[2], ARGV[1]) == 1 then
-                    redis.call('INCR', KEYS[1])
-                    return 1
-                end
-                return 0
-                """);
-        return script;
+    public record HotRequestState(
+            String requestId,
+            Long userId,
+            Long resourceId,
+            Long slotId,
+            String status,
+            long expiresAtEpochMillis,
+            int publishAttempts,
+            long lastPublishedAtEpochMillis,
+            Long reservationId,
+            String reservationNo,
+            String rejectCode,
+            String rejectReason
+    ) {
     }
 }

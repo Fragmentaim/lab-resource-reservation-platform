@@ -18,6 +18,9 @@ public class UserNotification {
     @TableField("user_id")
     private Long userId;
 
+    @TableField("event_id")
+    private String eventId;
+
     @TableField("type")
     private String type;
 

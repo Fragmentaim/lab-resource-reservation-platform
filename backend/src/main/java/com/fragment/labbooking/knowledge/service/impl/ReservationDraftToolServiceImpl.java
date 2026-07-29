@@ -23,6 +23,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 @Service
@@ -118,7 +119,10 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
             ReservationCreateDTO dto = new ReservationCreateDTO();
             dto.setResourceId(draft.resourceId());
             dto.setSlotId(draft.slotId());
-            ReservationSubmitVO submit = reservationCommandService.create(userId, dto);
+            String requestId = UUID.nameUUIDFromBytes(
+                    ("reservation-draft:" + token).getBytes(StandardCharsets.UTF_8)
+            ).toString();
+            ReservationSubmitVO submit = reservationCommandService.create(userId, requestId, dto);
             write(CONFIRM_RESULT_KEY_PREFIX + token, new ConfirmedPayload(userId, submit), ttl);
             redisTemplate.delete(DRAFT_KEY_PREFIX + token);
             return submit;

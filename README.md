@@ -30,9 +30,10 @@ Java 服务负责身份、权限、预约业务、文档元数据、Spring AI �
 
 - 通过数据库事务、名额条件更新与唯一约束保证同一用户、资源和时段不会重复预约。
 - 热门时段在开放前由 MySQL 预热 Redis 快照，请求侧通过单个 Lua 脚本原子完成时段校验、用户去重与库存扣减；缓存缺失时快速失败，不在高并发请求线程中回源重建。
-- 抢占成功后生成请求单并由 RocketMQ 异步确认，消费端在事务内完成预约落库与状态流转；MQ Producer/Consumer 生命周期和 Outbox Envelope 解析由统一适配层管理。
+- 抢占成功后保存短期请求状态，并以 `requestId` 为 Key 同步投递 RocketMQ 命令；消费端在事务内写入精简请求账本、条件扣减 MySQL 名额并完成预约落库。
 - 使用 Outbox 记录待投递事件，避免“数据库提交成功但消息未发送”的双写不一致。
-- 预约提醒、未签到自动取消和请求超时使用 RocketMQ 延迟消息；消费者按事件 ID 和业务终态实现幂等，并保留重试、死信和扫描兜底能力。
+- 预约结果通过 Outbox 发布，驱动 Redis 状态收敛、站内通知、预约提醒和未签到自动取消；请求超时由 Redis Pending ZSet 定时补偿并写入 `EXPIRED` 终态。
+- `POST /reservation` 使用 UUID `Idempotency-Key`：普通时段同步返回 `CONFIRMED`，热门时段返回 HTTP 202 `PENDING`；`GET /reservation/requests/{requestId}` 查询本人最终结果。
 - Redis 仅缓存首页资源目录，并承担热门时段原子预占、限流和重复提交控制；资源详情与普通时段实时读取 MySQL，MySQL 保存最终业务事实。
 
 ### 2. 原生 Function Calling Agent
@@ -50,7 +51,7 @@ RAG 不是固定前置步骤，而是 Agent 可按需调用的工具。当前工
 
 Spring AI 负责模型调用、`tools/tool_calls` 解析和多轮工具循环；Java 业务工具继续负责参数校验、权限检查、执行、审计和结果裁剪。知识库回答采用“先检索候选、再打开证据”的两阶段读取，减少无关文本进入上下文并保留引用来源。
 
-预约写操作采用两阶段确认：Agent 只能用 `reservation_create_draft` 生成一个绑定当前用户、默认 10 分钟有效的确认令牌；前端展示资源、时段与余量后，用户点击确认并调用 `POST /knowledge/tools/reservation-drafts/{confirmationToken}/confirm`（请求体为 `{"confirmed": true}`）。确认接口会校验令牌归属、保证同一令牌不重复执行，并重新进入 `ReservationService.createReservation`，由原有的权限、余量、限流、Redis 预占和 MQ 异步链路作最终裁决。
+预约写操作采用两阶段确认：Agent 只能用 `reservation_create_draft` 生成一个绑定当前用户、默认 10 分钟有效的确认令牌；前端展示资源、时段与余量后，用户点击确认并调用 `POST /knowledge/tools/reservation-drafts/{confirmationToken}/confirm`（请求体为 `{"confirmed": true}`）。确认接口会校验令牌归属，并从确认令牌派生稳定 UUID，重复确认始终复用同一个 `requestId`；最终由 `ReservationCommandService`、Redis 预占和 MQ 异步确认链路裁决。
 
 ### 3. 会话上下文与可观测性
 

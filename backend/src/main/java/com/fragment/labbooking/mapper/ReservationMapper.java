@@ -2,6 +2,7 @@ package com.fragment.labbooking.mapper;
 
 import com.fragment.labbooking.entity.Reservation;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Param;
 
 /**
 * @author fragment
@@ -11,6 +12,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 */
 public interface ReservationMapper extends BaseMapper<Reservation> {
 
+    int insertIgnore(@Param("reservation") Reservation reservation);
 }
 
 

@@ -46,6 +46,10 @@ public class Result<T> {
         return new Result<>(200, message, data);
     }
 
+    public static <T> Result<T> accepted(T data) {
+        return new Result<>(202, "accepted", data);
+    }
+
     public static <T> Result<T> fail(String message) {
         return new Result<>(500, message, null);
     }

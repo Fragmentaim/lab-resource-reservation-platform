@@ -7,7 +7,6 @@ import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.mapper.ReservationMapper;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 
 /**
@@ -60,19 +59,23 @@ public class ReservationPersistenceHelper {
      * reservation or after exhausting retries.
      */
     public void saveWithRetry(Reservation reservation) {
+        if (saveIfNoActiveConflict(reservation) == SaveOutcome.DUPLICATE) {
+            throw new BusinessException(409, "当前用户已预约该时段");
+        }
+    }
+
+    /**
+     * Inserts without surfacing a unique-key exception for an already active
+     * user/slot pair. Reservation-number collisions are retried internally.
+     */
+    public SaveOutcome saveIfNoActiveConflict(Reservation reservation) {
         for (int attempt = 0; attempt < RESERVATION_NO_RETRY_TIMES; attempt++) {
             reservation.setReservationNo(reservationNoGenerator.nextReservationNo());
-            try {
-                int inserted = reservationMapper.insert(reservation);
-                if (inserted <= 0) {
-                    throw new BusinessException("创建预约失败，请重试");
-                }
-                return;
-            } catch (DuplicateKeyException exception) {
-                if (hasActiveReservation(reservation.getUserId(), reservation.getSlotId())) {
-                    throw new BusinessException(409, "当前用户已预约该时段");
-                }
-                // The active-reservation key did not conflict, so retry with a new reservation number.
+            if (reservationMapper.insertIgnore(reservation) > 0) {
+                return SaveOutcome.CREATED;
+            }
+            if (hasActiveReservation(reservation.getUserId(), reservation.getSlotId())) {
+                return SaveOutcome.DUPLICATE;
             }
         }
         throw new BusinessException("创建预约失败，请重试");
@@ -85,5 +88,10 @@ public class ReservationPersistenceHelper {
                 .eq(Reservation::getSlotId, slotId)
                 .eq(Reservation::getIsActive, 1)
                 .last("LIMIT 1 FOR UPDATE")) != null;
+    }
+
+    public enum SaveOutcome {
+        CREATED,
+        DUPLICATE
     }
 }

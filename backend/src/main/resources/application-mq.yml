@@ -1,6 +1,9 @@
 app:
   reservation:
     hot-redis-enabled: true
+    command:
+      enabled: true
+      consumer-enabled: true
     reminder:
       enabled: true
     auto-cancel:

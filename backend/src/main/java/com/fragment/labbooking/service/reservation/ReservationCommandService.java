@@ -41,6 +41,7 @@ public class ReservationCommandService {
     private final ReservationPersistenceHelper persistenceHelper;
     private final ReservationReminderTaskService reminderService;
     private final ReservationAutoCancelService autoCancelService;
+    private final HotReservationRequestService hotRequestService;
     private final TransactionTemplate transactionTemplate;
     private final long checkInBeforeStartMinutes;
 
@@ -52,6 +53,7 @@ public class ReservationCommandService {
                                      ReservationPersistenceHelper persistenceHelper,
                                      ReservationReminderTaskService reminderService,
                                      ReservationAutoCancelService autoCancelService,
+                                     HotReservationRequestService hotRequestService,
                                      PlatformTransactionManager transactionManager,
                                      @Value("${app.reservation.auto-cancel.check-in-before-start-minutes:30}") long checkInBeforeStartMinutes) {
         this.reservationMapper = reservationMapper;
@@ -62,25 +64,39 @@ public class ReservationCommandService {
         this.persistenceHelper = persistenceHelper;
         this.reminderService = reminderService;
         this.autoCancelService = autoCancelService;
+        this.hotRequestService = hotRequestService;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.checkInBeforeStartMinutes = checkInBeforeStartMinutes;
     }
 
-    public ReservationSubmitVO create(Long userId, ReservationCreateDTO dto) {
-        boolean preheated = hotRedis.isPreheatedHotSlot(dto.getSlotId());
-        if (preheated) {
+    public ReservationSubmitVO create(Long userId, String idempotencyKey, ReservationCreateDTO dto) {
+        String requestId = hotRequestService.normalizeRequestId(idempotencyKey);
+        if (hotRedis.isPreheatedHotSlot(dto.getSlotId())) {
             rateLimiter.checkCreateReservationLimit(userId, ResourceSlotTypeConstants.HOT);
+            return hotRequestService.accept(requestId, userId, dto.getResourceId(), dto.getSlotId());
         }
-        boolean reservedByFastPath = hotRedis.reserveIfPreheated(dto.getResourceId(), dto.getSlotId(), userId);
+
+        ResourceSlot routeSlot = resourceSlotService.getById(dto.getSlotId());
+        if (routeSlot == null) {
+            throw new BusinessException("时段不存在");
+        }
+        if (!dto.getResourceId().equals(routeSlot.getResourceId())) {
+            throw new BusinessException("时段不属于当前资源");
+        }
+        if (ResourceSlotTypeConstants.HOT.equals(routeSlot.getSlotType())) {
+            throw new BusinessException(503, "热门时段尚未完成预热，请稍后重试");
+        }
+        rateLimiter.checkCreateReservationLimit(userId, ResourceSlotTypeConstants.NORMAL);
         return Objects.requireNonNull(transactionTemplate.execute(status ->
-                createInTransaction(userId, dto, preheated, reservedByFastPath)));
+                createNormalInTransaction(userId, requestId, dto)));
     }
 
-    private ReservationSubmitVO createInTransaction(Long userId, ReservationCreateDTO dto,
-                                                      boolean preheated, boolean reservedByFastPath) {
-        if (reservedByFastPath) {
-            hotRedis.registerPreheatedReservationRollback(dto.getSlotId(), userId);
-        }
+    public ReservationSubmitVO getRequest(Long userId, String requestId) {
+        return hotRequestService.getRequest(userId, requestId);
+    }
+
+    private ReservationSubmitVO createNormalInTransaction(Long userId, String requestId,
+                                                           ReservationCreateDTO dto) {
         Resource resource = resourceService.getById(dto.getResourceId());
         if (resource == null) {
             throw new BusinessException("资源不存在");
@@ -93,11 +109,8 @@ public class ReservationCommandService {
             throw new BusinessException("时段不属于当前资源");
         }
         validateBookable(slot);
-        if (!preheated) {
-            rateLimiter.checkCreateReservationLimit(userId, slot.getSlotType());
-        }
-        if (!reservedByFastPath) {
-            hotRedis.reserveAndRegisterRollback(slot, userId);
+        if (ResourceSlotTypeConstants.HOT.equals(slot.getSlotType())) {
+            throw new BusinessException(503, "热门时段必须通过 Redis 预约通道");
         }
         checkDuplicate(userId, dto.getSlotId());
 
@@ -107,7 +120,7 @@ public class ReservationCommandService {
         persistenceHelper.saveWithRetry(reservation);
         reminderService.createBeforeStartReminder(reservation);
         autoCancelService.schedule(reservation);
-        return syncResult(reservation);
+        return syncResult(requestId, reservation);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -217,8 +230,10 @@ public class ReservationCommandService {
         }
     }
 
-    private ReservationSubmitVO syncResult(Reservation reservation) {
+    private ReservationSubmitVO syncResult(String requestId, Reservation reservation) {
         ReservationSubmitVO result = new ReservationSubmitVO();
+        result.setRequestId(requestId);
+        result.setStatus(ReservationRequestStatus.CONFIRMED.name());
         result.setReservationId(reservation.getId());
         result.setReservationNo(reservation.getReservationNo());
         result.setMessage("预约成功");

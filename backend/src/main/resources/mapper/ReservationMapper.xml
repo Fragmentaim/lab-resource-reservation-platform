@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.fragment.labbooking.mapper.ReservationMapper">
+
+    <insert id="insertIgnore" useGeneratedKeys="true" keyProperty="reservation.id">
+        INSERT IGNORE INTO reservation (
+            reservation_no, user_id, resource_id, slot_id,
+            resource_name, resource_code, resource_location,
+            slot_start_datetime, slot_end_datetime, checked_in_at,
+            auto_cancel_deadline, is_active, status, source_type,
+            cancel_reason, created_at, updated_at
+        ) VALUES (
+            #{reservation.reservationNo}, #{reservation.userId},
+            #{reservation.resourceId}, #{reservation.slotId},
+            #{reservation.resourceName}, #{reservation.resourceCode},
+            #{reservation.resourceLocation}, #{reservation.slotStartDatetime},
+            #{reservation.slotEndDatetime}, #{reservation.checkedInAt},
+            #{reservation.autoCancelDeadline}, #{reservation.isActive},
+            #{reservation.status}, #{reservation.sourceType},
+            #{reservation.cancelReason}, NOW(), NOW()
+        )
+    </insert>
+</mapper>

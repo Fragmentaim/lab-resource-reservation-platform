@@ -6,6 +6,7 @@ import com.fragment.labbooking.dto.NotificationPageQueryDTO;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationReminderTask;
 import com.fragment.labbooking.entity.UserNotification;
+import com.fragment.labbooking.common.reservation.ReservationResultEvent;
 import com.fragment.labbooking.vo.UserNotificationVO;
 
 public interface UserNotificationService extends IService<UserNotification> {
@@ -21,4 +22,6 @@ public interface UserNotificationService extends IService<UserNotification> {
     void createReminderNotification(ReservationReminderTask task);
 
     void createAutoCancelNotification(Reservation reservation);
+
+    void createReservationResultNotification(String eventId, ReservationResultEvent event);
 }

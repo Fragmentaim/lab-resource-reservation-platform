@@ -18,6 +18,7 @@ public class OutboxStreamPublisher {
     static final String DELAY_OUTPUT = "reservationDelay-out-0";
     static final String AUDIT_OUTPUT = "adminAudit-out-0";
     static final String DOCUMENT_OUTPUT = "documentProcess-out-0";
+    static final String RESERVATION_RESULT_OUTPUT = "reservationResult-out-0";
 
     private final StreamBridge streamBridge;
     private final MessageOutboxProperties outboxProperties;
@@ -25,6 +26,9 @@ public class OutboxStreamPublisher {
 
     @Value("${app.audit.mq.topic:admin-audit-log}")
     private String auditTopic;
+
+    @Value("${app.reservation.command.result-topic:reservation-result}")
+    private String reservationResultTopic;
 
     public void publish(MessageOutbox outbox, MessageOutboxEnvelope envelope) {
         if (outbox == null || envelope == null) {
@@ -52,6 +56,9 @@ public class OutboxStreamPublisher {
         }
         if (documentProcessProperties.getTopic().equals(topic)) {
             return DOCUMENT_OUTPUT;
+        }
+        if (reservationResultTopic != null && reservationResultTopic.equals(topic)) {
+            return RESERVATION_RESULT_OUTPUT;
         }
         throw new IllegalArgumentException("No RocketMQ output binding for topic: " + topic);
     }

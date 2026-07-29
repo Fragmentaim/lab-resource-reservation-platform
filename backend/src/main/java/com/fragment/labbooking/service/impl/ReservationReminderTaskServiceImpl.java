@@ -14,6 +14,7 @@ import com.fragment.labbooking.mapper.ReservationReminderTaskMapper;
 import com.fragment.labbooking.service.ReservationReminderTaskService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -68,7 +69,11 @@ public class ReservationReminderTaskServiceImpl extends ServiceImpl<ReservationR
         task.setPlanSendTime(calculatePlanSendTime(reservation.getSlotStartDatetime()));
         task.setStatus(STATUS_PENDING);
         task.setRetryCount(0);
-        this.save(task);
+        try {
+            this.save(task);
+        } catch (DuplicateKeyException duplicate) {
+            return;
+        }
         messageOutboxService.enqueue(
                 "RESERVATION_REMINDER_TASK",
                 String.valueOf(task.getId()),

@@ -13,12 +13,14 @@ import com.fragment.labbooking.service.reservation.ReservationQueryService;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
 import com.fragment.labbooking.vo.ReservationVO;
 import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -55,8 +57,20 @@ public class ReservationController {
     }
 
     @PostMapping
-    public Result<ReservationSubmitVO> createReservation(@Valid @RequestBody ReservationCreateDTO dto) {
-        return Result.success(reservationCommandService.create(UserContext.requireUser().getId(), dto));
+    public ResponseEntity<Result<ReservationSubmitVO>> createReservation(
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody ReservationCreateDTO dto) {
+        ReservationSubmitVO result = reservationCommandService.create(
+                UserContext.requireUser().getId(), idempotencyKey, dto);
+        return "PENDING".equals(result.getStatus())
+                ? ResponseEntity.accepted().body(Result.accepted(result))
+                : ResponseEntity.ok(Result.success(result));
+    }
+
+    @GetMapping("/requests/{requestId}")
+    public Result<ReservationSubmitVO> getReservationRequest(@PathVariable String requestId) {
+        return Result.success(reservationCommandService.getRequest(
+                UserContext.requireUser().getId(), requestId));
     }
 
     @PutMapping("/{id}/check-in")

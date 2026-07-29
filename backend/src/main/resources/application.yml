@@ -4,9 +4,9 @@ server:
 spring:
   cloud:
     function:
-      definition: reservationDelayConsumer;adminAuditConsumer;documentProcessConsumer
-      # Spring AI's OpenAI client requires Jackson 2 Kotlin support; use Gson for
-      # the Stream binder's independent message conversion to avoid mixing it with tools.jackson.
+      definition: reservationDelayConsumer;adminAuditConsumer;documentProcessConsumer;reservationCommandConsumer;reservationResultConsumer
+      # Spring Boot 4 and Spring AI currently expose different Jackson major
+      # versions; isolate binder conversion with Gson.
       preferred-json-mapper: gson
     stream:
       rocketmq:
@@ -28,6 +28,18 @@ spring:
               subscription: ${app.knowledge.document-processing.tag:KNOWLEDGE_DOCUMENT_PROCESS}
               push:
                 max-reconsume-times: ${app.knowledge.document-processing.max-reconsume-times:-1}
+          reservationCommandConsumer-in-0:
+            consumer:
+              subscription: CREATE
+              message-model: CLUSTERING
+              push:
+                max-reconsume-times: ${app.reservation.command.max-reconsume-times:16}
+          reservationResultConsumer-in-0:
+            consumer:
+              subscription: RESULT
+              message-model: CLUSTERING
+              push:
+                max-reconsume-times: ${app.reservation.command.max-reconsume-times:16}
           reservationDelay-out-0:
             producer:
               group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
@@ -35,6 +47,15 @@ spring:
             producer:
               group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
           documentProcess-out-0:
+            producer:
+              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
+          reservationCommand-out-0:
+            producer:
+              group: ${app.reservation.command.producer-group:reservation-command-producer-group}
+              send-type: Sync
+              send-message-timeout: ${app.reservation.command.send-timeout-millis:3000}
+              retry-times-when-send-failed: ${app.reservation.command.send-retry-times:2}
+          reservationResult-out-0:
             producer:
               group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
       bindings:
@@ -56,6 +77,20 @@ spring:
           content-type: application/json
           consumer:
             auto-startup: ${app.knowledge.document-processing.enabled:false}
+        reservationCommandConsumer-in-0:
+          destination: ${app.reservation.command.topic:reservation-command}
+          group: ${app.reservation.command.consumer-group:reservation-confirm-group}
+          content-type: application/json
+          consumer:
+            auto-startup: ${app.reservation.command.consumer-enabled:${app.reservation.command.enabled:false}}
+            concurrency: ${app.reservation.command.consumer-concurrency:4}
+        reservationResultConsumer-in-0:
+          destination: ${app.reservation.command.result-topic:reservation-result}
+          group: ${app.reservation.command.result-consumer-group:reservation-result-group}
+          content-type: application/json
+          consumer:
+            auto-startup: ${app.reservation.command.enabled:false}
+            concurrency: ${app.reservation.command.result-consumer-concurrency:2}
         reservationDelay-out-0:
           destination: ${app.message-outbox.delay-topic:reservation-delay}
           content-type: application/json
@@ -64,6 +99,12 @@ spring:
           content-type: application/json
         documentProcess-out-0:
           destination: ${app.knowledge.document-processing.topic:knowledge-document-process}
+          content-type: application/json
+        reservationCommand-out-0:
+          destination: ${app.reservation.command.topic:reservation-command}
+          content-type: application/json
+        reservationResult-out-0:
+          destination: ${app.reservation.command.result-topic:reservation-result}
           content-type: application/json
   ai:
     openai:
@@ -101,6 +142,25 @@ app:
     hot-redis-enabled: false
     hot-init-wait-millis: 1000
     hot-cache-retention-hours: 24
+    hot-request-retention-hours: 24
+    hot-request-ttl-seconds: 300
+    command:
+      enabled: false
+      consumer-enabled: false
+      topic: reservation-command
+      result-topic: reservation-result
+      producer-group: reservation-command-producer-group
+      consumer-group: reservation-confirm-group
+      result-consumer-group: reservation-result-group
+      send-timeout-millis: 3000
+      send-retry-times: 2
+      max-reconsume-times: 16
+      consumer-concurrency: 4
+      result-consumer-concurrency: 2
+      reconcile-delay-millis: 5000
+      reconcile-batch-size: 100
+      republish-interval-millis: 10000
+      max-publish-attempts: 3
     rate-limit:
       enabled: false
       normal-max-requests: 5
