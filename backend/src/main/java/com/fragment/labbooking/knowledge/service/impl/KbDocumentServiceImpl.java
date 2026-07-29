@@ -66,6 +66,8 @@ import java.util.stream.Collectors;
 public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocument>
         implements KbDocumentService {
 
+    private static final int CHUNK_INSERT_BATCH_SIZE = 200;
+
     @Value("${app.knowledge.storage.local-dir:../uploads/knowledge}")
     private String uploadDir;
 
@@ -115,6 +117,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
     @Transactional(rollbackFor = Exception.class)
     public KbDocumentVO uploadDocument(MultipartFile file, String title, String category,
                                         String tags, String visibility, List<Long> allowedUserIds, Long uploaderId) {
+        // 文件先落对象存储，再创建可追踪的 PENDING 记录；两者任一失败都不能留下半成品。
         validateFile(file);
         String fileName = normalizeFileName(file.getOriginalFilename());
         String fileType = extractFileType(fileName);
@@ -148,12 +151,14 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             doc.setCreatedAt(now);
             doc.setUpdatedAt(now);
             save(doc);
+            // ACL 与文档元数据同事务提交，避免文档已可见但授权规则尚未写入。
             replaceAccessRules(doc, allowedUserIds);
             recordProcessEvent(doc, 0, "QUEUED", "PENDING", "文档已上传，等待异步处理", Map.of());
 
             enqueueDocumentProcess(doc.getId(), traceId);
             return toVO(doc);
         } catch (RuntimeException exception) {
+            // 数据库事务会回滚，但对象存储不会；这里补偿已上传的原文件。
             if (stored) {
                 deleteOriginalFileQuietly(objectName);
             }
@@ -180,6 +185,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                         .like(KbDocument::getTitle, q.getKeyword())
                         .or()
                         .like(KbDocument::getFileName, q.getKeyword()));
+        // 权限条件必须进入 SQL，而不是分页后再在内存中过滤，避免泄露总数和越权记录。
         applyAccessFilter(wrapper, actor);
         wrapper
                 .orderByDesc(KbDocument::getCreatedAt);
@@ -200,6 +206,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         if (doc == null) {
             throw new BusinessException("文档不存在");
         }
+        // 元数据也可能泄露文档主题和文件名，因此与正文使用相同 ACL。
         assertCanRead(doc, actor);
         return toVO(doc);
     }
@@ -210,6 +217,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         if (doc == null) {
             throw new BusinessException("文档不存在");
         }
+        // 处理状态会暴露文件是否已入库及失败原因，不能绕过文档本身的读取权限。
         assertCanRead(doc, actor);
         DocumentProcessStatusVO vo = new DocumentProcessStatusVO();
         BeanUtils.copyProperties(doc, vo);
@@ -227,6 +235,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         doc.setCategory(dto.getCategory());
         doc.setTags(dto.getTags());
         if (StringUtils.hasText(dto.getVisibility())) {
+            // 可见性与授权名单是一个整体，变更时以新名单完全替换旧名单。
             doc.setVisibility(normalizeVisibility(dto.getVisibility()));
             replaceAccessRules(doc, dto.getAllowedUserIds());
         }
@@ -239,6 +248,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         LambdaQueryWrapper<KbDocument> wrapper = new LambdaQueryWrapper<KbDocument>()
                 .select(KbDocument::getId, KbDocument::getDocVersion)
                 .gt(KbDocument::getChunkCount, 0);
+        // Agent 只拿到“有权限且已就绪”的文档版本，FastAPI 再用它过滤检索索引。
         applyAccessFilter(wrapper, actor);
         return list(wrapper).stream().collect(Collectors.toMap(
                 KbDocument::getId,
@@ -255,6 +265,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         if (doc == null) {
             throw new BusinessException("文档不存在");
         }
+        // 先撤销检索侧数据，再删除关系数据，避免被删除文档继续被问答命中。
         aiServiceClient.deleteDocumentVectors(id);
         deleteChunks(id);
         deleteAccessRules(id);
@@ -270,6 +281,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             throw new BusinessException("文档不存在");
         }
 
+        // 每次重处理换新的 traceId，使旧 MQ 消息无法覆盖这次请求。
         String traceId = UUID.randomUUID().toString();
         doc.setStatus(DocumentStatusConstants.PENDING);
         doc.setErrorMessage(null);
@@ -306,6 +318,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             return;
         }
 
+        // 同一条消息可能被重复投递；条件更新只有一个 worker 能把 PENDING 抢成 PROCESSING。
         int attempt = (doc.getRetryCount() == null ? 0 : doc.getRetryCount()) + 1;
         if (!claimProcessing(documentId, traceId, attempt)) {
             log.info("Skipped document process message because document was not claimable. id={}, traceId={}",
@@ -323,6 +336,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                     ? (StringUtils.hasText(claimed.getDocVersion()) ? claimed.getDocVersion() : "v1")
                     : nextDocVersion(activeVersion);
 
+            // 新版本完全构建成功前，旧版本仍保持可检索，避免更新期间出现知识库空窗。
             recordProcessEvent(claimed, attempt, "CLAIMED", "RUNNING", "处理任务已被 worker 获取", Map.of());
             recordProcessEvent(claimed, attempt, "VERSION_PREPARE", "RUNNING", "清理目标版本的残留索引",
                     Map.of("build_version", buildVersion));
@@ -341,6 +355,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                     Map.of("chunk_count", result.chunkCount(), "build_version", buildVersion));
             saveChunks(documentId, result);
 
+            // 版本切换仍带 traceId 条件，防止已经被新任务替代的旧 worker 抢先生效。
             if (!activateDocumentVersion(documentId, traceId, buildVersion, result)) {
                 throw new BusinessException("文档版本切换失败，处理任务已过期");
             }
@@ -351,6 +366,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                     documentId, buildVersion, result.chunkCount());
             cleanupRetiredVersion(documentId, activeVersion, attempt, latest);
         } catch (Exception e) {
+            // 失败状态需要先落库；只有未达到上限时才把异常抛回 Binder 触发 MQ 重试。
             boolean finalAttempt = attempt >= Math.max(1, documentProcessProperties.getMaxRetryAttempts());
             markProcessingFailed(documentId, traceId, finalAttempt, e.getMessage());
             KbDocument failed = getById(documentId);
@@ -372,6 +388,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
 
     private boolean claimProcessing(Long documentId, String traceId, int attempt) {
         LocalDateTime now = LocalDateTime.now();
+        // 用带状态和 traceId 的单条 UPDATE 实现“抢占”，不依赖 JVM 内存锁。
         int updated = baseMapper.update(null, new LambdaUpdateWrapper<KbDocument>()
                 .eq(KbDocument::getId, documentId)
                 .eq(KbDocument::getProcessTraceId, traceId)
@@ -401,6 +418,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             }
             return;
         }
+        // Outbox 与上传事务一起提交，避免“文档已入库但 MQ 消息发送丢失”。
         outboxService.enqueue(
                 "KB_DOCUMENT",
                 documentId + ":" + traceId,
@@ -419,6 +437,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         if (failed == null || !traceId.equals(failed.getProcessTraceId())) {
             return;
         }
+        // 更新失败时若旧版本可用，仍保持 READY，查询侧继续使用旧知识而非整体不可用。
         boolean activeVersionAvailable = hasActiveVersion(failed);
         baseMapper.update(null, new LambdaUpdateWrapper<KbDocument>()
                 .eq(KbDocument::getId, documentId)
@@ -435,6 +454,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
 
     private AiServiceClient.ProcessResult processStoredFile(KbDocument doc, String docVersion) {
         if (useMinio()) {
+            // AI 服务不直接持有对象存储凭据，只接收短期预签名 URL。
             String fileUrl = minioService.presignedGetUrl(minioBucket, doc.getFileUrl(), presignExpirySeconds);
             return aiServiceClient.processDocumentByUrl(
                     doc.getId(),
@@ -477,6 +497,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         if (doc == null) {
             throw new BusinessException("文档不存在");
         }
+        // 事件会暴露解析过程和文件状态，沿用文档的读取权限。
         assertCanRead(doc, actor);
         return processEventMapper.selectList(new LambdaQueryWrapper<KbDocumentProcessEvent>()
                         .eq(KbDocumentProcessEvent::getDocumentId, id)
@@ -514,7 +535,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             event.setCreatedAt(LocalDateTime.now());
             processEventMapper.insert(event);
         } catch (Exception exception) {
-            // An unavailable audit table must not prevent the document from becoming searchable.
+            // 审计用于排障，不应因为审计表短暂不可用阻断主处理链路。
             log.warn("Unable to persist document process audit. documentId={}, stage={}, error={}",
                     document.getId(), stage, exception.getMessage());
         }
@@ -546,6 +567,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             return;
         }
         Long userId = actor.getId();
+        // 非管理员只能命中公开文档、自己上传的文档或 ACL 显式授权的文档。
         List<Long> assignedDocumentIds = assignedDocumentIds(userId);
         wrapper.and(w -> {
             w.eq(KbDocument::getVisibility, DocumentVisibilityConstants.PUBLIC)
@@ -567,6 +589,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             return;
         }
         if (DocumentVisibilityConstants.SPECIFIED_USERS.equals(doc.getVisibility())) {
+            // 详情读取需要逐文档复核 ACL，不能只相信列表页的过滤结果。
             Long count = kbDocumentAccessMapper.selectCount(new LambdaQueryWrapper<KbDocumentAccess>()
                     .eq(KbDocumentAccess::getDocumentId, doc.getId())
                     .eq(KbDocumentAccess::getUserId, actor.getId()));
@@ -620,6 +643,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             }
         }
 
+        // 授权名单采用全量替换，避免旧授权用户在权限收窄后继续保留访问权。
         deleteAccessRules(doc.getId());
         if (!DocumentVisibilityConstants.SPECIFIED_USERS.equals(doc.getVisibility())) {
             return;
@@ -670,6 +694,8 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
 
         LocalDateTime now = LocalDateTime.now();
         String resolvedDocVersion = StringUtils.hasText(result.docVersion()) ? result.docVersion() : "v1";
+        List<KbChunk> entities = new ArrayList<>(result.chunks().size());
+        // MySQL 保存来源与审计副本；检索文本和向量已由 AI 服务同步写入 ES/Qdrant。
         for (int i = 0; i < result.chunks().size(); i++) {
             AiServiceClient.ChunkResult chunk = result.chunks().get(i);
             KbChunk entity = new KbChunk();
@@ -689,7 +715,12 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             entity.setCharEnd(chunk.charEnd());
             entity.setVectorId(chunk.vectorId());
             entity.setCreatedAt(now);
-            kbChunkMapper.insert(entity);
+            entities.add(entity);
+        }
+        // 单条多值 INSERT 减少网络往返；固定分批避免超长 SQL 或 max_allowed_packet 问题。
+        for (int start = 0; start < entities.size(); start += CHUNK_INSERT_BATCH_SIZE) {
+            int end = Math.min(start + CHUNK_INSERT_BATCH_SIZE, entities.size());
+            kbChunkMapper.insertBatch(entities.subList(start, end));
         }
     }
 
@@ -716,6 +747,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
                                             AiServiceClient.ProcessResult result) {
         LocalDateTime now = LocalDateTime.now();
         AiServiceClient.ParseQuality quality = result.parseQuality();
+        // 这是唯一的“新版本生效”点；状态、版本、chunk 数和解析质量一次更新。
         int updated = baseMapper.update(null, new LambdaUpdateWrapper<KbDocument>()
                 .eq(KbDocument::getId, documentId)
                 .eq(KbDocument::getProcessTraceId, traceId)
@@ -750,6 +782,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
             return;
         }
         try {
+            // 旧版本清理是后置动作，失败只留告警，不能回滚已验证的新版本。
             aiServiceClient.deleteDocumentVersion(documentId, retiredVersion);
             deleteChunks(documentId, retiredVersion);
             recordProcessEvent(document, attempt, "RETIRED_VERSION_CLEANUP", "SUCCEEDED",
@@ -780,6 +813,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         }
 
         try (InputStream inputStream = file.getInputStream()) {
+            // 本地模式同样使用受控根目录，避免上传文件名逃逸到 uploadDir 之外。
             Path target = resolveLocalPath(objectName);
             Files.createDirectories(target.getParent());
             Files.copy(inputStream, target, StandardCopyOption.REPLACE_EXISTING);
@@ -808,6 +842,7 @@ public class KbDocumentServiceImpl extends ServiceImpl<KbDocumentMapper, KbDocum
         Path base = Path.of(uploadDir).toAbsolutePath().normalize();
         Path target = base.resolve(objectName).normalize();
         if (!target.startsWith(base)) {
+            // 即使对象名来自数据库，也再次阻断路径穿越。
             throw new BusinessException("非法文件路径");
         }
         return target;

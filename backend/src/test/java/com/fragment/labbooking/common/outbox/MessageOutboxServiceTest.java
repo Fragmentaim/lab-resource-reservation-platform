@@ -94,7 +94,7 @@ class MessageOutboxServiceTest {
     private MessageOutbox sendingOutbox(int retryCount) {
         MessageOutbox outbox = new MessageOutbox();
         outbox.setId(1L);
-        outbox.setEventId("RESERVATION_CREATE:RESERVATION_REQUEST:REQ-1");
+        outbox.setEventId("RESERVATION_REMINDER:REMINDER_TASK:1");
         outbox.setStatus(MessageOutboxService.STATUS_SENDING);
         outbox.setRetryCount(retryCount);
         return outbox;

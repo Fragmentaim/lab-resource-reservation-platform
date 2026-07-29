@@ -4,7 +4,7 @@ server:
 spring:
   cloud:
     function:
-      definition: reservationCreateConsumer;reservationDelayConsumer;adminAuditConsumer;documentProcessConsumer
+      definition: reservationDelayConsumer;adminAuditConsumer;documentProcessConsumer
       # Spring AI's OpenAI client requires Jackson 2 Kotlin support; use Gson for
       # the Stream binder's independent message conversion to avoid mixing it with tools.jackson.
       preferred-json-mapper: gson
@@ -13,11 +13,6 @@ spring:
         binder:
           name-server: ${ROCKETMQ_NAMESERVER:127.0.0.1:9876}
         bindings:
-          reservationCreateConsumer-in-0:
-            consumer:
-              subscription: reservation-create
-              push:
-                max-reconsume-times: ${app.reservation.async.max-reconsume-times:-1}
           reservationDelayConsumer-in-0:
             consumer:
               subscription: '*'
@@ -33,9 +28,6 @@ spring:
               subscription: ${app.knowledge.document-processing.tag:KNOWLEDGE_DOCUMENT_PROCESS}
               push:
                 max-reconsume-times: ${app.knowledge.document-processing.max-reconsume-times:-1}
-          reservationCreate-out-0:
-            producer:
-              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
           reservationDelay-out-0:
             producer:
               group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
@@ -46,12 +38,6 @@ spring:
             producer:
               group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
       bindings:
-        reservationCreateConsumer-in-0:
-          destination: ${app.reservation.async.topic:reservation-create}
-          group: ${app.reservation.async.consumer-group:lab-booking-reservation-consumer-group}
-          content-type: application/json
-          consumer:
-            auto-startup: ${app.reservation.async.enabled:false}
         reservationDelayConsumer-in-0:
           destination: ${app.message-outbox.delay-topic:reservation-delay}
           group: ${app.message-outbox.delay-consumer-group:lab-booking-delay-consumer-group}
@@ -70,9 +56,6 @@ spring:
           content-type: application/json
           consumer:
             auto-startup: ${app.knowledge.document-processing.enabled:false}
-        reservationCreate-out-0:
-          destination: ${app.reservation.async.topic:reservation-create}
-          content-type: application/json
         reservationDelay-out-0:
           destination: ${app.message-outbox.delay-topic:reservation-delay}
           content-type: application/json
@@ -104,6 +87,7 @@ spring:
       timeout: 3000ms
 
 mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 
@@ -117,19 +101,6 @@ app:
     hot-redis-enabled: false
     hot-init-wait-millis: 1000
     hot-cache-retention-hours: 24
-    async:
-      enabled: false
-      topic: reservation-create
-      consumer-group: lab-booking-reservation-consumer-group
-      max-reconsume-times: -1
-      request-timeout-seconds: 30
-      timeout-scan-fallback-enabled: true
-      timeout-scan-delay-millis: 5000
-      timeout-scan-batch-size: 20
-      cleanup-delay-millis: 10000
-      cleanup-batch-size: 100
-      success-retention-days: 7
-      failed-retention-days: 14
     rate-limit:
       enabled: false
       normal-max-requests: 5
@@ -139,10 +110,6 @@ app:
     reminder:
       enabled: true
       before-start-minutes: 10
-      scan-fallback-enabled: true
-      scheduler:
-        delay-millis: 60000
-        batch-size: 20
     auto-cancel:
       enabled: true
       grace-minutes: 15

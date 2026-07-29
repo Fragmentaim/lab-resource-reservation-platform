@@ -5,13 +5,10 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
-import com.fragment.labbooking.knowledge.entity.QaContextTrace;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.knowledge.mapper.AgentRunMapper;
 import com.fragment.labbooking.knowledge.mapper.AgentStepMapper;
-import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
-import com.fragment.labbooking.knowledge.vo.ContextTraceVO;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,8 +32,6 @@ class AgentRunServiceImplTest {
 
     @Mock private AgentRunMapper runMapper;
     @Mock private AgentStepMapper stepMapper;
-    @Mock private QaContextTraceMapper contextTraceMapper;
-
     private AgentRunServiceImpl service;
     private AgentRun persistedRun;
 
@@ -45,9 +40,7 @@ class AgentRunServiceImplTest {
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
         TableInfoHelper.initTableInfo(assistant, AgentRun.class);
         TableInfoHelper.initTableInfo(assistant, AgentStep.class);
-        TableInfoHelper.initTableInfo(assistant, QaContextTrace.class);
-        service = new AgentRunServiceImpl(runMapper, stepMapper, contextTraceMapper,
-                new ObjectMapper());
+        service = new AgentRunServiceImpl(runMapper, stepMapper, new ObjectMapper());
         persistedRun = new AgentRun();
         persistedRun.setId(42L);
         persistedRun.setTraceId("qa-trace-1");
@@ -90,7 +83,7 @@ class AgentRunServiceImplTest {
         assertThat(persistedRun.getRoute()).isEqualTo("AGENT_RUNTIME");
         assertThat(persistedRun.getStatus()).isEqualTo("SUCCEEDED");
         ArgumentCaptor<AgentStep> stepCaptor = ArgumentCaptor.forClass(AgentStep.class);
-        verify(stepMapper, org.mockito.Mockito.times(3)).insert(stepCaptor.capture());
+        verify(stepMapper, org.mockito.Mockito.times(2)).insert(stepCaptor.capture());
         assertThat(stepCaptor.getAllValues()).anySatisfy(step -> {
             assertThat(step.getStepType()).isEqualTo("TOOL_CALL");
             assertThat(step.getToolTraceId()).isEqualTo("tool-trace-1");
@@ -99,44 +92,15 @@ class AgentRunServiceImplTest {
     }
 
     @Test
-    void shouldExposeOnlySafeContextAccounting() {
-        QaContextTrace trace = new QaContextTrace();
-        trace.setTraceId("qa-trace-1");
-        trace.setOriginalQuestion("must not be exposed");
-        trace.setRewrittenQuestion("must not be exposed either");
-        trace.setSummaryTokens(240);
-        trace.setHistoryTokens(510);
-        trace.setEvidenceTokens(1280);
-        trace.setTotalPromptTokens(2300);
-        trace.setSelectedSourceCount(3);
-        trace.setDroppedSourceCount(4);
-        trace.setRewriteApplied(true);
-        when(contextTraceMapper.selectOne(any())).thenReturn(trace);
-
-        ContextTraceVO result = service.getContextTrace("qa-trace-1");
-
-        assertThat(result.getTraceId()).isEqualTo("qa-trace-1");
-        assertThat(result.getEvidenceTokens()).isEqualTo(1280);
-        assertThat(result.getSelectedSourceCount()).isEqualTo(3);
-        assertThat(result).hasNoNullFieldsOrPropertiesExcept("createdAt");
-    }
-
-    @Test
-    void shouldPersistPlanAndToolWithoutRawToolOutput() {
+    void shouldPersistToolWithoutRawToolOutput() {
         stubPersistedRun();
         service.start(record());
-        service.recordContextPlan("qa-trace-1", new AgentRunService.ContextPlan(
-                1, "glm-5.1", List.of("knowledge_search")));
         service.recordToolExecution("qa-trace-1", new AgentRunService.ToolExecution(
                 "knowledge_search", "SUCCESS", 18, "tool-trace-2", "native_function_calling",
                 Map.of("evidence_count", 1)));
 
         ArgumentCaptor<AgentStep> stepCaptor = ArgumentCaptor.forClass(AgentStep.class);
-        verify(stepMapper, org.mockito.Mockito.times(3)).insert(stepCaptor.capture());
-        assertThat(stepCaptor.getAllValues()).anySatisfy(step -> {
-            assertThat(step.getStepType()).isEqualTo("PLAN");
-            assertThat(step.getDetailJson()).contains("knowledge_search");
-        });
+        verify(stepMapper).insert(stepCaptor.capture());
         assertThat(stepCaptor.getAllValues()).anySatisfy(step -> {
             assertThat(step.getStepType()).isEqualTo("TOOL_CALL");
             assertThat(step.getDetailJson()).contains("evidence_count");
@@ -148,9 +112,6 @@ class AgentRunServiceImplTest {
     void shouldPersistFinalProviderUsageSnapshot() {
         when(runMapper.selectOne(any())).thenReturn(persistedRun);
         when(stepMapper.selectCount(any())).thenReturn(1L);
-
-        service.recordContextPlan("qa-trace-1", new AgentRunService.ContextPlan(
-                1, "glm-5.1", List.of("knowledge_search"), 15));
 
         QaAnswerVO answer = new QaAnswerVO();
         answer.setModelName("glm-5.1");

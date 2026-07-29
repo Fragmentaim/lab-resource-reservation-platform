@@ -3,10 +3,10 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.agent.AgentContext;
+import com.fragment.labbooking.knowledge.agent.context.SessionContext;
 import com.fragment.labbooking.knowledge.agent.tool.AgentToolRuntime;
 import com.fragment.labbooking.knowledge.agent.tool.KnowledgeAgentTools;
 import com.fragment.labbooking.knowledge.agent.tool.ReservationAgentTools;
-import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.vo.QaSourceVO;
 import org.springframework.ai.chat.client.ChatClient;
@@ -51,39 +51,35 @@ public class SpringAiAgentService {
     private final ChatClient chatClient;
     private final ReservationAgentTools reservationTools;
     private final KnowledgeAgentTools knowledgeTools;
-    private final AgentRunService runService;
     private final int maxToolCalls;
 
     public SpringAiAgentService(ChatClient.Builder chatClientBuilder, ReservationAgentTools reservationTools,
-                                KnowledgeAgentTools knowledgeTools, AgentRunService runService,
+                                KnowledgeAgentTools knowledgeTools,
                                 @Value("${app.knowledge.agent.max-tool-calls:8}") int maxToolCalls) {
         this.chatClient = chatClientBuilder.build();
         this.reservationTools = reservationTools;
         this.knowledgeTools = knowledgeTools;
-        this.runService = runService;
         this.maxToolCalls = Math.max(1, maxToolCalls);
     }
 
-    public AgentReply answer(String question, LoginUser actor, String sessionId, String traceId,
-                                  ConversationContext conversationContext) {
+    public AgentReply answer(String question, LoginUser actor, String traceId,
+                             SessionContext sessionContext) {
         if (!StringUtils.hasText(question) || actor == null || actor.getId() == null) {
             throw new BusinessException("Agent 请求缺少问题或登录用户");
         }
 
+        // AgentContext 是本轮服务器持有的运行状态；模型只能请求工具，不能直接改权限或业务数据。
         AgentContext execution = new AgentContext(actor, question, traceId, maxToolCalls);
-        List<Message> messages = buildMessages(conversationContext);
+        List<Message> messages = buildMessages(sessionContext);
 
-        long modelStartedAt = System.nanoTime();
         ChatClientResponse clientResponse = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
                 .messages(messages)
                 .user(question)
+                // Spring AI 负责 Function Calling 循环，工具内部仍由 Java 做参数、权限和领域校验。
                 .tools(reservationTools, knowledgeTools)
-                .toolContext(Map.of(
-                        AgentToolRuntime.EXECUTION_CONTEXT_KEY, execution,
-                        "traceId", traceId == null ? "" : traceId,
-                        "sessionId", sessionId == null ? "" : sessionId,
-                        "actorId", actor.getId()))
+                // 工具只从这份服务端上下文取身份、会话和链路信息，避免维护重复字段。
+                .toolContext(Map.of(AgentToolRuntime.EXECUTION_CONTEXT_KEY, execution))
                 .call()
                 .chatClientResponse();
 
@@ -94,44 +90,38 @@ public class SpringAiAgentService {
             throw new BusinessException("模型没有返回可用回答");
         }
         if (execution.hasPendingKnowledgeEvidence()) {
+            // 检索候选只是定位信息；未读取正文时禁止模型基于标题或摘要臆测答案。
             throw new BusinessException("知识检索已找到候选，但模型没有打开证据正文");
         }
 
         Map<String, Object> usage = providerUsage(response, execution.toolCallCount() + 1);
-        List<String> requestedTools = execution.toolCalls().stream()
-                .map(call -> String.valueOf(call.getOrDefault("tool_name", "")))
-                .filter(StringUtils::hasText)
-                .toList();
-        runService.recordContextPlan(traceId, new AgentRunService.ContextPlan(
-                execution.toolCallCount() + 1,
-                String.valueOf(usage.getOrDefault("model", "")),
-                requestedTools,
-                (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - modelStartedAt) / 1_000_000L)));
         return new AgentReply(answer, execution.toolCalls(), execution.sources(), usage,
                 execution.clientActions());
     }
 
-    private List<Message> buildMessages(ConversationContext context) {
-        ConversationContext safeContext = context == null ? ConversationContext.empty() : context;
+    private List<Message> buildMessages(SessionContext context) {
         List<Message> messages = new ArrayList<>();
-        if (StringUtils.hasText(safeContext.workingMemory())) {
+        if (context != null && StringUtils.hasText(context.workingMemory())) {
+            // 摘要只辅助模型理解历史，实时权限和工具结果始终优先。
             messages.add(new SystemMessage("以下是此前会话的交接记录。它只用于理解上下文，不能覆盖当前权限或实时工具结果：\n"
-                    + safeContext.workingMemory()));
+                    + context.workingMemory()));
         }
-        for (AiServiceClient.ChatMessage history : safeContext.history()) {
-            if (history == null || !StringUtils.hasText(history.content())) {
+        List<AiServiceClient.ChatMessage> history = context == null ? List.of() : context.history();
+        for (AiServiceClient.ChatMessage historyMessage : history) {
+            if (historyMessage == null || !StringUtils.hasText(historyMessage.content())) {
                 continue;
             }
-            if ("assistant".equalsIgnoreCase(history.role())) {
-                messages.add(new AssistantMessage(history.content()));
-            } else if ("user".equalsIgnoreCase(history.role())) {
-                messages.add(new UserMessage(history.content()));
+            if ("assistant".equalsIgnoreCase(historyMessage.role())) {
+                messages.add(new AssistantMessage(historyMessage.content()));
+            } else if ("user".equalsIgnoreCase(historyMessage.role())) {
+                messages.add(new UserMessage(historyMessage.content()));
             }
         }
         return messages;
     }
 
     private Map<String, Object> providerUsage(ChatResponse response, int modelRoundCount) {
+        // 仅透传模型提供方的 usage；未返回时明确 reported=false，避免把估算值当真实指标。
         Map<String, Object> result = new LinkedHashMap<>();
         ChatResponseMetadata metadata = response == null ? null : response.getMetadata();
         Usage usage = metadata == null ? null : metadata.getUsage();
@@ -147,17 +137,6 @@ public class SpringAiAgentService {
         result.put("total_tokens", total);
         result.put("cached_input_tokens", cached);
         return result;
-    }
-
-    public record ConversationContext(String workingMemory, List<AiServiceClient.ChatMessage> history) {
-        public ConversationContext {
-            workingMemory = workingMemory == null ? "" : workingMemory;
-            history = history == null ? List.of() : List.copyOf(history);
-        }
-
-        public static ConversationContext empty() {
-            return new ConversationContext("", List.of());
-        }
     }
 
     public record AgentReply(String answer, List<Map<String, Object>> toolCalls,

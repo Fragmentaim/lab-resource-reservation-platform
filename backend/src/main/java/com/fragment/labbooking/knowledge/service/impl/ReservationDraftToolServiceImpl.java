@@ -10,9 +10,9 @@ import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.knowledge.service.ReservationDraftToolService;
 import com.fragment.labbooking.knowledge.vo.ReservationDraftVO;
-import com.fragment.labbooking.service.ReservationService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
+import com.fragment.labbooking.service.reservation.ReservationCommandService;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -37,7 +37,7 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
     private final ObjectMapper objectMapper;
     private final ResourceService resourceService;
     private final ResourceSlotService resourceSlotService;
-    private final ReservationService reservationService;
+    private final ReservationCommandService reservationCommandService;
     private final Duration ttl;
 
     public ReservationDraftToolServiceImpl(StringRedisTemplate redisTemplate,
@@ -45,14 +45,14 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
                                            ObjectMapper objectMapper,
                                            ResourceService resourceService,
                                            ResourceSlotService resourceSlotService,
-                                           ReservationService reservationService,
+                                           ReservationCommandService reservationCommandService,
                                            @Value("${app.knowledge.agent-reservation-confirmation.ttl-seconds:600}") long ttlSeconds) {
         this.redisTemplate = redisTemplate;
         this.redissonClient = redissonClient;
         this.objectMapper = objectMapper;
         this.resourceService = resourceService;
         this.resourceSlotService = resourceSlotService;
-        this.reservationService = reservationService;
+        this.reservationCommandService = reservationCommandService;
         this.ttl = Duration.ofSeconds(Math.max(60, ttlSeconds));
     }
 
@@ -69,6 +69,7 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
         ResourceSlot slot = resourceSlotService.getById(slotId);
         validateDraftable(resource, slot, resourceId);
 
+        // 草案只保存候选参数和归属用户，不预扣库存；确认时必须重新走真实预约链路。
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime expiresAt = now.plus(ttl);
         String token = UUID.randomUUID().toString().replace("-", "");
@@ -90,6 +91,7 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
         String token = normalizeToken(confirmationToken);
         ConfirmedPayload completed = read(CONFIRM_RESULT_KEY_PREFIX + token, ConfirmedPayload.class);
         if (completed != null) {
+            // 确认接口可被浏览器重试；缓存最终结果让同一 token 幂等返回。
             assertOwner(userId, completed.userId());
             return completed.submit();
         }
@@ -101,7 +103,7 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
         assertOwner(userId, draft.userId());
 
         RLock confirmLock = redissonClient.getLock(CONFIRM_LOCK_KEY_PREFIX + token);
-        // Omitting leaseTime lets Redisson's watchdog renew the lock until this thread unlocks it.
+        // 不传 leaseTime 让 Redisson watchdog 在请求仍在执行时自动续期，避免锁提前过期。
         if (!confirmLock.tryLock()) {
             completed = read(CONFIRM_RESULT_KEY_PREFIX + token, ConfirmedPayload.class);
             if (completed != null) {
@@ -112,10 +114,11 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
         }
 
         try {
+            // 不信任草案生成时的库存判断，确认阶段仍由预约命令服务做最终事务校验。
             ReservationCreateDTO dto = new ReservationCreateDTO();
             dto.setResourceId(draft.resourceId());
             dto.setSlotId(draft.slotId());
-            ReservationSubmitVO submit = reservationService.createReservation(userId, dto);
+            ReservationSubmitVO submit = reservationCommandService.create(userId, dto);
             write(CONFIRM_RESULT_KEY_PREFIX + token, new ConfirmedPayload(userId, submit), ttl);
             redisTemplate.delete(DRAFT_KEY_PREFIX + token);
             return submit;
@@ -142,6 +145,7 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
         if (!"OPEN".equals(slot.getStatus())) {
             throw new BusinessException("当前时段不可预约");
         }
+        // 热门时段在开放时间前只能被查看，不能生成会误导用户的预约草案。
         if (ResourceSlotTypeConstants.HOT.equals(slot.getSlotType())
                 && (slot.getOpenTime() == null || LocalDateTime.now().isBefore(slot.getOpenTime()))) {
             throw new BusinessException("热门时段尚未开放预约");
@@ -193,6 +197,7 @@ public class ReservationDraftToolServiceImpl implements ReservationDraftToolServ
         try {
             return objectMapper.readValue(raw, type);
         } catch (JsonProcessingException exception) {
+            // 状态损坏不能被当成“草案不存在”，否则可能绕过确认幂等语义。
             throw new IllegalStateException("预约确认状态无法读取", exception);
         }
     }

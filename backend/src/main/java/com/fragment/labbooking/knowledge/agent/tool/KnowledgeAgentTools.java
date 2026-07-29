@@ -44,24 +44,21 @@ public class KnowledgeAgentTools {
     public Map<String, Object> knowledgeSearch(
             @ToolParam(description = "用于知识库检索的简短具体问题") String query,
             ToolContext toolContext) {
-        AgentContext context = runtime.requireExecutionContext(toolContext);
         String normalizedQuery = optionalText(query, 240);
-        if (normalizedQuery == null) {
-            normalizedQuery = context.question();
-        }
-        String finalQuery = normalizedQuery;
-        return runtime.execute("knowledge_search", "ACL_FILTERED_KNOWLEDGE",
-                Map.of("query", finalQuery), context, () -> searchKnowledge(context, finalQuery));
+        return runtime.executeFromToolContext("knowledge_search", "ACL_FILTERED_KNOWLEDGE",
+                Map.of("query", normalizedQuery == null ? "" : normalizedQuery), toolContext, context -> {
+                    String finalQuery = normalizedQuery == null ? context.question() : normalizedQuery;
+                    return searchKnowledge(context, finalQuery);
+                });
     }
 
     @Tool(name = "knowledge_open_chunks", description = "读取本次 knowledge_search 已返回候选中的完整 chunk 正文。仅在需要知识库事实依据时调用；只能传候选中的 chunkUid，不能猜测 ID。")
     public Map<String, Object> knowledgeOpenChunks(
             @ToolParam(description = "从本次候选中按需选择的 chunkUid") List<String> chunkUids,
             ToolContext toolContext) {
-        AgentContext context = runtime.requireExecutionContext(toolContext);
-        return runtime.execute("knowledge_open_chunks", "ACL_FILTERED_KNOWLEDGE",
-                arguments("chunkUids", chunkUids), context,
-                () -> openKnowledgeChunks(context, requiredStrings(chunkUids, "chunkUids").stream()
+        return runtime.executeFromToolContext("knowledge_open_chunks", "ACL_FILTERED_KNOWLEDGE",
+                arguments("chunkUids", chunkUids), toolContext,
+                context -> openKnowledgeChunks(context, requiredStrings(chunkUids, "chunkUids").stream()
                         .limit(MAX_OPEN_CHUNKS).toList()));
     }
 

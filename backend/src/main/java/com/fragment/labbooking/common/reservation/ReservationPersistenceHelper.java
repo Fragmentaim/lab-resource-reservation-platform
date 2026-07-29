@@ -12,8 +12,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Shared helper for persisting Reservation records.
- * Used by both the sync path (ReservationServiceImpl) and the async path
- * (ReservationRequestServiceImpl) so that the save-retry and build logic
+ * Used by both the synchronous command path (ReservationCommandService) and the async path
+ * (ReservationCommandService) so that the save-retry and build logic
  * exists in exactly one place.
  */
 @Component

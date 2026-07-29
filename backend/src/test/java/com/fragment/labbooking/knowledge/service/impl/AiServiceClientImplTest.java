@@ -98,8 +98,6 @@ class AiServiceClientImplTest {
         server.expect(requestTo("http://ai-service/api/v1/ai/documents/10/vectors"))
                 .andExpect(method(HttpMethod.DELETE))
                 .andRespond(withSuccess("{\"deleted_count\":3}", MediaType.APPLICATION_JSON));
-        server.expect(requestTo("http://ai-service/api/v1/ai/health"))
-                .andRespond(withSuccess("{\"status\":\"ok\"}", MediaType.APPLICATION_JSON));
 
         AiServiceClient.KnowledgeSearchResult search = client.retrieveKnowledge("雷达站规则", Map.of(10L, "v3"));
         List<AiServiceClient.KnowledgeChunk> chunks = client.openKnowledgeChunks(
@@ -113,7 +111,6 @@ class AiServiceClientImplTest {
         assertThat(summary.summaryTokens()).isEqualTo(32);
         assertThat(summary.providerUsage()).containsEntry("input_tokens", 100);
         assertThat(client.deleteDocumentVectors(10L)).isEqualTo(3);
-        assertThat(client.checkHealth()).isTrue();
         server.verify();
     }
 }

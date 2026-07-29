@@ -4,16 +4,13 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.knowledge.agent.context.SessionContextPlanner;
+import com.fragment.labbooking.knowledge.agent.context.SessionContext;
 import com.fragment.labbooking.knowledge.dto.QaAskDTO;
 import com.fragment.labbooking.knowledge.dto.QaFeedbackDTO;
 import com.fragment.labbooking.knowledge.entity.KbDocument;
 import com.fragment.labbooking.knowledge.entity.QaFeedback;
-import com.fragment.labbooking.knowledge.entity.QaContextTrace;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
-import com.fragment.labbooking.knowledge.entity.QaSession;
 import com.fragment.labbooking.knowledge.entity.QaSource;
-import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
 import com.fragment.labbooking.knowledge.mapper.KbDocumentMapper;
 import com.fragment.labbooking.knowledge.mapper.QaFeedbackMapper;
 import com.fragment.labbooking.knowledge.mapper.QaRecordMapper;
@@ -21,7 +18,6 @@ import com.fragment.labbooking.knowledge.mapper.QaSourceMapper;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
 import com.fragment.labbooking.knowledge.service.QaRecordService;
-import com.fragment.labbooking.knowledge.service.SessionEventService;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
 import com.fragment.labbooking.knowledge.vo.QaRecordVO;
@@ -59,11 +55,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
     @Autowired
     private QaSourceMapper qaSourceMapper;
 
-    @Autowired
-    private QaContextTraceMapper qaContextTraceMapper;
-
     @Autowired private QaFeedbackMapper qaFeedbackMapper;
-    @Autowired private SessionEventService sessionEventService;
     @Autowired private QaSessionManager sessionManager;
 
     @Autowired
@@ -76,13 +68,10 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
 
     private QaAnswerVO routeAndBuildAnswer(QaAskDTO dto, LoginUser actor) {
         Long userId = actor.getId();
-        QaSessionManager.PreparedContext preparedContext = sessionManager.prepare(
+        // 先准备会话上下文并在需要时完成压缩，再创建本轮记录，保证记录使用的是最终上下文计划。
+        SessionContext sessionContext = sessionManager.prepare(
                 dto.getSessionId(), userId, dto.getQuestion());
-        QaSession session = preparedContext.session();
-        String sessionId = session.getSessionId();
-        SessionContextPlanner.Plan sessionPlan = preparedContext.plan();
-        List<AiServiceClient.ChatMessage> chatHistory = sessionPlan.historyMessages();
-        int turnNo = sessionManager.nextTurnNo(session);
+        String sessionId = sessionContext.sessionId();
 
         QaRecord record = new QaRecord();
         record.setUserId(userId);
@@ -93,15 +82,18 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         record.setTraceId(UUID.randomUUID().toString());
         record.setCreatedAt(LocalDateTime.now());
         save(record);
+        // 先持久化 PENDING 记录，后续无论成功或失败都能关联到同一个 traceId。
         agentRunService.start(record);
-        sessionEventService.appendUserInput(record, turnNo);
-        agentRunService.recordSessionContextPlan(record.getTraceId(), sessionPlan);
+        if (sessionContext.plan().compactionRecommended()) {
+            agentRunService.recordSessionContextPlan(record.getTraceId(), sessionContext.plan());
+        }
 
         long routeStartedAt = System.nanoTime();
         try {
+            // Spring AI 负责模型与工具的调用循环；QaRecordService 只负责把结果落为会话历史。
             SpringAiAgentService.AgentReply routed = agentChatService.answer(
-                    dto.getQuestion(), actor, sessionId, record.getTraceId(),
-                    new SpringAiAgentService.ConversationContext(session.getSummary(), chatHistory));
+                    dto.getQuestion(), actor, record.getTraceId(),
+                    sessionContext);
             QaAnswerVO answer = new QaAnswerVO();
             answer.setAnswer(routed.answer());
             answer.setLatencyMs(elapsedMs(routeStartedAt));
@@ -113,12 +105,13 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             toolStats.put("route", "spring_ai_agent");
             toolStats.put("tool_calls", routed.toolCalls());
             toolStats.put("selected_source_count", routed.sources().size());
-            attachProviderUsage(toolStats, routed.providerUsage(), preparedContext.summaryProviderUsage());
-            toolStats.put("session_context_plan", objectMapper.convertValue(sessionPlan, Map.class));
+            attachProviderUsage(toolStats, routed.providerUsage(), sessionContext.summaryProviderUsage());
+            toolStats.put("session_context_plan", objectMapper.convertValue(sessionContext.plan(), Map.class));
             answer.setContextStats(toolStats);
-            finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion(), turnNo);
+            finishToolAnswer(record, answer, sessionId, userId, dto.getQuestion());
             return answer;
         } catch (Exception e) {
+            // 即使对外抛错，也要把 PENDING 改为 FAILED，避免会话中留下永远未完成的轮次。
             record.setStatus("FAILED");
             record.setAnswer("抱歉，问答服务暂时不可用");
             updateById(record);
@@ -134,18 +127,16 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         return (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - startedAt) / 1_000_000L);
     }
 
-    private void finishToolAnswer(QaRecord record, QaAnswerVO answer, String sessionId, Long userId, String question,
-                                  int turnNo) {
+    private void finishToolAnswer(QaRecord record, QaAnswerVO answer, String sessionId, Long userId, String question) {
         record.setAnswer(answer.getAnswer());
         record.setLatencyMs(answer.getLatencyMs());
         record.setStatus("ANSWERED");
         record.setModelName(answer.getModelName());
         record.setQuestionType(answer.getQuestionType());
         updateById(record);
+        // 引用归历史问答保存，执行轨迹归 AgentRun 保存，避免再维护一份上下文副本。
         saveSources(record.getId(), answer.getSources());
-        saveContextTrace(record, question, answer);
         agentRunService.finishTool(record, answer);
-        sessionEventService.appendAssistantOutput(record, answer, turnNo);
         sessionManager.updateAfterAnswer(sessionId, userId, question, record.getTraceId());
         answer.setRecordId(record.getId());
         answer.setSessionId(sessionId);
@@ -170,6 +161,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         List<QaRecordVO> records = recordPage.getRecords().stream()
                 .map(this::toVO)
                 .collect(Collectors.toList());
+        // 批量补齐来源，避免每条问答各查一次 QaSource 造成 N+1 查询。
         attachSources(records);
 
         Page<QaRecordVO> voPage = new Page<>(recordPage.getCurrent(), recordPage.getSize(), recordPage.getTotal());
@@ -194,6 +186,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             throw new BusinessException("问答记录不存在");
         }
 
+        // 反馈只能归属到自己的问答记录，不能借 recordId 给其他用户写评价。
         QaFeedback feedback = new QaFeedback();
         feedback.setQaRecordId(dto.getQaRecordId());
         feedback.setUserId(userId);
@@ -209,34 +202,9 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         return vo;
     }
 
-    private void saveContextTrace(QaRecord record, String originalQuestion, QaAnswerVO answer) {
-        try {
-            Map<String, Object> stats = answer.getContextStats() == null
-                    ? Collections.emptyMap() : answer.getContextStats();
-            QaContextTrace trace = new QaContextTrace();
-            trace.setTraceId(record.getTraceId());
-            trace.setQaRecordId(record.getId());
-            trace.setSessionId(record.getSessionId());
-            trace.setUserId(record.getUserId());
-            trace.setOriginalQuestion(originalQuestion);
-            trace.setRewrittenQuestion(originalQuestion);
-            trace.setRewriteApplied(false);
-            trace.setSummaryTokens(intValue(stats, "summary_tokens"));
-            trace.setHistoryTokens(intValue(stats, "history_tokens"));
-            trace.setEvidenceTokens(intValue(stats, "evidence_tokens"));
-            trace.setTotalPromptTokens(intValue(stats, "total_prompt_tokens"));
-            trace.setSelectedSourceCount(intValue(stats, "selected_source_count"));
-            trace.setDroppedSourceCount(intValue(stats, "dropped_source_count"));
-            trace.setContextJson(com.fragment.labbooking.common.util.TruncateUtil.truncate(objectMapper.writeValueAsString(stats), 12000));
-            trace.setCreatedAt(LocalDateTime.now());
-            qaContextTraceMapper.insert(trace);
-        } catch (Exception e) {
-            log.warn("Failed to save context trace for record {}: {}", record.getId(), e.getMessage());
-        }
-    }
-
     private void attachProviderUsage(Map<String, Object> stats, Map<String, Object> agentUsage,
                                      Map<String, Object> summaryUsage) {
+        // Agent 回答和会话摘要可能分别调用模型，既保留明细，也提供本轮总 usage。
         stats.put("agent_provider_usage", agentUsage == null ? Map.of("reported", false) : agentUsage);
         stats.put("summary_provider_usage", summaryUsage);
         stats.put("provider_usage", mergeProviderUsage(agentUsage, summaryUsage));
@@ -276,6 +244,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             return;
         }
 
+        // 一次查出当前页全部来源，再按问答记录分组组装。
         List<Long> recordIds = records.stream()
                 .map(QaRecordVO::getId)
                 .collect(Collectors.toList());
@@ -308,6 +277,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
         if (documentIds.isEmpty()) {
             return Collections.emptyMap();
         }
+        // QaSource 只存 documentId，标题允许更新，因此展示时读取当前文档元数据。
         return kbDocumentMapper.selectList(new LambdaQueryWrapper<KbDocument>()
                         .select(KbDocument::getId, KbDocument::getTitle, KbDocument::getFileName)
                         .in(KbDocument::getId, documentIds)).stream()
@@ -356,6 +326,7 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             return;
         }
 
+        // 复制当次引用的版本、页码和分数，文档后续重处理也不改写历史回答的证据。
         for (QaSourceVO src : sources) {
             QaSource source = new QaSource();
             source.setQaRecordId(recordId);
@@ -392,21 +363,6 @@ public class QaRecordServiceImpl extends ServiceImpl<QaRecordMapper, QaRecord>
             return first;
         }
         return StringUtils.hasText(second) ? second : null;
-    }
-
-    private int intValue(Map<String, Object> values, String key) {
-        Object value = values.get(key);
-        if (value instanceof Number number) {
-            return number.intValue();
-        }
-        if (value instanceof String text && StringUtils.hasText(text)) {
-            try {
-                return Integer.parseInt(text);
-            } catch (NumberFormatException ignored) {
-                return 0;
-            }
-        }
-        return 0;
     }
 
 }

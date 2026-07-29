@@ -1,6 +1,5 @@
 package com.fragment.labbooking.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
@@ -19,8 +18,6 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Collections;
-import java.util.List;
 
 @Service
 public class ReservationReminderTaskServiceImpl extends ServiceImpl<ReservationReminderTaskMapper, ReservationReminderTask>
@@ -98,21 +95,6 @@ public class ReservationReminderTaskServiceImpl extends ServiceImpl<ReservationR
                 .set(ReservationReminderTask::getUpdatedAt, now)
                 .set(ReservationReminderTask::getLastErrorMessage, "reservation cancelled");
         this.update(updateWrapper);
-    }
-
-    @Override
-    public List<ReservationReminderTask> findDueBatch(int batchSize) {
-        if (!enabled) {
-            return Collections.emptyList();
-        }
-
-        LambdaQueryWrapper<ReservationReminderTask> queryWrapper = new LambdaQueryWrapper<ReservationReminderTask>()
-                .eq(ReservationReminderTask::getStatus, STATUS_PENDING)
-                .le(ReservationReminderTask::getPlanSendTime, LocalDateTime.now())
-                .orderByAsc(ReservationReminderTask::getPlanSendTime)
-                .orderByAsc(ReservationReminderTask::getId)
-                .last("LIMIT " + Math.max(batchSize, 1));
-        return this.list(queryWrapper);
     }
 
     @Override

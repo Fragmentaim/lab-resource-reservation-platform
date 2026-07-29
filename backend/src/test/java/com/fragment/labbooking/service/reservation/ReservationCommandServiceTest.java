@@ -1,8 +1,7 @@
-package com.fragment.labbooking.service.impl;
+package com.fragment.labbooking.service.reservation;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.fragment.labbooking.common.constants.ReservationRequestStatusConstants;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
@@ -15,16 +14,13 @@ import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
 import com.fragment.labbooking.dto.ReservationCreateDTO;
 import com.fragment.labbooking.entity.Reservation;
-import com.fragment.labbooking.entity.ReservationRequest;
 import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.service.ReservationReminderTaskService;
-import com.fragment.labbooking.service.ReservationRequestService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
 import com.fragment.labbooking.service.SysUserService;
-import com.fragment.labbooking.service.reservation.ReservationCommandService;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,7 +47,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-class ReservationServiceImplTest {
+class ReservationCommandServiceTest {
 
     @Mock
     private ResourceService resourceService;
@@ -69,8 +65,6 @@ class ReservationServiceImplTest {
     private ReservationReminderTaskService reservationReminderTaskService;
     @Mock
     private ReservationAutoCancelService reservationAutoCancelService;
-    @Mock
-    private ReservationRequestService reservationRequestService;
     @Mock
     private ReservationMapper reservationMapper;
     @Mock
@@ -94,9 +88,7 @@ class ReservationServiceImplTest {
                 reservationPersistenceHelper,
                 reservationReminderTaskService,
                 reservationAutoCancelService,
-                reservationRequestService,
                 transactionManager,
-                true,
                 30L
         );
     }
@@ -119,8 +111,6 @@ class ReservationServiceImplTest {
 
         ReservationSubmitVO submitVO = reservationService.create(7L, dto);
 
-        assertThat(submitVO.getAsync()).isFalse();
-        assertThat(submitVO.getStatus()).isEqualTo(ReservationRequestStatusConstants.SUCCESS);
         assertThat(submitVO.getReservationId()).isEqualTo(88L);
         assertThat(submitVO.getReservationNo()).isEqualTo("RES-1001");
 
@@ -141,30 +131,26 @@ class ReservationServiceImplTest {
     }
 
     @Test
-    void createReservationForHotSlotShouldReturnPendingRequestInsteadOfDirectReservation() {
+    void createReservationForHotSlotShouldPersistReservationSynchronously() {
         Resource resource = buildResource(1L, "TC-01", "1号靶车");
         ResourceSlot slot = buildSlot(12L, 1L, ResourceSlotTypeConstants.HOT);
         ReservationCreateDTO dto = buildCreateDto(1L, 12L);
-        ReservationRequest request = new ReservationRequest();
-        request.setRequestNo("REQ-9001");
-        request.setStatus(ReservationRequestStatusConstants.PENDING);
-
         when(resourceService.getById(1L)).thenReturn(resource);
         when(resourceSlotService.getById(12L)).thenReturn(slot);
         when(reservationMapper.selectCount(any())).thenReturn(0L);
-        when(reservationRequestService.createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT))
-                .thenReturn(request);
+        when(reservationNoGenerator.nextReservationNo()).thenReturn("RES-HOT-1");
+        when(reservationMapper.insert(any(Reservation.class))).thenAnswer(invocation -> {
+            invocation.getArgument(0, Reservation.class).setId(89L);
+            return 1;
+        });
 
         ReservationSubmitVO submitVO = reservationService.create(3L, dto);
 
-        assertThat(submitVO.getAsync()).isTrue();
-        assertThat(submitVO.getStatus()).isEqualTo(ReservationRequestStatusConstants.PENDING);
-        assertThat(submitVO.getRequestNo()).isEqualTo("REQ-9001");
+        assertThat(submitVO.getReservationId()).isEqualTo(89L);
 
         verify(hotReservationRedisService).reserveAndRegisterRollback(slot, 3L);
-        verify(reservationRequestService).createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT);
-        verify(resourceSlotService, never()).deductQuotaIfAvailable(anyLong());
-        verify(reservationMapper, never()).insert(any(Reservation.class));
+        verify(resourceSlotService).deductQuotaIfAvailable(12L);
+        verify(reservationMapper).insert(any(Reservation.class));
     }
 
     @Test
@@ -188,25 +174,25 @@ class ReservationServiceImplTest {
         Resource resource = buildResource(1L, "TC-01", "1号靶车");
         ResourceSlot slot = buildSlot(12L, 1L, ResourceSlotTypeConstants.HOT);
         ReservationCreateDTO dto = buildCreateDto(1L, 12L);
-        ReservationRequest request = new ReservationRequest();
-        request.setRequestNo("REQ-FAST-1");
-        request.setStatus(ReservationRequestStatusConstants.PENDING);
-
         when(hotReservationRedisService.isPreheatedHotSlot(12L)).thenReturn(true);
         when(hotReservationRedisService.reserveIfPreheated(1L, 12L, 3L)).thenReturn(true);
         when(resourceService.getById(1L)).thenReturn(resource);
         when(resourceSlotService.getById(12L)).thenReturn(slot);
         when(reservationMapper.selectCount(any())).thenReturn(0L);
-        when(reservationRequestService.createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT))
-                .thenReturn(request);
+        when(reservationNoGenerator.nextReservationNo()).thenReturn("RES-HOT-2");
+        when(reservationMapper.insert(any(Reservation.class))).thenAnswer(invocation -> {
+            invocation.getArgument(0, Reservation.class).setId(90L);
+            return 1;
+        });
 
         ReservationSubmitVO submitVO = reservationService.create(3L, dto);
 
-        assertThat(submitVO.getAsync()).isTrue();
+        assertThat(submitVO.getReservationId()).isEqualTo(90L);
         verify(reservationRateLimiter).checkCreateReservationLimit(3L, ResourceSlotTypeConstants.HOT);
         verify(hotReservationRedisService).registerPreheatedReservationRollback(12L, 3L);
         verify(hotReservationRedisService, never()).reserveAndRegisterRollback(slot, 3L);
-        verify(reservationRequestService).createPendingHotRequest(3L, 1L, 12L, ResourceSlotTypeConstants.HOT);
+        verify(resourceSlotService).deductQuotaIfAvailable(12L);
+        verify(reservationMapper).insert(any(Reservation.class));
     }
 
     @Test

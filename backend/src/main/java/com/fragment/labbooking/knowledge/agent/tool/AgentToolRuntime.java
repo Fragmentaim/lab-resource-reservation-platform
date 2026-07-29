@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /** Adds domain auditing and context packing around a Spring AI annotated tool. */
@@ -32,8 +33,21 @@ public class AgentToolRuntime {
         this.captureArguments = captureArguments;
     }
 
-    public Map<String, Object> execute(String toolName, String accessScope, Map<String, Object> arguments,
-                                       AgentContext context, Supplier<AgentToolResult> action) {
+    /**
+     * 统一从 Spring AI 的 ToolContext 取得本轮服务端上下文，避免每个工具重复校验。
+     */
+    public Map<String, Object> executeFromToolContext(String toolName, String accessScope,
+                                                      Map<String, Object> arguments, ToolContext toolContext,
+                                                      Function<AgentContext, AgentToolResult> action) {
+        AgentContext context = requireExecutionContext(toolContext);
+        return execute(toolName, accessScope, arguments, context, () -> action.apply(context));
+    }
+
+    /**
+     * 执行、审计和异常转换的底层入口；保留给不依赖 Spring AI 的单元测试与内部调用。
+     */
+    Map<String, Object> execute(String toolName, String accessScope, Map<String, Object> arguments,
+                                AgentContext context, Supplier<AgentToolResult> action) {
         Map<String, Object> safeArguments = arguments == null ? Map.of() : arguments;
         context.beginToolCall();
         String toolTraceId = UUID.randomUUID().toString();

@@ -9,7 +9,6 @@ import java.util.List;
 public class ResourceAvailabilityToolVO {
 
     private String toolName;
-    private String toolTraceId;
     private boolean readOnly;
     private String keyword;
     private int resultCount;

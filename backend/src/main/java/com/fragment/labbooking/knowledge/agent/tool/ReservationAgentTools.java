@@ -43,8 +43,7 @@ public class ReservationAgentTools {
 
     @Tool(name = "reservation_context", description = "读取当前登录用户自己的预约统计与未来预约，只读。")
     public Map<String, Object> reservationContext(ToolContext toolContext) {
-        AgentContext context = runtime.requireExecutionContext(toolContext);
-        return runtime.execute("reservation_context", "SELF_READ", Map.of(), context, () -> {
+        return runtime.executeFromToolContext("reservation_context", "SELF_READ", Map.of(), toolContext, context -> {
             ReservationAssistantContextVO value = reservationContextService.getReservationContext(
                     context.actor(), context.actor().getId());
             Map<String, Object> output = new LinkedHashMap<>();
@@ -61,10 +60,9 @@ public class ReservationAgentTools {
     public Map<String, Object> resourceAvailability(
             @ToolParam(description = "可选资源名称关键词", required = false) String keyword,
             ToolContext toolContext) {
-        AgentContext context = runtime.requireExecutionContext(toolContext);
         String normalizedKeyword = optionalText(keyword, 40);
-        return runtime.execute("resource_availability", "SELF_READ",
-                arguments("keyword", normalizedKeyword), context, () -> {
+        return runtime.executeFromToolContext("resource_availability", "SELF_READ",
+                arguments("keyword", normalizedKeyword), toolContext, context -> {
                     ResourceAvailabilityToolVO value = availabilityService.findAvailableSlots(normalizedKeyword, 5);
                     return AgentToolResult.of(Map.of(
                             "resultCount", value.getResultCount(),
@@ -80,9 +78,8 @@ public class ReservationAgentTools {
     public Map<String, Object> reservationCancellationPreview(
             @ToolParam(description = "预约 ID") Long reservationId,
             ToolContext toolContext) {
-        AgentContext context = runtime.requireExecutionContext(toolContext);
-        return runtime.execute("reservation_cancellation_preview", "SELF_READ",
-                arguments("reservationId", reservationId), context, () -> {
+        return runtime.executeFromToolContext("reservation_cancellation_preview", "SELF_READ",
+                arguments("reservationId", reservationId), toolContext, context -> {
                     Long validReservationId = requiredPositive(reservationId, "reservationId");
                     ReservationCancellationPreviewVO value = cancellationPreviewService.preview(
                             context.actor(), validReservationId);
@@ -105,9 +102,8 @@ public class ReservationAgentTools {
             @ToolParam(description = "资源 ID") Long resourceId,
             @ToolParam(description = "时段 ID") Long slotId,
             ToolContext toolContext) {
-        AgentContext context = runtime.requireExecutionContext(toolContext);
-        return runtime.execute("reservation_create_draft", "SELF_WRITE_DRAFT",
-                arguments("resourceId", resourceId, "slotId", slotId), context, () -> {
+        return runtime.executeFromToolContext("reservation_create_draft", "SELF_WRITE_DRAFT",
+                arguments("resourceId", resourceId, "slotId", slotId), toolContext, context -> {
                     Long validResourceId = requiredPositive(resourceId, "resourceId");
                     Long validSlotId = requiredPositive(slotId, "slotId");
                     ReservationDraftVO draft = reservationDraftService.createDraft(

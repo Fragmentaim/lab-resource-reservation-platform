@@ -26,12 +26,6 @@ public class AdminDashboardVO {
 
     private Long hotOpenSlotCount;
 
-    private Long pendingAsyncRequestCount;
-
-    private Long dispatchPendingRequestCount;
-
-    private Long failedAsyncRequestCount;
-
     private Long pendingReminderCount;
 
     private Long unreadNotificationCount;
@@ -42,5 +36,4 @@ public class AdminDashboardVO {
 
     private List<AdminDashboardResourceHeatVO> topResources = new ArrayList<>();
 
-    private List<AdminDashboardRequestVO> recentRequests = new ArrayList<>();
 }

@@ -9,7 +9,6 @@ import java.util.List;
 public class ReservationAssistantContextVO {
 
     private String toolName;
-    private String toolTraceId;
     private String accessScope;
     private Long subjectUserId;
     private boolean readOnly;

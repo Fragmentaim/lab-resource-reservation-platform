@@ -79,10 +79,10 @@ class MessageOutboxDispatcherTest {
     private MessageOutbox outbox() {
         MessageOutbox outbox = new MessageOutbox();
         outbox.setId(1L);
-        outbox.setEventId("RESERVATION_CREATE:RESERVATION_REQUEST:REQ-100");
+        outbox.setEventId("RESERVATION_REMINDER:REMINDER_TASK:100");
         outbox.setAggregateType("RESERVATION_REQUEST");
         outbox.setAggregateId("REQ-100");
-        outbox.setEventType("RESERVATION_CREATE");
+        outbox.setEventType("RESERVATION_REMINDER");
         outbox.setTopic("reservation-events");
         outbox.setTag("reservation-create");
         outbox.setMessageKey("REQ-100");
@@ -93,8 +93,8 @@ class MessageOutboxDispatcherTest {
 
     private MessageOutboxEnvelope envelope() {
         MessageOutboxEnvelope envelope = new MessageOutboxEnvelope();
-        envelope.setEventId("RESERVATION_CREATE:RESERVATION_REQUEST:REQ-100");
-        envelope.setEventType("RESERVATION_CREATE");
+        envelope.setEventId("RESERVATION_REMINDER:REMINDER_TASK:100");
+        envelope.setEventType("RESERVATION_REMINDER");
         envelope.setAggregateType("RESERVATION_REQUEST");
         envelope.setAggregateId("REQ-100");
         envelope.setBusinessKey("REQ-100");

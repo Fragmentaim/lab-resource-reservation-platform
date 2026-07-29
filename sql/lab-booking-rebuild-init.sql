@@ -10,13 +10,10 @@ USE lab_booking;
 
 SET FOREIGN_KEY_CHECKS = 0;
 
-DROP TABLE IF EXISTS admin_audit_outbox;
 DROP TABLE IF EXISTS admin_audit_log;
-DROP TABLE IF EXISTS ai_tool_call_log;
 DROP TABLE IF EXISTS delay_message_outbox;
 DROP TABLE IF EXISTS user_notification;
 DROP TABLE IF EXISTS reservation_reminder_task;
-DROP TABLE IF EXISTS reservation_request;
 DROP TABLE IF EXISTS reservation;
 DROP TABLE IF EXISTS resource_slot;
 DROP TABLE IF EXISTS resource;
@@ -118,31 +115,6 @@ CREATE TABLE reservation (
     KEY idx_reservation_created_at (created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-CREATE TABLE reservation_request (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    request_no VARCHAR(64) NOT NULL,
-    user_id BIGINT NOT NULL,
-    resource_id BIGINT NOT NULL,
-    slot_id BIGINT NOT NULL,
-    active_key VARCHAR(128) NULL,
-    source_type VARCHAR(16) NOT NULL,
-    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    dispatch_status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    dispatch_retry_count INT NOT NULL DEFAULT 0,
-    last_dispatch_error_message VARCHAR(512) NULL,
-    fail_reason VARCHAR(255) NULL,
-    reservation_id BIGINT NULL,
-    reservation_no VARCHAR(64) NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    completed_at DATETIME NULL,
-    UNIQUE KEY uk_reservation_request_no (request_no),
-    UNIQUE KEY uk_reservation_request_active_key (active_key),
-    KEY idx_reservation_request_user_created (user_id, created_at),
-    KEY idx_reservation_request_dispatch_status_created (dispatch_status, created_at),
-    KEY idx_reservation_request_status_created (status, created_at)
-) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
 CREATE TABLE reservation_reminder_task (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     reservation_id BIGINT NOT NULL,
@@ -218,42 +190,6 @@ CREATE TABLE admin_audit_log (
     KEY idx_admin_audit_operator_id (operator_id),
     KEY idx_admin_audit_module_action (module, action),
     KEY idx_admin_audit_created_at (created_at)
-) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
-CREATE TABLE admin_audit_outbox (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    event_id VARCHAR(64) NOT NULL,
-    topic VARCHAR(128) NOT NULL,
-    tag VARCHAR(64) NOT NULL,
-    message_key VARCHAR(128) NOT NULL,
-    payload LONGTEXT NOT NULL,
-    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    retry_count INT NOT NULL DEFAULT 0,
-    last_error_message VARCHAR(512) NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    sent_at DATETIME NULL,
-    UNIQUE KEY uk_admin_audit_outbox_event_id (event_id),
-    KEY idx_admin_audit_outbox_status_created (status, created_at)
-) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
-CREATE TABLE ai_tool_call_log (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    trace_id VARCHAR(64) NOT NULL,
-    tool_name VARCHAR(64) NOT NULL,
-    actor_user_id BIGINT NULL,
-    actor_role VARCHAR(32) NULL,
-    subject_user_id BIGINT NULL,
-    access_scope VARCHAR(32) NULL,
-    result VARCHAR(16) NOT NULL,
-    latency_ms BIGINT NOT NULL DEFAULT 0,
-    parameter_summary VARCHAR(512) NULL,
-    error_message VARCHAR(512) NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_ai_tool_call_trace_id (trace_id),
-    KEY idx_ai_tool_call_actor_created (actor_user_id, created_at),
-    KEY idx_ai_tool_call_tool_created (tool_name, created_at),
-    KEY idx_ai_tool_call_result_created (result, created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 INSERT INTO sys_user (id, username, password_hash, nickname, role, phone, status, created_at, updated_at)
@@ -332,7 +268,6 @@ ALTER TABLE sys_dict_data AUTO_INCREMENT = 20;
 ALTER TABLE resource AUTO_INCREMENT = 10;
 ALTER TABLE resource_slot AUTO_INCREMENT = 20;
 ALTER TABLE reservation AUTO_INCREMENT = 20;
-ALTER TABLE reservation_request AUTO_INCREMENT = 10;
 ALTER TABLE reservation_reminder_task AUTO_INCREMENT = 10;
 ALTER TABLE delay_message_outbox AUTO_INCREMENT = 10;
 ALTER TABLE user_notification AUTO_INCREMENT = 10;

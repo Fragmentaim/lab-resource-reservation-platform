@@ -8,7 +8,6 @@ import java.time.LocalDateTime;
 public class ReservationCancellationPreviewVO {
 
     private String toolName;
-    private String toolTraceId;
     private boolean readOnly;
     private boolean writeExecuted;
     private boolean requiresUserConfirmation;

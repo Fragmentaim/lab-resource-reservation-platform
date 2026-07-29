@@ -6,7 +6,7 @@ import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
-import com.fragment.labbooking.service.ReservationService;
+import com.fragment.labbooking.service.reservation.ReservationCommandService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
@@ -41,7 +41,7 @@ class ReservationDraftToolServiceImplTest {
     @Mock private RLock confirmLock;
     @Mock private ResourceService resourceService;
     @Mock private ResourceSlotService resourceSlotService;
-    @Mock private ReservationService reservationService;
+    @Mock private ReservationCommandService reservationCommandService;
 
     private ObjectMapper objectMapper;
     private ReservationDraftToolServiceImpl draftToolService;
@@ -51,7 +51,7 @@ class ReservationDraftToolServiceImplTest {
         objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         draftToolService = new ReservationDraftToolServiceImpl(redisTemplate, redissonClient, objectMapper, resourceService,
-                resourceSlotService, reservationService, 600);
+                resourceSlotService, reservationCommandService, 600);
     }
 
     @Test
@@ -66,11 +66,11 @@ class ReservationDraftToolServiceImplTest {
         assertThat(draft.isRequiresUserConfirmation()).isTrue();
         assertThat(draft.getConfirmationEndpoint()).contains(draft.getConfirmationToken());
         verify(valueOperations).set(eq("agent:reservation:draft:" + draft.getConfirmationToken()), anyString(), any());
-        verify(reservationService, never()).createReservation(any(), any());
+        verify(reservationCommandService, never()).create(any(), any());
     }
 
     @Test
-    void shouldConfirmDraftOnceAndDelegateToAuthoritativeReservationService() throws Exception {
+    void shouldConfirmDraftOnceAndDelegateToAuthoritativeReservationCommand() throws Exception {
         String token = "0123456789abcdef0123456789abcdef";
         String draftJson = objectMapper.writeValueAsString(new DraftJson(7L, 11L, 22L,
                 LocalDateTime.now().minusMinutes(1), LocalDateTime.now().plusMinutes(5)));
@@ -80,16 +80,15 @@ class ReservationDraftToolServiceImplTest {
         when(confirmLock.tryLock()).thenReturn(true);
         when(confirmLock.isHeldByCurrentThread()).thenReturn(true);
         ReservationSubmitVO submit = new ReservationSubmitVO();
-        submit.setStatus("SUCCESS");
         submit.setReservationNo("RES-100");
-        when(reservationService.createReservation(eq(7L), any())).thenReturn(submit);
+        when(reservationCommandService.create(eq(7L), any())).thenReturn(submit);
 
         ReservationSubmitVO result = draftToolService.confirmDraft(user(7L), token);
 
         assertThat(result.getReservationNo()).isEqualTo("RES-100");
         ArgumentCaptor<com.fragment.labbooking.dto.ReservationCreateDTO> dto =
                 ArgumentCaptor.forClass(com.fragment.labbooking.dto.ReservationCreateDTO.class);
-        verify(reservationService).createReservation(eq(7L), dto.capture());
+        verify(reservationCommandService).create(eq(7L), dto.capture());
         assertThat(dto.getValue().getResourceId()).isEqualTo(11L);
         assertThat(dto.getValue().getSlotId()).isEqualTo(22L);
         verify(redisTemplate).delete("agent:reservation:draft:" + token);
@@ -108,7 +107,7 @@ class ReservationDraftToolServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("其他用户");
 
-        verify(reservationService, never()).createReservation(any(), any());
+        verify(reservationCommandService, never()).create(any(), any());
     }
 
     private Resource resource() {

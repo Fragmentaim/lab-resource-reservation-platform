@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.fragment.labbooking.knowledge.mapper.KbChunkMapper">
+
+    <insert id="insertBatch">
+        INSERT INTO kb_chunk (
+            document_id, chunk_uid, doc_version, chunk_index, content, token_count,
+            page_no, section_title, title_path, content_hash, char_start, char_end,
+            vector_id, created_at
+        ) VALUES
+        <foreach collection="chunks" item="chunk" separator=",">
+            (
+                #{chunk.documentId}, #{chunk.chunkUid}, #{chunk.docVersion}, #{chunk.chunkIndex},
+                #{chunk.content}, #{chunk.tokenCount}, #{chunk.pageNo}, #{chunk.sectionTitle},
+                #{chunk.titlePath}, #{chunk.contentHash}, #{chunk.charStart}, #{chunk.charEnd},
+                #{chunk.vectorId}, #{chunk.createdAt}
+            )
+        </foreach>
+    </insert>
+</mapper>

@@ -1,7 +1,6 @@
 package com.fragment.labbooking.knowledge.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import org.springframework.web.multipart.MultipartFile;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
@@ -13,15 +12,7 @@ import java.util.Map;
 
 public interface AiServiceClient {
 
-    ProcessResult processDocument(Long documentId, MultipartFile file, String fileType);
-
-    ProcessResult processDocument(Long documentId, File file, String fileName, String fileType);
-
     ProcessResult processDocument(Long documentId, File file, String fileName, String fileType, String docVersion);
-
-    ProcessResult processDocument(Long documentId, byte[] bytes, String fileName, String fileType);
-
-    ProcessResult processDocument(Long documentId, byte[] bytes, String fileName, String fileType, String docVersion);
 
     ProcessResult processDocumentByUrl(Long documentId, String fileUrl, String fileName, String fileType,
                                        String docVersion);
@@ -35,8 +26,6 @@ public interface AiServiceClient {
     int deleteDocumentVectors(Long documentId);
 
     int deleteDocumentVersion(Long documentId, String docVersion);
-
-    boolean checkHealth();
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)

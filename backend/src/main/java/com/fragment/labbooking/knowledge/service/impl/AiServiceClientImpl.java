@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.service.AiServiceClient;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -12,7 +11,6 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
-import org.springframework.web.multipart.MultipartFile;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
@@ -33,43 +31,16 @@ public class AiServiceClientImpl implements AiServiceClient {
     }
 
     @Override
-    public ProcessResult processDocument(Long documentId, MultipartFile file, String fileType) {
-        return call("文档处理", () -> processDocument(documentId, file.getBytes(), file.getOriginalFilename(), fileType));
-    }
-
-    @Override
-    public ProcessResult processDocument(Long documentId, File file, String fileName, String fileType) {
-        return processDocument(documentId, file, fileName, fileType, "v1");
-    }
-
-    @Override
     public ProcessResult processDocument(Long documentId, File file, String fileName, String fileType, String docVersion) {
         return call("文档重处理", () -> doProcessDocumentMultipart(
                 documentId, new FileSystemResource(file), fileType, docVersion));
     }
 
     @Override
-    public ProcessResult processDocument(Long documentId, byte[] bytes, String fileName, String fileType) {
-        return processDocument(documentId, bytes, fileName, fileType, "v1");
-    }
-
-    @Override
-    public ProcessResult processDocument(Long documentId, byte[] bytes, String fileName, String fileType, String docVersion) {
-        return call("文档处理", () -> {
-            ByteArrayResource resource = new ByteArrayResource(bytes) {
-                @Override
-                public String getFilename() {
-                    return fileName;
-                }
-            };
-            return doProcessDocumentMultipart(documentId, resource, fileType, docVersion);
-        });
-    }
-
-    @Override
     public ProcessResult processDocumentByUrl(Long documentId, String fileUrl, String fileName, String fileType,
                                               String docVersion) {
         return call("文档 URL 处理", () -> {
+            // MinIO 模式只把短期预签名 URL 交给 FastAPI，不复制大文件到 Java 进程内存。
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("document_id", documentId);
             request.put("file_url", fileUrl);
@@ -89,6 +60,7 @@ public class AiServiceClientImpl implements AiServiceClient {
     @Override
     public KnowledgeSearchResult retrieveKnowledge(String question, Map<Long, String> documentVersions) {
         return call("知识库候选检索", () -> {
+            // Java 先计算 ACL 范围；Python 只能在这些文档及指定版本内做混合检索。
             Map<Long, String> scopes = documentVersions == null ? Collections.emptyMap() : documentVersions;
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("question", question);
@@ -108,6 +80,7 @@ public class AiServiceClientImpl implements AiServiceClient {
     @Override
     public List<KnowledgeChunk> openKnowledgeChunks(List<String> chunkUids, Map<Long, String> documentVersions) {
         return call("知识库正文读取", () -> {
+            // 再次传入 ACL 范围，避免候选 chunkId 被篡改后绕过第一次检索过滤。
             Map<Long, String> scopes = documentVersions == null ? Collections.emptyMap() : documentVersions;
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("chunk_uids", chunkUids == null ? Collections.emptyList() : chunkUids);
@@ -126,6 +99,7 @@ public class AiServiceClientImpl implements AiServiceClient {
     @Override
     public SummaryResult summarizeSession(String existingSummary, List<ChatMessage> newTurns) {
         return call("会话摘要更新", () -> {
+            // 摘要服务接收旧交接记录和待移出的完整轮次，返回一份重写后的最新记录。
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("existing_summary", existingSummary);
             request.put("new_turns", newTurns == null ? Collections.emptyList() : newTurns);
@@ -155,18 +129,9 @@ public class AiServiceClientImpl implements AiServiceClient {
         });
     }
 
-    @Override
-    public boolean checkHealth() {
-        try {
-            HealthResponse response = restClient.get().uri("/api/v1/ai/health").retrieve().body(HealthResponse.class);
-            return response != null && "ok".equals(response.status());
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
     private ProcessResult doProcessDocumentMultipart(Long documentId, Object fileResource,
                                                      String fileType, String docVersion) {
+        // 文档重处理通过 multipart 将本地文件传给 AI 服务。
         MultiValueMap<String, Object> formData = new LinkedMultiValueMap<>();
         formData.add("document_id", documentId.toString());
         formData.add("file_type", fileType);
@@ -189,6 +154,7 @@ public class AiServiceClientImpl implements AiServiceClient {
     }
 
     private ProcessResult normalizeProcessResult(ProcessResult result, String fallbackDocVersion) {
+        // 兼容 AI 服务缺省返回的 status/version，但不伪造 chunk 内容。
         String status = StringUtils.hasText(result.status()) ? result.status() : "FAILED";
         String docVersion = StringUtils.hasText(result.docVersion()) ? result.docVersion() : fallbackDocVersion;
         return new ProcessResult(result.chunkCount(), status, docVersion, result.chunkIds(), result.vectorIds(),
@@ -208,6 +174,7 @@ public class AiServiceClientImpl implements AiServiceClient {
         } catch (BusinessException exception) {
             throw exception;
         } catch (Exception exception) {
+            // 对外统一隐藏底层 HTTP 细节，日志保留完整异常供服务端排查。
             log.warn("AI service call failed. operation={}", operation, exception);
             throw new BusinessException(operation + "失败，请稍后重试");
         }
@@ -230,7 +197,4 @@ public class AiServiceClientImpl implements AiServiceClient {
     private record DeleteResponse(int deletedCount) {
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private record HealthResponse(String status) {
-    }
 }

@@ -1,9 +1,9 @@
 package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
+import com.fragment.labbooking.knowledge.agent.context.SessionContext;
 import com.fragment.labbooking.knowledge.agent.tool.KnowledgeAgentTools;
 import com.fragment.labbooking.knowledge.agent.tool.ReservationAgentTools;
-import com.fragment.labbooking.knowledge.service.AgentRunService;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -48,13 +48,12 @@ class SpringAiAgentServiceTest {
 
         ReservationAgentTools reservationTools = mock(ReservationAgentTools.class);
         KnowledgeAgentTools knowledgeTools = mock(KnowledgeAgentTools.class);
-        AgentRunService runService = mock(AgentRunService.class);
         SpringAiAgentService service = new SpringAiAgentService(
-                builder, reservationTools, knowledgeTools, runService, 8);
+                builder, reservationTools, knowledgeTools, 8);
         LoginUser actor = new LoginUser(7L, "user7", "用户", "USER", "13800000000");
 
-        SpringAiAgentService.AgentReply result = service.answer("查看我的预约", actor, "session-1", "trace-1",
-                SpringAiAgentService.ConversationContext.empty());
+        SpringAiAgentService.AgentReply result = service.answer("查看我的预约", actor, "trace-1",
+                SessionContext.empty());
 
         assertThat(result.answer()).isEqualTo("你当前有 2 个预约。");
         assertThat(result.providerUsage()).containsEntry("model", "test-model")

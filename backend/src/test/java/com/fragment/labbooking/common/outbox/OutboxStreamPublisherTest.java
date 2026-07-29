@@ -21,7 +21,6 @@ class OutboxStreamPublisherTest {
         MessageOutboxProperties outboxProperties = new MessageOutboxProperties();
         DocumentProcessProperties documentProperties = new DocumentProcessProperties();
         OutboxStreamPublisher publisher = new OutboxStreamPublisher(bridge, outboxProperties, documentProperties);
-        ReflectionTestUtils.setField(publisher, "reservationTopic", "reservation-create");
         ReflectionTestUtils.setField(publisher, "auditTopic", "admin-audit-log");
         when(bridge.send(eq(OutboxStreamPublisher.DELAY_OUTPUT), any())).thenReturn(true);
 
@@ -34,7 +33,6 @@ class OutboxStreamPublisherTest {
     void publishShouldRejectUnknownTopicBeforeItCanBeMarkedSent() {
         OutboxStreamPublisher publisher = new OutboxStreamPublisher(mock(StreamBridge.class),
                 new MessageOutboxProperties(), new DocumentProcessProperties());
-        ReflectionTestUtils.setField(publisher, "reservationTopic", "reservation-create");
         ReflectionTestUtils.setField(publisher, "auditTopic", "admin-audit-log");
 
         assertThatThrownBy(() -> publisher.publish(outbox("unknown-topic"), envelope()))

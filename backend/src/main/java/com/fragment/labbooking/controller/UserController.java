@@ -9,8 +9,8 @@ import com.fragment.labbooking.dto.UserAddDTO;
 import com.fragment.labbooking.dto.UserPageQueryDTO;
 import com.fragment.labbooking.dto.UserStatusUpdateDTO;
 import com.fragment.labbooking.dto.UserUpdateDTO;
-import com.fragment.labbooking.service.ReservationService;
 import com.fragment.labbooking.service.SysUserService;
+import com.fragment.labbooking.service.reservation.ReservationQueryService;
 import com.fragment.labbooking.vo.ReservationVO;
 import com.fragment.labbooking.vo.UserReservationOverviewVO;
 import com.fragment.labbooking.vo.UserVO;
@@ -33,7 +33,7 @@ public class UserController {
     private SysUserService sysUserService;
 
     @Autowired
-    private ReservationService reservationService;
+    private ReservationQueryService reservationQueryService;
 
     @GetMapping("/page")
     public Result<Page<UserVO>> page(UserPageQueryDTO queryDTO) {
@@ -47,13 +47,13 @@ public class UserController {
 
     @GetMapping("/{id}/overview")
     public Result<UserReservationOverviewVO> getReservationOverview(@PathVariable Long id) {
-        return Result.success(reservationService.getUserReservationOverview(id));
+        return Result.success(reservationQueryService.getUserOverview(id));
     }
 
     @GetMapping("/{id}/reservations")
     public Result<Page<ReservationVO>> pageUserReservations(@PathVariable Long id,
                                                             ReservationPageQueryDTO queryDTO) {
-        return Result.success(reservationService.pageUserReservations(id, queryDTO));
+        return Result.success(reservationQueryService.pageByUser(id, queryDTO));
     }
 
     @PostMapping

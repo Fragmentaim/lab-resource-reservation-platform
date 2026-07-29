@@ -2,6 +2,7 @@ package com.fragment.labbooking.common.audit;
 
 import com.fragment.labbooking.entity.AdminAuditLog;
 import com.fragment.labbooking.common.outbox.MessageOutboxService;
+import com.fragment.labbooking.mapper.AdminAuditLogMapper;
 import org.junit.jupiter.api.Test;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -16,10 +17,10 @@ class AdminAuditDispatchServiceTest {
     @Test
     void dispatchShouldWriteDirectlyWhenMqDisabled() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
-        AdminAuditLogWriter logWriter = mock(AdminAuditLogWriter.class);
+        AdminAuditLogMapper adminAuditLogMapper = mock(AdminAuditLogMapper.class);
         AdminAuditDispatchService dispatchService = new AdminAuditDispatchService(
                 outboxService,
-                logWriter,
+                adminAuditLogMapper,
                 false,
                 "admin-audit-log"
         );
@@ -27,7 +28,7 @@ class AdminAuditDispatchServiceTest {
 
         dispatchService.dispatch(auditLog);
 
-        verify(logWriter).write(auditLog);
+        verify(adminAuditLogMapper).insert(auditLog);
         verify(outboxService, never()).enqueue(
                 any(),
                 any(),
@@ -43,10 +44,10 @@ class AdminAuditDispatchServiceTest {
     @Test
     void dispatchShouldEnqueueOutboxWhenMqEnabled() {
         MessageOutboxService outboxService = mock(MessageOutboxService.class);
-        AdminAuditLogWriter logWriter = mock(AdminAuditLogWriter.class);
+        AdminAuditLogMapper adminAuditLogMapper = mock(AdminAuditLogMapper.class);
         AdminAuditDispatchService dispatchService = new AdminAuditDispatchService(
                 outboxService,
-                logWriter,
+                adminAuditLogMapper,
                 true,
                 "admin-audit-log"
         );
@@ -65,6 +66,6 @@ class AdminAuditDispatchServiceTest {
                 isNull(),
                 any(AdminAuditLogEvent.class)
         );
-        verify(logWriter, never()).write(auditLog);
+        verify(adminAuditLogMapper, never()).insert(auditLog);
     }
 }

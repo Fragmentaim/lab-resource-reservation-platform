@@ -10,13 +10,11 @@ USE lab_booking;
 
 SET FOREIGN_KEY_CHECKS = 0;
 
-DROP TABLE IF EXISTS admin_audit_outbox;
 DROP TABLE IF EXISTS admin_audit_log;
 DROP TABLE IF EXISTS delay_message_outbox;
 DROP TABLE IF EXISTS message_outbox;
 DROP TABLE IF EXISTS user_notification;
 DROP TABLE IF EXISTS reservation_reminder_task;
-DROP TABLE IF EXISTS reservation_request;
 DROP TABLE IF EXISTS reservation;
 DROP TABLE IF EXISTS resource_slot;
 DROP TABLE IF EXISTS resource;
@@ -116,27 +114,6 @@ CREATE TABLE reservation (
     KEY idx_reservation_slot_id (slot_id),
     KEY idx_reservation_status (status),
     KEY idx_reservation_created_at (created_at)
-) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
-CREATE TABLE reservation_request (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    request_no VARCHAR(64) NOT NULL,
-    user_id BIGINT NOT NULL,
-    resource_id BIGINT NOT NULL,
-    slot_id BIGINT NOT NULL,
-    active_key VARCHAR(128) NULL,
-    source_type VARCHAR(16) NOT NULL,
-    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
-    fail_reason VARCHAR(255) NULL,
-    reservation_id BIGINT NULL,
-    reservation_no VARCHAR(64) NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    completed_at DATETIME NULL,
-    UNIQUE KEY uk_reservation_request_no (request_no),
-    UNIQUE KEY uk_reservation_request_active_key (active_key),
-    KEY idx_reservation_request_user_created (user_id, created_at),
-    KEY idx_reservation_request_status_created (status, created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE TABLE reservation_reminder_task (
@@ -295,7 +272,6 @@ ALTER TABLE sys_dict_data AUTO_INCREMENT = 20;
 ALTER TABLE resource AUTO_INCREMENT = 10;
 ALTER TABLE resource_slot AUTO_INCREMENT = 20;
 ALTER TABLE reservation AUTO_INCREMENT = 20;
-ALTER TABLE reservation_request AUTO_INCREMENT = 10;
 ALTER TABLE reservation_reminder_task AUTO_INCREMENT = 10;
 ALTER TABLE message_outbox AUTO_INCREMENT = 10;
 ALTER TABLE user_notification AUTO_INCREMENT = 10;

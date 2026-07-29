@@ -7,14 +7,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.knowledge.agent.context.SessionContextPlanner;
 import com.fragment.labbooking.knowledge.entity.AgentRun;
 import com.fragment.labbooking.knowledge.entity.AgentStep;
-import com.fragment.labbooking.knowledge.entity.QaContextTrace;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.common.util.TruncateUtil;
 import com.fragment.labbooking.knowledge.mapper.AgentRunMapper;
 import com.fragment.labbooking.knowledge.mapper.AgentStepMapper;
-import com.fragment.labbooking.knowledge.mapper.QaContextTraceMapper;
 import com.fragment.labbooking.knowledge.service.AgentRunService;
-import com.fragment.labbooking.knowledge.vo.ContextTraceVO;
 import com.fragment.labbooking.knowledge.vo.AgentRunVO;
 import com.fragment.labbooking.knowledge.vo.AgentStepVO;
 import com.fragment.labbooking.knowledge.vo.QaAnswerVO;
@@ -40,20 +37,18 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     private final AgentRunMapper agentRunMapper;
     private final AgentStepMapper agentStepMapper;
-    private final QaContextTraceMapper qaContextTraceMapper;
     private final ObjectMapper objectMapper;
 
     public AgentRunServiceImpl(AgentRunMapper agentRunMapper, AgentStepMapper agentStepMapper,
-                               QaContextTraceMapper qaContextTraceMapper,
                                ObjectMapper objectMapper) {
         this.agentRunMapper = agentRunMapper;
         this.agentStepMapper = agentStepMapper;
-        this.qaContextTraceMapper = qaContextTraceMapper;
         this.objectMapper = objectMapper;
     }
 
     @Override
     public void start(QaRecord record) {
+        // 运行轨迹只保存脱敏元数据；问题正文、答案和证据仍归 QaRecord/QaSource 管理。
         safely(record, () -> {
             AgentRun run = new AgentRun();
             run.setTraceId(record.getTraceId());
@@ -71,24 +66,15 @@ public class AgentRunServiceImpl implements AgentRunService {
             run.setModelCallCount(0);
             run.setCreatedAt(LocalDateTime.now());
             agentRunMapper.insert(run);
-            insertStep(run.getId(), 1, "REQUEST", "qa_request", SUCCEEDED, 0, null,
-                    Map.of("question_type", record.getQuestionType()));
-        });
-    }
-
-    @Override
-    public void recordContextPlan(String traceId, ContextPlan plan) {
-        safely(traceId, () -> {
-            AgentRun run = findRun(traceId);
-            if (run != null) {
-                insertStep(run.getId(), nextStepNo(run.getId()), "PLAN", "model_tool_plan", SUCCEEDED, 0, null,
-                        jsonMap(plan));
-            }
         });
     }
 
     @Override
     public void recordSessionContextPlan(String traceId, SessionContextPlanner.Plan plan) {
+        if (plan == null || !plan.compactionRecommended()) {
+            return;
+        }
+        // 仅在实际发生裁剪时记录计划；正常请求无需再写一条重复的观察步骤。
         safely(traceId, () -> {
             AgentRun run = findRun(traceId);
             if (run != null) {
@@ -100,6 +86,7 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     @Override
     public void recordToolExecution(String traceId, ToolExecution execution) {
+        // 每个工具调用独立记录，避免把多个工具结果混成一条不可审计的 Agent 步骤。
         safely(traceId, () -> {
             AgentRun run = findRun(traceId);
             if (run != null) {
@@ -117,6 +104,7 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     @Override
     public void fail(QaRecord record, Exception exception) {
+        // 业务回答失败不应因为运行轨迹写入异常而被二次覆盖。
         safely(record, () -> {
             AgentRun run = findRun(record.getTraceId());
             if (run == null) {
@@ -151,6 +139,7 @@ public class AgentRunServiceImpl implements AgentRunService {
         if (run == null) {
             return Collections.emptyList();
         }
+        // stepNo 是运行时顺序，主键只能保证写入顺序，不能表达工具调用先后。
         return agentStepMapper.selectList(new LambdaQueryWrapper<AgentStep>()
                         .eq(AgentStep::getAgentRunId, run.getId())
                         .orderByAsc(AgentStep::getStepNo)
@@ -158,30 +147,6 @@ public class AgentRunServiceImpl implements AgentRunService {
                 .stream()
                 .map(this::toStepVO)
                 .toList();
-    }
-
-    @Override
-    public ContextTraceVO getContextTrace(String traceId) {
-        if (!StringUtils.hasText(traceId)) {
-            return null;
-        }
-        QaContextTrace trace = qaContextTraceMapper.selectOne(new LambdaQueryWrapper<QaContextTrace>()
-                .eq(QaContextTrace::getTraceId, traceId)
-                .last("LIMIT 1"));
-        if (trace == null) {
-            return null;
-        }
-        ContextTraceVO vo = new ContextTraceVO();
-        vo.setTraceId(trace.getTraceId());
-        vo.setRewriteApplied(Boolean.TRUE.equals(trace.getRewriteApplied()));
-        vo.setSummaryTokens(safeMetric(trace.getSummaryTokens()));
-        vo.setHistoryTokens(safeMetric(trace.getHistoryTokens()));
-        vo.setEvidenceTokens(safeMetric(trace.getEvidenceTokens()));
-        vo.setTotalPromptTokens(safeMetric(trace.getTotalPromptTokens()));
-        vo.setSelectedSourceCount(safeMetric(trace.getSelectedSourceCount()));
-        vo.setDroppedSourceCount(safeMetric(trace.getDroppedSourceCount()));
-        vo.setCreatedAt(trace.getCreatedAt());
-        return vo;
     }
 
     private void finish(QaRecord record, QaAnswerVO answer, String route, List<StepData> steps, int sourceCount) {
@@ -194,6 +159,7 @@ public class AgentRunServiceImpl implements AgentRunService {
         run.setStatus(SUCCEEDED);
         run.setTotalLatencyMs(safeLatency(answer.getLatencyMs()));
         run.setSourceCount(sourceCount);
+        // 优先记录模型厂商返回的 usage，不再由本地字符估算伪造 token 数据。
         applyProviderUsageSnapshot(run, mapValue(safeStats(answer.getContextStats()).get("provider_usage")));
         run.setFinishedAt(LocalDateTime.now());
         agentRunMapper.updateById(run);
@@ -205,7 +171,6 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     private List<StepData> toolSteps(QaAnswerVO answer) {
-        Map<String, Object> stats = safeStats(answer.getContextStats());
         return List.of(new StepData("ANSWER", "agent_answer", SUCCEEDED, safeLatency(answer.getLatencyMs()), null,
                 Map.of("model", safeText(answer.getModelName()), "runtime", "native_function_calling")));
     }
@@ -220,6 +185,7 @@ public class AgentRunServiceImpl implements AgentRunService {
     }
 
     private int nextStepNo(Long runId) {
+        // 同一 run 的步骤按追加语义编号，管理端可直接按编号还原执行轨迹。
         Long count = agentStepMapper.selectCount(new LambdaQueryWrapper<AgentStep>()
                 .eq(AgentStep::getAgentRunId, runId));
         return (count == null ? 0 : count.intValue()) + 1;
@@ -272,7 +238,8 @@ public class AgentRunServiceImpl implements AgentRunService {
         run.setOutputTokens(outputTokens);
         run.setCachedInputTokens(safeLongValue(usage.get("cached_input_tokens")));
         run.setTotalTokens(totalTokens > 0 ? totalTokens : inputTokens + outputTokens);
-        run.setModelCallCount(usageCallCount(usage, safeMetric(run.getModelCallCount())));
+        run.setModelCallCount(usageCallCount(usage, run.getModelCallCount() == null ? 0
+                : Math.max(0, run.getModelCallCount())));
     }
 
     private int usageCallCount(Map<String, Object> usage, int fallback) {
@@ -313,6 +280,7 @@ public class AgentRunServiceImpl implements AgentRunService {
         try {
             return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
         } catch (Exception exception) {
+            // 历史审计 JSON 损坏不影响主列表展示，只隐藏该步骤的 detail。
             return Map.of("parse_error", "detail unavailable");
         }
     }
@@ -340,6 +308,7 @@ public class AgentRunServiceImpl implements AgentRunService {
         try {
             task.run();
         } catch (Exception exception) {
+            // 可观测性是旁路能力，不能阻断用户问答或将原始异常替换成审计异常。
             log.warn("Failed to persist agent run trace. qaRecordId={}, traceId={}, reason={}",
                     record == null ? null : record.getId(), record == null ? null : record.getTraceId(), exception.getMessage());
         }
@@ -355,10 +324,6 @@ public class AgentRunServiceImpl implements AgentRunService {
 
     private int safeLatency(Integer latencyMs) {
         return latencyMs == null ? 0 : Math.max(0, latencyMs);
-    }
-
-    private int safeMetric(Integer value) {
-        return value == null ? 0 : Math.max(0, value);
     }
 
     private int intValue(Object value) {

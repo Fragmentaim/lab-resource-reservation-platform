@@ -1,11 +1,8 @@
 app:
   reservation:
-    async:
-      enabled: true
-      timeout-scan-fallback-enabled: false
+    hot-redis-enabled: true
     reminder:
       enabled: true
-      scan-fallback-enabled: false
     auto-cancel:
       enabled: true
   message-outbox:
@@ -21,6 +18,9 @@ app:
       max-retry-count: 10
       initial-retry-delay-millis: 1000
       max-retry-delay-millis: 300000
+  audit:
+    mq:
+      enabled: true
   knowledge:
     storage:
       type: ${KNOWLEDGE_STORAGE_TYPE:minio}

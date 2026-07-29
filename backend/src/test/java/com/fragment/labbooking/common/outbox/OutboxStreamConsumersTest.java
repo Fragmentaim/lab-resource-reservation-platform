@@ -2,14 +2,13 @@ package com.fragment.labbooking.common.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.audit.AdminAuditLogEvent;
-import com.fragment.labbooking.common.audit.AdminAuditLogWriter;
 import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
 import com.fragment.labbooking.common.delay.ReservationReminderDelayPayload;
 import com.fragment.labbooking.common.reminder.ReservationReminderDeliveryService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
-import com.fragment.labbooking.common.reservation.ReservationCreateEvent;
+import com.fragment.labbooking.entity.AdminAuditLog;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
-import com.fragment.labbooking.service.ReservationRequestService;
+import com.fragment.labbooking.mapper.AdminAuditLogMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.messaging.support.MessageBuilder;
@@ -27,23 +26,10 @@ class OutboxStreamConsumersTest {
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @Test
-    void reservationConsumerShouldProcessOutboxPayload() throws Exception {
-        ReservationRequestService requests = mock(ReservationRequestService.class);
-        OutboxStreamConsumers consumers = consumers(requests, mock(ReservationReminderDeliveryService.class),
-                mock(ReservationAutoCancelService.class), mock(AdminAuditLogWriter.class));
-        ReservationCreateEvent event = new ReservationCreateEvent();
-        event.setRequestNo("REQ-6002");
-
-        consumers.reservationCreateConsumer().accept(message("RESERVATION_CREATE", event));
-
-        verify(requests).processPendingHotRequest("REQ-6002");
-    }
-
-    @Test
     void delayConsumerShouldDeliverReminder() throws Exception {
         ReservationReminderDeliveryService reminders = mock(ReservationReminderDeliveryService.class);
-        OutboxStreamConsumers consumers = consumers(mock(ReservationRequestService.class), reminders,
-                mock(ReservationAutoCancelService.class), mock(AdminAuditLogWriter.class));
+        OutboxStreamConsumers consumers = consumers(reminders,
+                mock(ReservationAutoCancelService.class), mock(AdminAuditLogMapper.class));
 
         consumers.reservationDelayConsumer().accept(message(DelayMessageEventTypes.RESERVATION_REMINDER,
                 new ReservationReminderDelayPayload(99L)));
@@ -53,36 +39,34 @@ class OutboxStreamConsumersTest {
 
     @Test
     void auditConsumerShouldTreatDuplicateWriteAsSuccess() throws Exception {
-        AdminAuditLogWriter writer = mock(AdminAuditLogWriter.class);
-        doThrow(new DuplicateKeyException("duplicate")).when(writer).write(any());
-        OutboxStreamConsumers consumers = consumers(mock(ReservationRequestService.class),
-                mock(ReservationReminderDeliveryService.class), mock(ReservationAutoCancelService.class), writer);
+        AdminAuditLogMapper adminAuditLogMapper = mock(AdminAuditLogMapper.class);
+        doThrow(new DuplicateKeyException("duplicate")).when(adminAuditLogMapper).insert(any(AdminAuditLog.class));
+        OutboxStreamConsumers consumers = consumers(mock(ReservationReminderDeliveryService.class),
+                mock(ReservationAutoCancelService.class), adminAuditLogMapper);
         AdminAuditLogEvent event = new AdminAuditLogEvent();
         event.setEventId("AUDIT-300");
         event.setCreatedAt(LocalDateTime.now());
 
         consumers.adminAuditConsumer().accept(message("ADMIN_AUDIT_LOG", event));
 
-        verify(writer).write(any());
+        verify(adminAuditLogMapper).insert(any(AdminAuditLog.class));
     }
 
     @Test
     void invalidEnvelopeShouldFailSoBinderCanRetryIt() {
-        OutboxStreamConsumers consumers = consumers(mock(ReservationRequestService.class),
-                mock(ReservationReminderDeliveryService.class), mock(ReservationAutoCancelService.class),
-                mock(AdminAuditLogWriter.class));
+        OutboxStreamConsumers consumers = consumers(mock(ReservationReminderDeliveryService.class), mock(ReservationAutoCancelService.class),
+                mock(AdminAuditLogMapper.class));
         MessageOutboxEnvelope invalid = new MessageOutboxEnvelope();
-        invalid.setEventType("RESERVATION_CREATE");
+        invalid.setEventType("RESERVATION_REMINDER");
 
-        assertThatThrownBy(() -> consumers.reservationCreateConsumer().accept(
+        assertThatThrownBy(() -> consumers.reservationDelayConsumer().accept(
                 MessageBuilder.withPayload(invalid).build())).isInstanceOf(IllegalArgumentException.class);
     }
 
-    private OutboxStreamConsumers consumers(ReservationRequestService requests,
-                                            ReservationReminderDeliveryService reminders,
+    private OutboxStreamConsumers consumers(ReservationReminderDeliveryService reminders,
                                             ReservationAutoCancelService autoCancel,
-                                            AdminAuditLogWriter auditWriter) {
-        return new OutboxStreamConsumers(objectMapper, requests, reminders, autoCancel, auditWriter,
+                                            AdminAuditLogMapper adminAuditLogMapper) {
+        return new OutboxStreamConsumers(objectMapper, reminders, autoCancel, adminAuditLogMapper,
                 mock(KbDocumentService.class));
     }
 

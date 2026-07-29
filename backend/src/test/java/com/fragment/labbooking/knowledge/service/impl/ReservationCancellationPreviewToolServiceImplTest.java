@@ -2,7 +2,7 @@ package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.knowledge.vo.ReservationCancellationPreviewVO;
-import com.fragment.labbooking.service.ReservationService;
+import com.fragment.labbooking.service.reservation.ReservationQueryService;
 import com.fragment.labbooking.vo.ReservationVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,13 +18,13 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class ReservationCancellationPreviewToolServiceImplTest {
 
-    @Mock private ReservationService reservationService;
+    @Mock private ReservationQueryService reservationQueryService;
     private ReservationCancellationPreviewToolServiceImpl toolService;
 
     @BeforeEach
     void setUp() {
         toolService = new ReservationCancellationPreviewToolServiceImpl();
-        ReflectionTestUtils.setField(toolService, "reservationService", reservationService);
+        ReflectionTestUtils.setField(toolService, "reservationQueryService", reservationQueryService);
     }
 
     @Test
@@ -34,7 +34,7 @@ class ReservationCancellationPreviewToolServiceImplTest {
         reservation.setReservationNo("RES-18");
         reservation.setResourceName("机器人实验室");
         reservation.setStatus("BOOKED");
-        when(reservationService.getReservationById(7L, false, 18L)).thenReturn(reservation);
+        when(reservationQueryService.getById(7L, false, 18L)).thenReturn(reservation);
 
         ReservationCancellationPreviewVO result = toolService.preview(user(), 18L);
 
@@ -43,7 +43,7 @@ class ReservationCancellationPreviewToolServiceImplTest {
         assertThat(result.isWriteExecuted()).isFalse();
         assertThat(result.isRequiresUserConfirmation()).isTrue();
         assertThat(result.isCanCancel()).isTrue();
-        verify(reservationService).getReservationById(7L, false, 18L);
+        verify(reservationQueryService).getById(7L, false, 18L);
     }
 
     private LoginUser user() {

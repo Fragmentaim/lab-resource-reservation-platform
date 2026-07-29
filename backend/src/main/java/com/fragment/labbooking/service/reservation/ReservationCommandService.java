@@ -2,7 +2,6 @@ package com.fragment.labbooking.service.reservation;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-import com.fragment.labbooking.common.constants.ReservationRequestStatusConstants;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
@@ -14,12 +13,10 @@ import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
 import com.fragment.labbooking.dto.ReservationCancelDTO;
 import com.fragment.labbooking.dto.ReservationCreateDTO;
 import com.fragment.labbooking.entity.Reservation;
-import com.fragment.labbooking.entity.ReservationRequest;
 import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.service.ReservationReminderTaskService;
-import com.fragment.labbooking.service.ReservationRequestService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
@@ -44,9 +41,7 @@ public class ReservationCommandService {
     private final ReservationPersistenceHelper persistenceHelper;
     private final ReservationReminderTaskService reminderService;
     private final ReservationAutoCancelService autoCancelService;
-    private final ReservationRequestService requestService;
     private final TransactionTemplate transactionTemplate;
-    private final boolean asyncReservationEnabled;
     private final long checkInBeforeStartMinutes;
 
     public ReservationCommandService(ReservationMapper reservationMapper,
@@ -57,9 +52,7 @@ public class ReservationCommandService {
                                      ReservationPersistenceHelper persistenceHelper,
                                      ReservationReminderTaskService reminderService,
                                      ReservationAutoCancelService autoCancelService,
-                                     ReservationRequestService requestService,
                                      PlatformTransactionManager transactionManager,
-                                     @Value("${app.reservation.async.enabled:true}") boolean asyncReservationEnabled,
                                      @Value("${app.reservation.auto-cancel.check-in-before-start-minutes:30}") long checkInBeforeStartMinutes) {
         this.reservationMapper = reservationMapper;
         this.resourceService = resourceService;
@@ -69,9 +62,7 @@ public class ReservationCommandService {
         this.persistenceHelper = persistenceHelper;
         this.reminderService = reminderService;
         this.autoCancelService = autoCancelService;
-        this.requestService = requestService;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
-        this.asyncReservationEnabled = asyncReservationEnabled;
         this.checkInBeforeStartMinutes = checkInBeforeStartMinutes;
     }
 
@@ -109,11 +100,6 @@ public class ReservationCommandService {
             hotRedis.reserveAndRegisterRollback(slot, userId);
         }
         checkDuplicate(userId, dto.getSlotId());
-
-        if (isAsyncHotSlot(slot)) {
-            return asyncResult(requestService.createPendingHotRequest(
-                    userId, dto.getResourceId(), dto.getSlotId(), slot.getSlotType()));
-        }
 
         resourceSlotService.deductQuotaIfAvailable(dto.getSlotId());
         Reservation reservation = persistenceHelper.buildReservation(
@@ -231,37 +217,8 @@ public class ReservationCommandService {
         }
     }
 
-    private boolean isAsyncHotSlot(ResourceSlot slot) {
-        return asyncReservationEnabled && ResourceSlotTypeConstants.HOT.equals(slot.getSlotType());
-    }
-
-    private ReservationSubmitVO asyncResult(ReservationRequest request) {
-        if (request == null) {
-            throw new BusinessException("预约请求创建失败");
-        }
-        if (ReservationRequestStatusConstants.FAILED.equals(request.getStatus())) {
-            throw new BusinessException(StringUtils.hasText(request.getFailReason())
-                    ? request.getFailReason() : "预约失败，请稍后重试");
-        }
-        ReservationSubmitVO result = new ReservationSubmitVO();
-        result.setAsync(true);
-        result.setRequestNo(request.getRequestNo());
-        if (ReservationRequestStatusConstants.SUCCESS.equals(request.getStatus())) {
-            result.setStatus(ReservationRequestStatusConstants.SUCCESS);
-            result.setReservationId(request.getReservationId());
-            result.setReservationNo(request.getReservationNo());
-            result.setMessage("预约成功");
-        } else {
-            result.setStatus(ReservationRequestStatusConstants.PENDING);
-            result.setMessage("热门预约请求已受理，请稍后刷新查看结果");
-        }
-        return result;
-    }
-
     private ReservationSubmitVO syncResult(Reservation reservation) {
         ReservationSubmitVO result = new ReservationSubmitVO();
-        result.setAsync(false);
-        result.setStatus(ReservationRequestStatusConstants.SUCCESS);
         result.setReservationId(reservation.getId());
         result.setReservationNo(reservation.getReservationNo());
         result.setMessage("预约成功");

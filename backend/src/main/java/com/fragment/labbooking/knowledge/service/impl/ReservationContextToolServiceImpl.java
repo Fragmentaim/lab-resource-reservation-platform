@@ -5,7 +5,7 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.service.ReservationContextToolService;
 import com.fragment.labbooking.knowledge.vo.ReservationAssistantContextVO;
 import com.fragment.labbooking.knowledge.vo.ReservationAssistantReservationVO;
-import com.fragment.labbooking.service.ReservationService;
+import com.fragment.labbooking.service.reservation.ReservationQueryService;
 import com.fragment.labbooking.vo.ReservationVO;
 import com.fragment.labbooking.vo.UserReservationOverviewVO;
 import org.springframework.beans.BeanUtils;
@@ -23,7 +23,7 @@ public class ReservationContextToolServiceImpl implements ReservationContextTool
     private static final int UPCOMING_RESERVATION_LIMIT = 3;
 
     @Autowired
-    private ReservationService reservationService;
+    private ReservationQueryService reservationQueryService;
 
     @Override
     public ReservationAssistantContextVO getReservationContext(LoginUser actor, Long subjectUserId) {
@@ -37,9 +37,10 @@ public class ReservationContextToolServiceImpl implements ReservationContextTool
             throw new BusinessException(403, "无权读取其他用户的预约上下文");
         }
 
-        UserReservationOverviewVO overview = reservationService.getUserReservationOverview(subjectUserId);
-        List<ReservationAssistantReservationVO> upcomingReservations = reservationService
-                .getReservationByUserId(subjectUserId)
+        // 返回概览和最近待执行预约，而非完整历史，避免把无关个人数据塞入模型上下文。
+        UserReservationOverviewVO overview = reservationQueryService.getUserOverview(subjectUserId);
+        List<ReservationAssistantReservationVO> upcomingReservations = reservationQueryService
+                .listByUserId(subjectUserId)
                 .stream()
                 .filter(item -> "BOOKED".equals(item.getStatus()))
                 .filter(item -> item.getEndDatetime() != null && item.getEndDatetime().isAfter(LocalDateTime.now()))

@@ -3,7 +3,7 @@ package com.fragment.labbooking.knowledge.service.impl;
 import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.vo.ReservationAssistantContextVO;
-import com.fragment.labbooking.service.ReservationService;
+import com.fragment.labbooking.service.reservation.ReservationQueryService;
 import com.fragment.labbooking.vo.ReservationVO;
 import com.fragment.labbooking.vo.UserReservationOverviewVO;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,20 +26,20 @@ import static org.mockito.Mockito.when;
 class ReservationContextToolServiceImplTest {
 
     @Mock
-    private ReservationService reservationService;
+    private ReservationQueryService reservationQueryService;
 
     private ReservationContextToolServiceImpl toolService;
 
     @BeforeEach
     void setUp() {
         toolService = new ReservationContextToolServiceImpl();
-        ReflectionTestUtils.setField(toolService, "reservationService", reservationService);
+        ReflectionTestUtils.setField(toolService, "reservationQueryService", reservationQueryService);
     }
 
     @Test
     void shouldReturnOnlyCurrentUsersReadOnlyReservationContext() {
-        when(reservationService.getUserReservationOverview(7L)).thenReturn(overview());
-        when(reservationService.getReservationByUserId(7L)).thenReturn(List.of(upcomingReservation()));
+        when(reservationQueryService.getUserOverview(7L)).thenReturn(overview());
+        when(reservationQueryService.listByUserId(7L)).thenReturn(List.of(upcomingReservation()));
 
         ReservationAssistantContextVO context = toolService.getReservationContext(user(7L), 7L);
 
@@ -51,8 +51,8 @@ class ReservationContextToolServiceImplTest {
             assertThat(item.getReservationId()).isEqualTo(18L);
             assertThat(item.getResourceName()).isEqualTo("机器人实验室");
         });
-        verify(reservationService).getUserReservationOverview(7L);
-        verify(reservationService).getReservationByUserId(7L);
+        verify(reservationQueryService).getUserOverview(7L);
+        verify(reservationQueryService).listByUserId(7L);
     }
 
     @Test
@@ -61,13 +61,13 @@ class ReservationContextToolServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("无权读取其他用户");
 
-        verify(reservationService, never()).getUserReservationOverview(8L);
+        verify(reservationQueryService, never()).getUserOverview(8L);
     }
 
     @Test
     void shouldMarkCrossUserReadAsAdminScoped() {
-        when(reservationService.getUserReservationOverview(7L)).thenReturn(overview());
-        when(reservationService.getReservationByUserId(7L)).thenReturn(List.of(upcomingReservation()));
+        when(reservationQueryService.getUserOverview(7L)).thenReturn(overview());
+        when(reservationQueryService.listByUserId(7L)).thenReturn(List.of(upcomingReservation()));
 
         ReservationAssistantContextVO context = toolService.getReservationContext(admin(1L), 7L);
 

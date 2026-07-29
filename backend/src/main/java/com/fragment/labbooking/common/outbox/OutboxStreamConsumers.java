@@ -3,17 +3,14 @@ package com.fragment.labbooking.common.outbox;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.audit.AdminAuditLogEvent;
-import com.fragment.labbooking.common.audit.AdminAuditLogWriter;
 import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
 import com.fragment.labbooking.common.delay.ReservationAutoCancelDelayPayload;
 import com.fragment.labbooking.common.delay.ReservationReminderDelayPayload;
-import com.fragment.labbooking.common.delay.ReservationRequestTimeoutDelayPayload;
 import com.fragment.labbooking.common.reminder.ReservationReminderDeliveryService;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
-import com.fragment.labbooking.common.reservation.ReservationCreateEvent;
 import com.fragment.labbooking.knowledge.mq.DocumentProcessMessage;
+import com.fragment.labbooking.mapper.AdminAuditLogMapper;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
-import com.fragment.labbooking.service.ReservationRequestService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
@@ -30,20 +27,11 @@ import java.util.function.Consumer;
 @Slf4j
 public class OutboxStreamConsumers {
 
-    private static final String TIMEOUT_FAIL_REASON = "热门预约请求处理超时，请重新提交";
-
     private final ObjectMapper objectMapper;
-    private final ReservationRequestService reservationRequestService;
     private final ReservationReminderDeliveryService reminderDeliveryService;
     private final ReservationAutoCancelService reservationAutoCancelService;
-    private final AdminAuditLogWriter adminAuditLogWriter;
+    private final AdminAuditLogMapper adminAuditLogMapper;
     private final KbDocumentService kbDocumentService;
-
-    @Bean
-    Consumer<Message<MessageOutboxEnvelope>> reservationCreateConsumer() {
-        return message -> reservationRequestService.processPendingHotRequest(
-                payload(message, ReservationCreateEvent.class).getRequestNo());
-    }
 
     @Bean
     Consumer<Message<MessageOutboxEnvelope>> reservationDelayConsumer() {
@@ -55,7 +43,7 @@ public class OutboxStreamConsumers {
         return message -> {
             AdminAuditLogEvent event = payload(message, AdminAuditLogEvent.class);
             try {
-                adminAuditLogWriter.write(event.toLog());
+                adminAuditLogMapper.insert(event.toLog());
             } catch (DuplicateKeyException duplicate) {
                 log.info("Admin audit event already consumed. eventId={}", event.getEventId());
             }
@@ -74,8 +62,6 @@ public class OutboxStreamConsumers {
         switch (envelope.getEventType()) {
             case DelayMessageEventTypes.RESERVATION_REMINDER -> reminderDeliveryService.deliver(
                     readPayload(envelope, ReservationReminderDelayPayload.class).getReminderTaskId());
-            case DelayMessageEventTypes.RESERVATION_REQUEST_TIMEOUT -> reservationRequestService.markTimedOutByRequestNo(
-                    readPayload(envelope, ReservationRequestTimeoutDelayPayload.class).getRequestNo(), TIMEOUT_FAIL_REASON);
             case DelayMessageEventTypes.RESERVATION_AUTO_CANCEL -> reservationAutoCancelService.autoCancel(
                     readPayload(envelope, ReservationAutoCancelDelayPayload.class).getReservationId());
             default -> throw new IllegalArgumentException("Unsupported delay event type: " + envelope.getEventType());

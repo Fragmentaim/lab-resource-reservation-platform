@@ -13,6 +13,7 @@ import com.fragment.labbooking.knowledge.common.constants.DocumentVisibilityCons
 import com.fragment.labbooking.knowledge.entity.KbDocument;
 import com.fragment.labbooking.knowledge.entity.KbDocumentAccess;
 import com.fragment.labbooking.knowledge.entity.KbDocumentProcessEvent;
+import com.fragment.labbooking.knowledge.entity.KbChunk;
 import com.fragment.labbooking.knowledge.mapper.KbChunkMapper;
 import com.fragment.labbooking.knowledge.mapper.KbDocumentAccessMapper;
 import com.fragment.labbooking.knowledge.mapper.KbDocumentMapper;
@@ -33,12 +34,14 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 @ExtendWith(MockitoExtension.class)
 class KbDocumentServiceImplTest {
@@ -150,6 +153,27 @@ class KbDocumentServiceImplTest {
         assertThat(document.getChunkCount()).isEqualTo(8);
         assertThat(document.getParserProvider()).isEqualTo("docling");
         assertThat(document.getParseQuality()).contains("quality_score");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldPersistChunksInBoundedMultiValueBatches() {
+        List<AiServiceClient.ChunkResult> chunks = IntStream.range(0, 201)
+                .mapToObj(index -> new AiServiceClient.ChunkResult(
+                        "chunk-" + index, index, "content-" + index, 10, 1,
+                        "规则", List.of("规则"), "hash-" + index, index * 10,
+                        index * 10 + 9, "vector-" + index))
+                .toList();
+        AiServiceClient.ProcessResult result = new AiServiceClient.ProcessResult(
+                chunks.size(), "READY", "v1", List.of(), List.of(), chunks, null);
+
+        ReflectionTestUtils.invokeMethod(service, "saveChunks", 7L, result);
+
+        ArgumentCaptor<List<KbChunk>> batches = ArgumentCaptor.forClass(List.class);
+        verify(kbChunkMapper, times(2)).insertBatch(batches.capture());
+        assertThat(batches.getAllValues()).extracting(List::size).containsExactly(200, 1);
+        assertThat(batches.getAllValues().get(0).get(0).getChunkUid()).isEqualTo("chunk-0");
+        assertThat(batches.getAllValues().get(1).get(0).getChunkUid()).isEqualTo("chunk-200");
     }
 
     private KbDocument document(Long id, String visibility, Long uploaderId) {

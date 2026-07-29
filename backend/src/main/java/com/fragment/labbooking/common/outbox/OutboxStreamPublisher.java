@@ -15,7 +15,6 @@ import org.springframework.util.StringUtils;
 @RequiredArgsConstructor
 public class OutboxStreamPublisher {
 
-    static final String RESERVATION_OUTPUT = "reservationCreate-out-0";
     static final String DELAY_OUTPUT = "reservationDelay-out-0";
     static final String AUDIT_OUTPUT = "adminAudit-out-0";
     static final String DOCUMENT_OUTPUT = "documentProcess-out-0";
@@ -23,9 +22,6 @@ public class OutboxStreamPublisher {
     private final StreamBridge streamBridge;
     private final MessageOutboxProperties outboxProperties;
     private final DocumentProcessProperties documentProcessProperties;
-
-    @Value("${app.reservation.async.topic:reservation-create}")
-    private String reservationTopic;
 
     @Value("${app.audit.mq.topic:admin-audit-log}")
     private String auditTopic;
@@ -48,9 +44,6 @@ public class OutboxStreamPublisher {
     }
 
     private String bindingFor(String topic) {
-        if (reservationTopic.equals(topic)) {
-            return RESERVATION_OUTPUT;
-        }
         if (outboxProperties.getDelayTopic().equals(topic)) {
             return DELAY_OUTPUT;
         }

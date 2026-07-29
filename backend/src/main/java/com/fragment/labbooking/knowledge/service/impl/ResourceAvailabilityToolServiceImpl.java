@@ -42,6 +42,7 @@ public class ResourceAvailabilityToolServiceImpl implements ResourceAvailability
         query.setStatus("AVAILABLE");
         int actualLimit = Math.min(Math.max(limit, 1), MAX_LIMIT);
 
+        // 先按资源条件筛选，再一次性查这些资源的未来 OPEN 时段，避免逐资源查时段。
         List<ResourceVO> resources = resourceService.search(query);
         Map<Long, ResourceVO> resourceById = new HashMap<>();
         for (ResourceVO resource : resources) {
@@ -53,6 +54,7 @@ public class ResourceAvailabilityToolServiceImpl implements ResourceAvailability
         List<AvailableResourceSlotVO> slots = List.of();
         if (!resourceById.isEmpty()) {
             LocalDateTime now = LocalDateTime.now();
+            // 可用性是实时业务数据，直接查询当前剩余名额，不复用历史会话中的旧结果。
             slots = resourceSlotService.list(new LambdaQueryWrapper<ResourceSlot>()
                             .in(ResourceSlot::getResourceId, resourceById.keySet())
                             .eq(ResourceSlot::getStatus, ResourceSlotStatusConstants.OPEN)

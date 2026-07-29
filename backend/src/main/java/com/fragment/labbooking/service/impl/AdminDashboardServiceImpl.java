@@ -1,29 +1,23 @@
 package com.fragment.labbooking.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.fragment.labbooking.common.constants.ReservationRequestStatusConstants;
 import com.fragment.labbooking.common.constants.ReservationStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.entity.MessageOutbox;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationReminderTask;
-import com.fragment.labbooking.entity.ReservationRequest;
 import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
-import com.fragment.labbooking.entity.SysUser;
 import com.fragment.labbooking.entity.UserNotification;
 import com.fragment.labbooking.mapper.MessageOutboxMapper;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.mapper.ReservationReminderTaskMapper;
-import com.fragment.labbooking.mapper.ReservationRequestMapper;
 import com.fragment.labbooking.mapper.ResourceMapper;
 import com.fragment.labbooking.mapper.ResourceSlotMapper;
-import com.fragment.labbooking.mapper.SysUserMapper;
 import com.fragment.labbooking.mapper.UserNotificationMapper;
 import com.fragment.labbooking.service.AdminDashboardService;
 import com.fragment.labbooking.vo.AdminDashboardHotSlotVO;
-import com.fragment.labbooking.vo.AdminDashboardRequestVO;
 import com.fragment.labbooking.vo.AdminDashboardResourceHeatVO;
 import com.fragment.labbooking.vo.AdminDashboardVO;
 import org.springframework.stereotype.Service;
@@ -42,35 +36,28 @@ import java.util.stream.Collectors;
 public class AdminDashboardServiceImpl implements AdminDashboardService {
 
     private static final String STATUS_PENDING = "PENDING";
-    private static final String RESERVATION_CREATE_EVENT_TYPE = "RESERVATION_CREATE";
     private static final String ADMIN_AUDIT_LOG_EVENT_TYPE = "ADMIN_AUDIT_LOG";
     private static final String RESOURCE_AVAILABLE = "AVAILABLE";
 
     private final ReservationMapper reservationMapper;
     private final ResourceMapper resourceMapper;
     private final ResourceSlotMapper resourceSlotMapper;
-    private final ReservationRequestMapper reservationRequestMapper;
     private final ReservationReminderTaskMapper reservationReminderTaskMapper;
     private final UserNotificationMapper userNotificationMapper;
     private final MessageOutboxMapper messageOutboxMapper;
-    private final SysUserMapper sysUserMapper;
 
     public AdminDashboardServiceImpl(ReservationMapper reservationMapper,
                                      ResourceMapper resourceMapper,
                                      ResourceSlotMapper resourceSlotMapper,
-                                     ReservationRequestMapper reservationRequestMapper,
                                      ReservationReminderTaskMapper reservationReminderTaskMapper,
                                      UserNotificationMapper userNotificationMapper,
-                                     MessageOutboxMapper messageOutboxMapper,
-                                     SysUserMapper sysUserMapper) {
+                                     MessageOutboxMapper messageOutboxMapper) {
         this.reservationMapper = reservationMapper;
         this.resourceMapper = resourceMapper;
         this.resourceSlotMapper = resourceSlotMapper;
-        this.reservationRequestMapper = reservationRequestMapper;
         this.reservationReminderTaskMapper = reservationReminderTaskMapper;
         this.userNotificationMapper = userNotificationMapper;
         this.messageOutboxMapper = messageOutboxMapper;
-        this.sysUserMapper = sysUserMapper;
     }
 
     @Override
@@ -91,16 +78,12 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
         overview.setOpenSlotCount(countSlots(null, ResourceSlotStatusConstants.OPEN));
         overview.setHotOpenSlotCount(countSlots(ResourceSlotTypeConstants.HOT, ResourceSlotStatusConstants.OPEN));
 
-        overview.setPendingAsyncRequestCount(countReservationRequests(ReservationRequestStatusConstants.PENDING));
-        overview.setDispatchPendingRequestCount(countPendingDispatchRequests());
-        overview.setFailedAsyncRequestCount(countReservationRequests(ReservationRequestStatusConstants.FAILED));
         overview.setPendingReminderCount(countReminderTasks(STATUS_PENDING));
         overview.setUnreadNotificationCount(countUnreadNotifications());
         overview.setPendingAuditOutboxCount(countPendingAuditOutbox());
 
         overview.setHotSlots(buildHotSlots(now));
         overview.setTopResources(buildTopResources(recentWindowStart));
-        overview.setRecentRequests(buildRecentRequests());
         return overview;
     }
 
@@ -120,17 +103,6 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
         return resourceSlotMapper.selectCount(new LambdaQueryWrapper<ResourceSlot>()
                 .eq(StringUtils.hasText(slotType), ResourceSlot::getSlotType, slotType)
                 .eq(StringUtils.hasText(status), ResourceSlot::getStatus, status));
-    }
-
-    private long countReservationRequests(String status) {
-        return reservationRequestMapper.selectCount(new LambdaQueryWrapper<ReservationRequest>()
-                .eq(StringUtils.hasText(status), ReservationRequest::getStatus, status));
-    }
-
-    private long countPendingDispatchRequests() {
-        return messageOutboxMapper.selectCount(new LambdaQueryWrapper<MessageOutbox>()
-                .eq(MessageOutbox::getEventType, RESERVATION_CREATE_EVENT_TYPE)
-                .eq(MessageOutbox::getStatus, STATUS_PENDING));
     }
 
     private long countReminderTasks(String status) {
@@ -229,60 +201,12 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
                 .collect(Collectors.toList());
     }
 
-    private List<AdminDashboardRequestVO> buildRecentRequests() {
-        List<ReservationRequest> requests = reservationRequestMapper.selectList(new LambdaQueryWrapper<ReservationRequest>()
-                .orderByDesc(ReservationRequest::getCreatedAt)
-                .orderByDesc(ReservationRequest::getId)
-                .last("LIMIT 8"));
-        if (requests.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        Map<Long, Resource> resourceMap = loadResourceMap(requests.stream()
-                .map(ReservationRequest::getResourceId)
-                .collect(Collectors.toSet()));
-        Map<Long, SysUser> userMap = loadUserMap(requests.stream()
-                .map(ReservationRequest::getUserId)
-                .collect(Collectors.toSet()));
-
-        return requests.stream().map(request -> {
-            AdminDashboardRequestVO item = new AdminDashboardRequestVO();
-            item.setRequestNo(request.getRequestNo());
-            item.setUserId(request.getUserId());
-            item.setResourceId(request.getResourceId());
-            item.setSlotId(request.getSlotId());
-            item.setStatus(request.getStatus());
-            item.setFailReason(request.getFailReason());
-            item.setCreatedAt(request.getCreatedAt());
-            item.setCompletedAt(request.getCompletedAt());
-
-            SysUser user = userMap.get(request.getUserId());
-            if (user != null) {
-                item.setUsername(user.getUsername());
-            }
-
-            Resource resource = resourceMap.get(request.getResourceId());
-            if (resource != null) {
-                item.setResourceName(resource.getResourceName());
-            }
-            return item;
-        }).collect(Collectors.toList());
-    }
-
     private Map<Long, Resource> loadResourceMap(Set<Long> resourceIds) {
         if (resourceIds == null || resourceIds.isEmpty()) {
             return Collections.emptyMap();
         }
         return resourceMapper.selectBatchIds(resourceIds).stream()
                 .collect(Collectors.toMap(Resource::getId, Function.identity()));
-    }
-
-    private Map<Long, SysUser> loadUserMap(Set<Long> userIds) {
-        if (userIds == null || userIds.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        return sysUserMapper.selectBatchIds(userIds).stream()
-                .collect(Collectors.toMap(SysUser::getId, Function.identity()));
     }
 
     private String toPressureLevel(int occupancyRate) {

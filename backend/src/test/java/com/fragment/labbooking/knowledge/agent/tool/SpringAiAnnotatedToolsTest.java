@@ -20,7 +20,7 @@ import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -54,14 +54,13 @@ class SpringAiAnnotatedToolsTest {
                 mock(ReservationCancellationPreviewToolService.class),
                 draftService);
         knowledgeTools = new KnowledgeAgentTools(runtime, documentService, aiServiceClient, new ObjectMapper());
-        when(runtime.execute(anyString(), anyString(), anyMap(), any(), any())).thenAnswer(invocation -> {
-            Supplier<AgentToolResult> action = invocation.getArgument(4);
-            return action.get().output();
+        when(runtime.executeFromToolContext(anyString(), anyString(), anyMap(), any(), any())).thenAnswer(invocation -> {
+            Function<AgentContext, AgentToolResult> action = invocation.getArgument(4);
+            return action.apply(execution).output();
         });
         LoginUser actor = new LoginUser(7L, "user7", "用户", "USER", "13800000000");
         execution = new AgentContext(actor, "预约规则", "trace", 8);
         toolContext = new ToolContext(Map.of(AgentToolRuntime.EXECUTION_CONTEXT_KEY, execution));
-        when(runtime.requireExecutionContext(any())).thenReturn(execution);
     }
 
     @Test

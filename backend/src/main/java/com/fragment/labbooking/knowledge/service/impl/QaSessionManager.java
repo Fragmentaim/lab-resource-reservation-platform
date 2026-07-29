@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.knowledge.agent.context.ModelContextProfileProperties;
 import com.fragment.labbooking.knowledge.agent.context.SessionContextPlanner;
+import com.fragment.labbooking.knowledge.agent.context.SessionContext;
 import com.fragment.labbooking.knowledge.entity.QaRecord;
 import com.fragment.labbooking.knowledge.entity.QaSession;
 import com.fragment.labbooking.knowledge.mapper.QaRecordMapper;
@@ -49,15 +50,17 @@ public class QaSessionManager {
         this.compactionStrategy = compactionStrategy;
     }
 
-    public PreparedContext prepare(String sessionId, Long userId, String question) {
+    public SessionContext prepare(String sessionId, Long userId, String question) {
+        // 每轮请求先根据真实模型窗口生成计划；只有空间不足才同步压缩旧轮次。
         QaSession initial = resolve(sessionId, userId, question);
         QaSession session = initial;
         List<Map<String, Object>> summaryUsages = new ArrayList<>();
         for (int attempt = 0; attempt < 3; attempt++) {
             SessionContextPlanner.Plan plan = plan(session, question);
             if (!plan.compactionRecommended() || "SLIDING_WINDOW".equalsIgnoreCase(compactionStrategy)) {
-                return new PreparedContext(session, plan, aggregateUsage(summaryUsages));
+                return toSessionContext(session, plan, aggregateUsage(summaryUsages));
             }
+            // 乐观锁冲突后重新读取会话并重新规划，避免两个并发请求重复压缩同一批轮次。
             summaryUsages.add(compact(session, plan).providerUsage());
             session = sessionMapper.selectById(session.getSessionId());
             assertOwned(session, initial.getUserId());
@@ -65,13 +68,10 @@ public class QaSessionManager {
         throw new BusinessException("会话上下文正在更新，请稍后重试");
     }
 
-    public int nextTurnNo(QaSession session) {
-        return (session.getTurnCount() == null ? 0 : session.getTurnCount()) + 1;
-    }
-
     public void updateAfterAnswer(String sessionId, Long userId, String question, String traceId) {
         QaSession session = sessionMapper.selectById(sessionId);
         if (session == null) return;
+        // 以已成功回答的 QaRecord 为准重算轮数，失败记录不进入后续上下文。
         long answeredTurns = recordMapper.selectCount(new LambdaQueryWrapper<QaRecord>()
                 .eq(QaRecord::getSessionId, sessionId)
                 .eq(QaRecord::getUserId, userId)
@@ -105,6 +105,7 @@ public class QaSessionManager {
     public void delete(String sessionId, Long userId) {
         QaSession session = sessionMapper.selectById(sessionId);
         assertOwned(session, userId);
+        // 软删除保留问答和审计数据，避免删除会话后丢失工具调用追踪。
         session.setDeleted(true);
         session.setUpdatedAt(LocalDateTime.now());
         sessionMapper.updateById(session);
@@ -116,6 +117,7 @@ public class QaSessionManager {
             assertOwned(session, userId);
             return session;
         }
+        // 未传 sessionId 时才创建会话；首轮问题作为可读标题，不参与权限判断。
         LocalDateTime now = LocalDateTime.now();
         QaSession session = new QaSession();
         session.setSessionId(UUID.randomUUID().toString());
@@ -138,6 +140,7 @@ public class QaSessionManager {
                 .eq(QaRecord::getUserId, session.getUserId())
                 .eq(QaRecord::getStatus, "ANSWERED")
                 .orderByAsc(QaRecord::getCreatedAt).orderByAsc(QaRecord::getId));
+        // summaryTurnCount 之前的轮次已在交接记录里，不能再把原文重复塞进提示词。
         int covered = Math.min(records.size(), Math.max(0,
                 session.getSummaryTurnCount() == null ? 0 : session.getSummaryTurnCount()));
         List<SessionContextPlanner.Turn> turns = records.stream().skip(covered)
@@ -161,6 +164,7 @@ public class QaSessionManager {
         update.setSummary(result.summary());
         update.setSummaryTurnCount(covered + plan.deferredTurns().size());
         update.setUpdatedAt(LocalDateTime.now());
+        // 以旧的 summaryTurnCount 做 CAS；摘要被其他请求更新时，本次结果不能覆盖它。
         int updated = sessionMapper.update(update, new LambdaUpdateWrapper<QaSession>()
                 .eq(QaSession::getSessionId, session.getSessionId())
                 .eq(QaSession::getUserId, session.getUserId())
@@ -191,6 +195,12 @@ public class QaSessionManager {
         return result;
     }
 
+    private SessionContext toSessionContext(QaSession session, SessionContextPlanner.Plan plan,
+                                            Map<String, Object> summaryUsage) {
+        return new SessionContext(session.getSessionId(), session.getSummary(), plan.historyMessages(),
+                plan, summaryUsage);
+    }
+
     private long number(Object value) {
         if (value instanceof Number number) return Math.max(0, number.longValue());
         try { return Math.max(0, Long.parseLong(String.valueOf(value))); }
@@ -208,6 +218,4 @@ public class QaSessionManager {
         return text.length() <= 30 ? text : text.substring(0, 30);
     }
 
-    public record PreparedContext(QaSession session, SessionContextPlanner.Plan plan,
-                                  Map<String, Object> summaryProviderUsage) { }
 }
