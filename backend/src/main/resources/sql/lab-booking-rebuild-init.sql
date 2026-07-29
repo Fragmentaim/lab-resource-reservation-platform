@@ -15,6 +15,7 @@ DROP TABLE IF EXISTS delay_message_outbox;
 DROP TABLE IF EXISTS message_outbox;
 DROP TABLE IF EXISTS user_notification;
 DROP TABLE IF EXISTS reservation_reminder_task;
+DROP TABLE IF EXISTS reservation_request;
 DROP TABLE IF EXISTS reservation;
 DROP TABLE IF EXISTS resource_slot;
 DROP TABLE IF EXISTS resource;
@@ -116,6 +117,22 @@ CREATE TABLE reservation (
     KEY idx_reservation_created_at (created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+CREATE TABLE reservation_request (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    request_id VARCHAR(36) NOT NULL,
+    user_id BIGINT NOT NULL,
+    resource_id BIGINT NOT NULL,
+    slot_id BIGINT NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    reservation_id BIGINT NULL,
+    reject_code VARCHAR(64) NULL,
+    reject_reason VARCHAR(255) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME NULL,
+    UNIQUE KEY uk_reservation_request_id (request_id),
+    KEY idx_reservation_request_user_created (user_id, created_at)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 CREATE TABLE reservation_reminder_task (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     reservation_id BIGINT NOT NULL,
@@ -140,6 +157,7 @@ CREATE TABLE reservation_reminder_task (
 CREATE TABLE user_notification (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT NOT NULL,
+    event_id VARCHAR(191) NULL,
     type VARCHAR(32) NOT NULL,
     title VARCHAR(128) NOT NULL,
     content VARCHAR(512) NOT NULL,
@@ -148,6 +166,7 @@ CREATE TABLE user_notification (
     is_read TINYINT NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     read_at DATETIME NULL,
+    UNIQUE KEY uk_user_notification_event_id (event_id),
     UNIQUE KEY uk_user_notification_reminder_task (reminder_task_id),
     KEY idx_user_notification_user_read_created (user_id, is_read, created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

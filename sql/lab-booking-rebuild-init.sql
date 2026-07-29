@@ -12,8 +12,10 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS admin_audit_log;
 DROP TABLE IF EXISTS delay_message_outbox;
+DROP TABLE IF EXISTS message_outbox;
 DROP TABLE IF EXISTS user_notification;
 DROP TABLE IF EXISTS reservation_reminder_task;
+DROP TABLE IF EXISTS reservation_request;
 DROP TABLE IF EXISTS reservation;
 DROP TABLE IF EXISTS resource_slot;
 DROP TABLE IF EXISTS resource;
@@ -115,6 +117,22 @@ CREATE TABLE reservation (
     KEY idx_reservation_created_at (created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+CREATE TABLE reservation_request (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    request_id VARCHAR(36) NOT NULL,
+    user_id BIGINT NOT NULL,
+    resource_id BIGINT NOT NULL,
+    slot_id BIGINT NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    reservation_id BIGINT NULL,
+    reject_code VARCHAR(64) NULL,
+    reject_reason VARCHAR(255) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME NULL,
+    UNIQUE KEY uk_reservation_request_id (request_id),
+    KEY idx_reservation_request_user_created (user_id, created_at)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 CREATE TABLE reservation_reminder_task (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     reservation_id BIGINT NOT NULL,
@@ -139,6 +157,7 @@ CREATE TABLE reservation_reminder_task (
 CREATE TABLE user_notification (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT NOT NULL,
+    event_id VARCHAR(191) NULL,
     type VARCHAR(32) NOT NULL,
     title VARCHAR(128) NOT NULL,
     content VARCHAR(512) NOT NULL,
@@ -147,30 +166,34 @@ CREATE TABLE user_notification (
     is_read TINYINT NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     read_at DATETIME NULL,
+    UNIQUE KEY uk_user_notification_event_id (event_id),
     UNIQUE KEY uk_user_notification_reminder_task (reminder_task_id),
     KEY idx_user_notification_user_read_created (user_id, is_read, created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-CREATE TABLE delay_message_outbox (
+CREATE TABLE message_outbox (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    event_id VARCHAR(128) NOT NULL,
+    event_id VARCHAR(191) NOT NULL,
+    aggregate_type VARCHAR(64) NOT NULL,
+    aggregate_id VARCHAR(128) NOT NULL,
     event_type VARCHAR(64) NOT NULL,
-    business_key VARCHAR(128) NOT NULL,
     topic VARCHAR(128) NOT NULL,
     tag VARCHAR(64) NOT NULL,
     message_key VARCHAR(128) NOT NULL,
-    deliver_at DATETIME NOT NULL,
     payload TEXT NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    available_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     retry_count INT NOT NULL DEFAULT 0,
+    locked_until DATETIME NULL,
     last_error_message VARCHAR(512) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     sent_at DATETIME NULL,
-    UNIQUE KEY uk_delay_message_event_id (event_id),
-    KEY idx_delay_message_status_id (status, id),
-    KEY idx_delay_message_event_type_status (event_type, status),
-    KEY idx_delay_message_deliver_at (deliver_at)
+    UNIQUE KEY uk_message_outbox_event_id (event_id),
+    KEY idx_message_outbox_status_available_id (status, available_at, id),
+    KEY idx_message_outbox_status_locked_until (status, locked_until),
+    KEY idx_message_outbox_aggregate (aggregate_type, aggregate_id),
+    KEY idx_message_outbox_event_type_status (event_type, status)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE TABLE admin_audit_log (
@@ -269,5 +292,5 @@ ALTER TABLE resource AUTO_INCREMENT = 10;
 ALTER TABLE resource_slot AUTO_INCREMENT = 20;
 ALTER TABLE reservation AUTO_INCREMENT = 20;
 ALTER TABLE reservation_reminder_task AUTO_INCREMENT = 10;
-ALTER TABLE delay_message_outbox AUTO_INCREMENT = 10;
+ALTER TABLE message_outbox AUTO_INCREMENT = 10;
 ALTER TABLE user_notification AUTO_INCREMENT = 10;
