@@ -40,6 +40,20 @@ class OutboxStreamPublisherTest {
                 .hasMessageContaining("No RocketMQ output binding");
     }
 
+    @Test
+    void publishShouldRouteReservationResultsToResultBinding() {
+        StreamBridge bridge = mock(StreamBridge.class);
+        OutboxStreamPublisher publisher = new OutboxStreamPublisher(
+                bridge, new MessageOutboxProperties(), new DocumentProcessProperties());
+        ReflectionTestUtils.setField(publisher, "auditTopic", "admin-audit-log");
+        ReflectionTestUtils.setField(publisher, "reservationResultTopic", "reservation-result");
+        when(bridge.send(eq(OutboxStreamPublisher.RESERVATION_RESULT_OUTPUT), any())).thenReturn(true);
+
+        publisher.publish(outbox("reservation-result"), envelope());
+
+        verify(bridge).send(eq(OutboxStreamPublisher.RESERVATION_RESULT_OUTPUT), any());
+    }
+
     private MessageOutbox outbox(String topic) {
         MessageOutbox outbox = new MessageOutbox();
         outbox.setEventId("EVT-1");

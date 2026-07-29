@@ -14,6 +14,7 @@ db_name="lab_booking_loadtest"
 db_host="${LOADTEST_MYSQL_HOST:-127.0.0.1}"
 db_port="${LOADTEST_MYSQL_PORT:-3306}"
 redis_db="${LOADTEST_REDIS_DATABASE:-0}"
+retention_hours="${HOT_CACHE_RETENTION_HOURS:-24}"
 mysql_exec() {
   MYSQL_PWD="$LOADTEST_DB_PASSWORD" mysql --protocol=TCP --host="$db_host" --port="$db_port" \
     --user="$LOADTEST_DB_USERNAME" --database="$db_name" --batch --skip-column-names "$@"
@@ -26,20 +27,26 @@ if [[ "$slot_type" != "HOT" || "$status" != "OPEN" || ! "$resource_id" =~ ^[1-9]
   exit 1
 fi
 
-stock_key="reservation:hot:stock:$SLOT_ID"
-users_key="reservation:hot:users:$SLOT_ID"
-loaded_key="reservation:hot:loaded:$SLOT_ID"
-snapshot_key="reservation:hot:snapshot:$SLOT_ID"
-redis-cli -n "$redis_db" DEL "$stock_key" "$users_key" "$loaded_key" "$snapshot_key" >/dev/null
+snapshot_key="reservation:hot:v2:snapshot:$SLOT_ID"
+stock_key="reservation:hot:v2:stock:$SLOT_ID"
+users_key="reservation:hot:v2:users:$SLOT_ID"
+now_millis="$(( $(date +%s) * 1000 ))"
+cache_ttl_millis="$(( end_at_millis - now_millis + retention_hours * 3600000 ))"
+if (( cache_ttl_millis < 60000 )); then cache_ttl_millis=60000; fi
+
+redis-cli -n "$redis_db" DEL "$stock_key" "$users_key" "$snapshot_key" >/dev/null
 redis-cli -n "$redis_db" HSET "$snapshot_key" \
   resourceId "$resource_id" \
   status "$status" \
   openAtMillis "$open_at_millis" \
   endAtMillis "$end_at_millis" >/dev/null
-redis-cli -n "$redis_db" SET "$stock_key" "$remain_quota" >/dev/null
+redis-cli -n "$redis_db" PEXPIRE "$snapshot_key" "$cache_ttl_millis" >/dev/null
+redis-cli -n "$redis_db" SET "$stock_key" "$remain_quota" PX "$cache_ttl_millis" >/dev/null
 while IFS= read -r user_id; do
-  [[ -n "$user_id" ]] && redis-cli -n "$redis_db" SADD "$users_key" "$user_id" >/dev/null
+  [[ -n "$user_id" ]] && redis-cli -n "$redis_db" HSET "$users_key" "$user_id" BOOKED >/dev/null
 done < <(mysql_exec -e "SELECT user_id FROM reservation WHERE slot_id = $SLOT_ID AND status = 'BOOKED';")
-redis-cli -n "$redis_db" SET "$loaded_key" 1 >/dev/null
+if redis-cli -n "$redis_db" EXISTS "$users_key" | grep -q '^1$'; then
+  redis-cli -n "$redis_db" PEXPIRE "$users_key" "$cache_ttl_millis" >/dev/null
+fi
 
-echo "Redis cache and HOT-slot snapshot preheated for slot=$SLOT_ID, redisDb=$redis_db, remainingQuota=$remain_quota"
+echo "Redis v2 HOT snapshot preheated for slot=$SLOT_ID, redisDb=$redis_db, remainingQuota=$remain_quota"

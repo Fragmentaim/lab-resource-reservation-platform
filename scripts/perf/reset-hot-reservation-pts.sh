@@ -14,6 +14,7 @@ set +a
 db_name="lab_booking_loadtest"
 db_host="${LOADTEST_MYSQL_HOST:-127.0.0.1}"
 db_port="${LOADTEST_MYSQL_PORT:-3306}"
+redis_db="${LOADTEST_REDIS_DATABASE:-0}"
 mysql_exec() {
   MYSQL_PWD="$LOADTEST_DB_PASSWORD" mysql --protocol=TCP --host="$db_host" --port="$db_port" \
     --user="$LOADTEST_DB_USERNAME" --database="$db_name" --batch --skip-column-names "$@"
@@ -29,8 +30,19 @@ fi
 before_booked="$(mysql_exec -e "SELECT COUNT(*) FROM reservation WHERE slot_id = $SLOT_ID AND status = 'BOOKED';")"
 before_requests="$(mysql_exec -e "SELECT COUNT(*) FROM reservation_request WHERE slot_id = $SLOT_ID;")"
 
+while IFS= read -r request_id; do
+  [[ -z "$request_id" ]] && continue
+  redis-cli -n "$redis_db" DEL "reservation:request:v2:$request_id" >/dev/null
+  redis-cli -n "$redis_db" ZREM "reservation:pending:v2" "$request_id" >/dev/null
+done < <(mysql_exec -e "SELECT request_id FROM reservation_request WHERE slot_id = $SLOT_ID;")
+
 mysql_exec -e "
 START TRANSACTION;
+DELETE n
+  FROM user_notification n
+  JOIN reservation_request q
+    ON n.event_id = CONCAT('RESERVATION_RESULT:RESERVATION_REQUEST:', q.request_id)
+ WHERE q.slot_id = $SLOT_ID;
 DELETE n
   FROM user_notification n
   JOIN reservation r ON n.related_reservation_id = r.id
@@ -39,6 +51,11 @@ DELETE n
   FROM user_notification n
   JOIN reservation_reminder_task t ON n.reminder_task_id = t.id
  WHERE t.slot_id = $SLOT_ID;
+DELETE mo
+  FROM message_outbox mo
+  JOIN reservation_request q
+    ON mo.aggregate_type = 'RESERVATION_REQUEST' AND mo.aggregate_id = q.request_id
+ WHERE q.slot_id = $SLOT_ID;
 DELETE mo
   FROM message_outbox mo
   JOIN reservation r ON mo.aggregate_type = 'RESERVATION' AND CAST(mo.aggregate_id AS UNSIGNED) = r.id

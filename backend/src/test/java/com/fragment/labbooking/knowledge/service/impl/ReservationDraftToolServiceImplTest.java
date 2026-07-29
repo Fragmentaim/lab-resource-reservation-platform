@@ -22,6 +22,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -66,7 +68,7 @@ class ReservationDraftToolServiceImplTest {
         assertThat(draft.isRequiresUserConfirmation()).isTrue();
         assertThat(draft.getConfirmationEndpoint()).contains(draft.getConfirmationToken());
         verify(valueOperations).set(eq("agent:reservation:draft:" + draft.getConfirmationToken()), anyString(), any());
-        verify(reservationCommandService, never()).create(any(), any());
+        verify(reservationCommandService, never()).create(any(), anyString(), any());
     }
 
     @Test
@@ -81,14 +83,17 @@ class ReservationDraftToolServiceImplTest {
         when(confirmLock.isHeldByCurrentThread()).thenReturn(true);
         ReservationSubmitVO submit = new ReservationSubmitVO();
         submit.setReservationNo("RES-100");
-        when(reservationCommandService.create(eq(7L), any())).thenReturn(submit);
+        when(reservationCommandService.create(eq(7L), anyString(), any())).thenReturn(submit);
 
         ReservationSubmitVO result = draftToolService.confirmDraft(user(7L), token);
 
         assertThat(result.getReservationNo()).isEqualTo("RES-100");
+        ArgumentCaptor<String> requestId = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<com.fragment.labbooking.dto.ReservationCreateDTO> dto =
                 ArgumentCaptor.forClass(com.fragment.labbooking.dto.ReservationCreateDTO.class);
-        verify(reservationCommandService).create(eq(7L), dto.capture());
+        verify(reservationCommandService).create(eq(7L), requestId.capture(), dto.capture());
+        assertThat(requestId.getValue()).isEqualTo(UUID.nameUUIDFromBytes(
+                ("reservation-draft:" + token).getBytes(StandardCharsets.UTF_8)).toString());
         assertThat(dto.getValue().getResourceId()).isEqualTo(11L);
         assertThat(dto.getValue().getSlotId()).isEqualTo(22L);
         verify(redisTemplate).delete("agent:reservation:draft:" + token);
@@ -107,7 +112,7 @@ class ReservationDraftToolServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("其他用户");
 
-        verify(reservationCommandService, never()).create(any(), any());
+        verify(reservationCommandService, never()).create(any(), anyString(), any());
     }
 
     private Resource resource() {

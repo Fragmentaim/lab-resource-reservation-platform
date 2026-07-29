@@ -9,7 +9,6 @@ import com.fragment.labbooking.mapper.ReservationMapper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DuplicateKeyException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,15 +37,13 @@ class ReservationPersistenceHelperTest {
         ReservationPersistenceHelper helper = helper(mapper, numberGenerator);
         Reservation reservation = reservation();
         when(numberGenerator.nextReservationNo()).thenReturn("R-1", "R-2");
-        when(mapper.insert(reservation))
-                .thenThrow(new DuplicateKeyException("duplicate key"))
-                .thenReturn(1);
+        when(mapper.insertIgnore(reservation)).thenReturn(0, 1);
         when(mapper.selectOne(any())).thenReturn(null);
 
         helper.saveWithRetry(reservation);
 
         assertThat(reservation.getReservationNo()).isEqualTo("R-2");
-        verify(mapper, times(2)).insert(reservation);
+        verify(mapper, times(2)).insertIgnore(reservation);
     }
 
     @Test
@@ -56,14 +53,14 @@ class ReservationPersistenceHelperTest {
         ReservationPersistenceHelper helper = helper(mapper, numberGenerator);
         Reservation reservation = reservation();
         when(numberGenerator.nextReservationNo()).thenReturn("R-1");
-        when(mapper.insert(reservation)).thenThrow(new DuplicateKeyException("any driver message"));
+        when(mapper.insertIgnore(reservation)).thenReturn(0);
         when(mapper.selectOne(any())).thenReturn(existingReservation());
 
         assertThatThrownBy(() -> helper.saveWithRetry(reservation))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("当前用户已预约该时段");
 
-        verify(mapper).insert(reservation);
+        verify(mapper).insertIgnore(reservation);
     }
 
     private ReservationPersistenceHelper helper(ReservationMapper mapper,

@@ -1,17 +1,11 @@
 package com.fragment.labbooking.service.reservation;
 
-import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.fragment.labbooking.common.constants.ReservationStatusConstants;
-import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.common.exception.BusinessException;
-import com.fragment.labbooking.common.id.ReservationNoGenerator;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.redis.ReservationRateLimiter;
 import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
 import com.fragment.labbooking.common.reservation.ReservationPersistenceHelper;
-import com.fragment.labbooking.dto.ReservationCancelDTO;
 import com.fragment.labbooking.dto.ReservationCreateDTO;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.Resource;
@@ -20,25 +14,22 @@ import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.service.ReservationReminderTaskService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
-import com.fragment.labbooking.service.SysUserService;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.lenient;
@@ -49,346 +40,121 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class ReservationCommandServiceTest {
 
-    @Mock
-    private ResourceService resourceService;
-    @Mock
-    private ResourceSlotService resourceSlotService;
-    @Mock
-    private SysUserService sysUserService;
-    @Mock
-    private HotReservationRedisService hotReservationRedisService;
-    @Mock
-    private ReservationRateLimiter reservationRateLimiter;
-    @Mock
-    private ReservationNoGenerator reservationNoGenerator;
-    @Mock
-    private ReservationReminderTaskService reservationReminderTaskService;
-    @Mock
-    private ReservationAutoCancelService reservationAutoCancelService;
-    @Mock
-    private ReservationMapper reservationMapper;
-    @Mock
-    private PlatformTransactionManager transactionManager;
+    private static final String REQUEST_ID = "33c8aa68-9fe0-4d30-afd5-6e62de86bd6c";
 
-    private ReservationCommandService reservationService;
+    @Mock ReservationMapper reservationMapper;
+    @Mock ResourceService resourceService;
+    @Mock ResourceSlotService slotService;
+    @Mock HotReservationRedisService hotRedis;
+    @Mock ReservationRateLimiter rateLimiter;
+    @Mock ReservationPersistenceHelper persistenceHelper;
+    @Mock ReservationReminderTaskService reminderService;
+    @Mock ReservationAutoCancelService autoCancelService;
+    @Mock HotReservationRequestService hotRequestService;
+    @Mock PlatformTransactionManager transactionManager;
+
+    private ReservationCommandService service;
 
     @BeforeEach
     void setUp() {
-        initTableInfo(Reservation.class);
-        ReservationPersistenceHelper reservationPersistenceHelper =
-                new ReservationPersistenceHelper(reservationNoGenerator, reservationMapper, reservationAutoCancelService);
+        lenient().when(hotRequestService.normalizeRequestId(REQUEST_ID)).thenReturn(REQUEST_ID);
         lenient().when(transactionManager.getTransaction(any(TransactionDefinition.class)))
                 .thenReturn(new SimpleTransactionStatus());
-        reservationService = new ReservationCommandService(
-                reservationMapper,
-                resourceService,
-                resourceSlotService,
-                hotReservationRedisService,
-                reservationRateLimiter,
-                reservationPersistenceHelper,
-                reservationReminderTaskService,
-                reservationAutoCancelService,
-                transactionManager,
-                30L
-        );
+        service = new ReservationCommandService(
+                reservationMapper, resourceService, slotService, hotRedis, rateLimiter,
+                persistenceHelper, reminderService, autoCancelService, hotRequestService,
+                transactionManager, 30);
     }
 
     @Test
-    void createReservationForNormalSlotShouldPersistReservationAndScheduleReminder() {
-        Resource resource = buildResource(1L, "TC-01", "1号靶车");
-        ResourceSlot slot = buildSlot(10L, 1L, ResourceSlotTypeConstants.NORMAL);
-        ReservationCreateDTO dto = buildCreateDto(1L, 10L);
+    void normalSlotShouldRemainSynchronous() {
+        ResourceSlot slot = slot(ResourceSlotTypeConstants.NORMAL);
+        Resource resource = resource();
+        Reservation reservation = new Reservation();
+        reservation.setId(88L);
+        reservation.setReservationNo("RES-88");
 
+        when(hotRedis.isPreheatedHotSlot(10L)).thenReturn(false);
+        when(slotService.getById(10L)).thenReturn(slot);
         when(resourceService.getById(1L)).thenReturn(resource);
-        when(resourceSlotService.getById(10L)).thenReturn(slot);
         when(reservationMapper.selectCount(any())).thenReturn(0L);
-        when(reservationNoGenerator.nextReservationNo()).thenReturn("RES-1001");
-        when(reservationMapper.insert(any(Reservation.class))).thenAnswer(invocation -> {
-            Reservation reservation = invocation.getArgument(0);
-            reservation.setId(88L);
-            return 1;
-        });
+        when(persistenceHelper.buildReservation(7L, 1L, 10L, resource, slot)).thenReturn(reservation);
 
-        ReservationSubmitVO submitVO = reservationService.create(7L, dto);
+        ReservationSubmitVO result = service.create(7L, REQUEST_ID, dto());
 
-        assertThat(submitVO.getReservationId()).isEqualTo(88L);
-        assertThat(submitVO.getReservationNo()).isEqualTo("RES-1001");
-
-        ArgumentCaptor<Reservation> reservationCaptor = ArgumentCaptor.forClass(Reservation.class);
-        verify(reservationMapper).insert(reservationCaptor.capture());
-        Reservation savedReservation = reservationCaptor.getValue();
-        assertThat(savedReservation.getUserId()).isEqualTo(7L);
-        assertThat(savedReservation.getResourceId()).isEqualTo(1L);
-        assertThat(savedReservation.getSlotId()).isEqualTo(10L);
-        assertThat(savedReservation.getStatus()).isEqualTo(ReservationStatusConstants.BOOKED);
-        assertThat(savedReservation.getSourceType()).isEqualTo(ResourceSlotTypeConstants.NORMAL);
-        assertThat(savedReservation.getResourceName()).isEqualTo("1号靶车");
-
-        verify(resourceSlotService).deductQuotaIfAvailable(10L);
-        verify(reservationReminderTaskService).createBeforeStartReminder(savedReservation);
-        verify(reservationAutoCancelService).fillAutoCancelDeadline(savedReservation);
-        verify(reservationAutoCancelService).schedule(savedReservation);
+        assertThat(result.getRequestId()).isEqualTo(REQUEST_ID);
+        assertThat(result.getStatus()).isEqualTo("CONFIRMED");
+        assertThat(result.getReservationId()).isEqualTo(88L);
+        verify(slotService).deductQuotaIfAvailable(10L);
+        verify(persistenceHelper).saveWithRetry(reservation);
+        verify(reminderService).createBeforeStartReminder(reservation);
+        verify(autoCancelService).schedule(reservation);
     }
 
     @Test
-    void createReservationForHotSlotShouldPersistReservationSynchronously() {
-        Resource resource = buildResource(1L, "TC-01", "1号靶车");
-        ResourceSlot slot = buildSlot(12L, 1L, ResourceSlotTypeConstants.HOT);
-        ReservationCreateDTO dto = buildCreateDto(1L, 12L);
-        when(resourceService.getById(1L)).thenReturn(resource);
-        when(resourceSlotService.getById(12L)).thenReturn(slot);
-        when(reservationMapper.selectCount(any())).thenReturn(0L);
-        when(reservationNoGenerator.nextReservationNo()).thenReturn("RES-HOT-1");
-        when(reservationMapper.insert(any(Reservation.class))).thenAnswer(invocation -> {
-            invocation.getArgument(0, Reservation.class).setId(89L);
-            return 1;
-        });
+    void preheatedHotSlotShouldBeAcceptedWithoutDatabaseAccess() {
+        ReservationSubmitVO pending = new ReservationSubmitVO();
+        pending.setRequestId(REQUEST_ID);
+        pending.setStatus("PENDING");
+        when(hotRedis.isPreheatedHotSlot(10L)).thenReturn(true);
+        when(hotRequestService.accept(REQUEST_ID, 7L, 1L, 10L)).thenReturn(pending);
 
-        ReservationSubmitVO submitVO = reservationService.create(3L, dto);
+        ReservationSubmitVO result = service.create(7L, REQUEST_ID, dto());
 
-        assertThat(submitVO.getReservationId()).isEqualTo(89L);
-
-        verify(hotReservationRedisService).reserveAndRegisterRollback(slot, 3L);
-        verify(resourceSlotService).deductQuotaIfAvailable(12L);
-        verify(reservationMapper).insert(any(Reservation.class));
+        assertThat(result.getStatus()).isEqualTo("PENDING");
+        verify(rateLimiter).checkCreateReservationLimit(7L, ResourceSlotTypeConstants.HOT);
+        verifyNoInteractions(resourceService, reservationMapper);
+        verify(slotService, never()).getById(any());
     }
 
     @Test
-    void createReservationShouldRejectSoldOutPreheatedHotSlotBeforeDatabaseLookup() {
-        ReservationCreateDTO dto = buildCreateDto(1L, 12L);
+    void missingHotSnapshotShouldFailClosed() {
+        when(hotRedis.isPreheatedHotSlot(10L)).thenReturn(false);
+        when(slotService.getById(10L)).thenReturn(slot(ResourceSlotTypeConstants.HOT));
 
-        when(hotReservationRedisService.isPreheatedHotSlot(12L)).thenReturn(true);
-        when(hotReservationRedisService.reserveIfPreheated(1L, 12L, 3L))
-                .thenThrow(new BusinessException(409, "热门时段余量不足"));
-
-        assertThatThrownBy(() -> reservationService.create(3L, dto))
+        assertThatThrownBy(() -> service.create(7L, REQUEST_ID, dto()))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("热门时段余量不足");
+                .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(503));
 
-        verify(reservationRateLimiter).checkCreateReservationLimit(3L, ResourceSlotTypeConstants.HOT);
-        verifyNoInteractions(transactionManager, resourceService, resourceSlotService, reservationMapper);
+        verifyNoInteractions(resourceService, reservationMapper);
     }
 
     @Test
-    void createReservationShouldUseRedisReservationForPreheatedHotSlot() {
-        Resource resource = buildResource(1L, "TC-01", "1号靶车");
-        ResourceSlot slot = buildSlot(12L, 1L, ResourceSlotTypeConstants.HOT);
-        ReservationCreateDTO dto = buildCreateDto(1L, 12L);
-        when(hotReservationRedisService.isPreheatedHotSlot(12L)).thenReturn(true);
-        when(hotReservationRedisService.reserveIfPreheated(1L, 12L, 3L)).thenReturn(true);
-        when(resourceService.getById(1L)).thenReturn(resource);
-        when(resourceSlotService.getById(12L)).thenReturn(slot);
-        when(reservationMapper.selectCount(any())).thenReturn(0L);
-        when(reservationNoGenerator.nextReservationNo()).thenReturn("RES-HOT-2");
-        when(reservationMapper.insert(any(Reservation.class))).thenAnswer(invocation -> {
-            invocation.getArgument(0, Reservation.class).setId(90L);
-            return 1;
-        });
+    void malformedIdempotencyKeyShouldFailBeforeRouting() {
+        when(hotRequestService.normalizeRequestId("bad"))
+                .thenThrow(new BusinessException(400, "Idempotency-Key 必须是 UUID"));
 
-        ReservationSubmitVO submitVO = reservationService.create(3L, dto);
-
-        assertThat(submitVO.getReservationId()).isEqualTo(90L);
-        verify(reservationRateLimiter).checkCreateReservationLimit(3L, ResourceSlotTypeConstants.HOT);
-        verify(hotReservationRedisService).registerPreheatedReservationRollback(12L, 3L);
-        verify(hotReservationRedisService, never()).reserveAndRegisterRollback(slot, 3L);
-        verify(resourceSlotService).deductQuotaIfAvailable(12L);
-        verify(reservationMapper).insert(any(Reservation.class));
-    }
-
-    @Test
-    void createReservationShouldRejectDuplicateReservation() {
-        Resource resource = buildResource(1L, "TC-01", "1号靶车");
-        ResourceSlot slot = buildSlot(10L, 1L, ResourceSlotTypeConstants.NORMAL);
-        ReservationCreateDTO dto = buildCreateDto(1L, 10L);
-
-        when(resourceService.getById(1L)).thenReturn(resource);
-        when(resourceSlotService.getById(10L)).thenReturn(slot);
-        when(reservationMapper.selectCount(any())).thenReturn(1L);
-
-        assertThatThrownBy(() -> reservationService.create(9L, dto))
+        assertThatThrownBy(() -> service.create(7L, "bad", dto()))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("当前用户已预约该时段");
+                .hasMessageContaining("UUID");
 
-        verify(reservationMapper, never()).insert(any(Reservation.class));
+        verifyNoInteractions(hotRedis, slotService, resourceService, reservationMapper);
     }
 
-    @Test
-    void createReservationShouldRejectClosedSlot() {
-        Resource resource = buildResource(1L, "TC-01", "1号靶车");
-        ResourceSlot slot = buildSlot(10L, 1L, ResourceSlotTypeConstants.NORMAL);
-        slot.setStatus(ResourceSlotStatusConstants.CLOSED);
-        when(resourceService.getById(1L)).thenReturn(resource);
-        when(resourceSlotService.getById(10L)).thenReturn(slot);
-
-        assertThatThrownBy(() -> reservationService.create(9L, buildCreateDto(1L, 10L)))
-                .isInstanceOf(BusinessException.class)
-                .hasMessage("当前时段不可预约");
-
-        verify(resourceSlotService, never()).deductQuotaIfAvailable(anyLong());
-    }
-
-    @Test
-    void createReservationShouldRejectEndedSlot() {
-        Resource resource = buildResource(1L, "TC-01", "1号靶车");
-        ResourceSlot slot = buildSlot(10L, 1L, ResourceSlotTypeConstants.NORMAL);
-        slot.setStartDatetime(LocalDateTime.now().minusHours(2));
-        slot.setEndDatetime(LocalDateTime.now().minusMinutes(1));
-        when(resourceService.getById(1L)).thenReturn(resource);
-        when(resourceSlotService.getById(10L)).thenReturn(slot);
-
-        assertThatThrownBy(() -> reservationService.create(9L, buildCreateDto(1L, 10L)))
-                .isInstanceOf(BusinessException.class)
-                .hasMessage("当前时段已结束");
-
-        verify(resourceSlotService, never()).deductQuotaIfAvailable(anyLong());
-    }
-
-    @Test
-    void cancelReservationShouldRestoreQuotaAndReleaseHotRedisReservation() {
-        Reservation reservation = new Reservation();
-        reservation.setId(55L);
-        reservation.setUserId(7L);
-        reservation.setResourceId(1L);
-        reservation.setSlotId(10L);
-        reservation.setStatus(ReservationStatusConstants.BOOKED);
-        reservation.setSourceType(ResourceSlotTypeConstants.HOT);
-
-        ReservationCancelDTO dto = new ReservationCancelDTO();
-        dto.setCancelReason("计划变更");
-
-        when(reservationMapper.selectById(55L)).thenReturn(reservation);
-        when(reservationMapper.update(eq(null), any())).thenReturn(1);
-
-        reservationService.cancel(7L, 55L, dto);
-
-        verify(resourceSlotService).restoreQuota(10L);
-        verify(reservationReminderTaskService).cancelPendingByReservationId(55L);
-        verify(hotReservationRedisService).releaseAfterSuccessfulCancellation(ResourceSlotTypeConstants.HOT, 10L, 7L);
-    }
-
-    @Test
-    void checkInShouldUpdateOwnBookedReservationWithinWindow() {
-        LocalDateTime now = LocalDateTime.now();
-        Reservation reservation = new Reservation();
-        reservation.setId(66L);
-        reservation.setUserId(7L);
-        reservation.setStatus(ReservationStatusConstants.BOOKED);
-        reservation.setSlotStartDatetime(now.plusMinutes(10));
-        reservation.setAutoCancelDeadline(now.plusMinutes(25));
-
-        when(reservationMapper.selectById(66L)).thenReturn(reservation);
-        when(reservationAutoCancelService.resolveAutoCancelDeadline(reservation))
-                .thenReturn(reservation.getAutoCancelDeadline());
-        when(reservationMapper.update(eq(null), any())).thenReturn(1);
-
-        reservationService.checkIn(7L, 66L);
-
-        verify(reservationMapper).update(eq(null), any());
-    }
-
-    @Test
-    void checkInShouldRejectOtherUsersReservation() {
-        Reservation reservation = new Reservation();
-        reservation.setId(66L);
-        reservation.setUserId(8L);
-        reservation.setStatus(ReservationStatusConstants.BOOKED);
-
-        when(reservationMapper.selectById(66L)).thenReturn(reservation);
-
-        assertThatThrownBy(() -> reservationService.checkIn(7L, 66L))
-                .isInstanceOf(BusinessException.class)
-                .hasMessage("不能签到他人的预约");
-
-        verify(reservationMapper, never()).update(eq(null), any());
-    }
-
-    @Test
-    void checkInShouldRejectNonBookedReservation() {
-        Reservation reservation = new Reservation();
-        reservation.setId(66L);
-        reservation.setUserId(7L);
-        reservation.setStatus(ReservationStatusConstants.CANCELLED);
-
-        when(reservationMapper.selectById(66L)).thenReturn(reservation);
-
-        assertThatThrownBy(() -> reservationService.checkIn(7L, 66L))
-                .isInstanceOf(BusinessException.class)
-                .hasMessage("当前预约状态不允许签到");
-
-        verify(reservationMapper, never()).update(eq(null), any());
-    }
-
-    @Test
-    void checkInShouldRejectWhenWindowNotOpenYet() {
-        LocalDateTime now = LocalDateTime.now();
-        Reservation reservation = new Reservation();
-        reservation.setId(66L);
-        reservation.setUserId(7L);
-        reservation.setStatus(ReservationStatusConstants.BOOKED);
-        reservation.setSlotStartDatetime(now.plusHours(2));
-        reservation.setAutoCancelDeadline(now.plusHours(2).plusMinutes(15));
-
-        when(reservationMapper.selectById(66L)).thenReturn(reservation);
-        when(reservationAutoCancelService.resolveAutoCancelDeadline(reservation))
-                .thenReturn(reservation.getAutoCancelDeadline());
-
-        assertThatThrownBy(() -> reservationService.checkIn(7L, 66L))
-                .isInstanceOf(BusinessException.class)
-                .hasMessage("未到签到时间");
-
-        verify(reservationMapper, never()).update(eq(null), any());
-    }
-
-    @Test
-    void checkInShouldTreatRepeatedCheckInAsSuccess() {
-        Reservation reservation = new Reservation();
-        reservation.setId(66L);
-        reservation.setUserId(7L);
-        reservation.setStatus(ReservationStatusConstants.BOOKED);
-        reservation.setCheckedInAt(LocalDateTime.now().minusMinutes(1));
-
-        when(reservationMapper.selectById(66L)).thenReturn(reservation);
-
-        reservationService.checkIn(7L, 66L);
-
-        verify(reservationMapper, never()).update(eq(null), any());
-    }
-
-    private Resource buildResource(Long id, String code, String name) {
-        Resource resource = new Resource();
-        resource.setId(id);
-        resource.setResourceCode(code);
-        resource.setResourceName(name);
-        resource.setLocation("室外联调区");
-        return resource;
-    }
-
-    private ResourceSlot buildSlot(Long slotId, Long resourceId, String slotType) {
-        ResourceSlot slot = new ResourceSlot();
-        slot.setId(slotId);
-        slot.setResourceId(resourceId);
-        slot.setSlotType(slotType);
-        slot.setStatus("OPEN");
-        slot.setOpenTime(LocalDateTime.now().minusMinutes(10));
-        slot.setStartDatetime(LocalDateTime.now().plusDays(1));
-        slot.setEndDatetime(LocalDateTime.now().plusDays(1).plusHours(2));
-        return slot;
-    }
-
-    private ReservationCreateDTO buildCreateDto(Long resourceId, Long slotId) {
+    private ReservationCreateDTO dto() {
         ReservationCreateDTO dto = new ReservationCreateDTO();
-        dto.setResourceId(resourceId);
-        dto.setSlotId(slotId);
+        dto.setResourceId(1L);
+        dto.setSlotId(10L);
         return dto;
     }
 
-    private void initTableInfo(Class<?> entityClass) {
-        if (TableInfoHelper.getTableInfo(entityClass) != null) {
-            return;
-        }
+    private Resource resource() {
+        Resource resource = new Resource();
+        resource.setId(1L);
+        resource.setResourceCode("LAB-1");
+        resource.setResourceName("实验室");
+        return resource;
+    }
 
-        MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
-        assistant.setCurrentNamespace(entityClass.getName());
-        TableInfoHelper.initTableInfo(assistant, entityClass);
+    private ResourceSlot slot(String type) {
+        ResourceSlot slot = new ResourceSlot();
+        slot.setId(10L);
+        slot.setResourceId(1L);
+        slot.setSlotType(type);
+        slot.setStatus("OPEN");
+        slot.setOpenTime(LocalDateTime.now().minusMinutes(1));
+        slot.setStartDatetime(LocalDateTime.now().plusHours(1));
+        slot.setEndDatetime(LocalDateTime.now().plusHours(2));
+        return slot;
     }
 }

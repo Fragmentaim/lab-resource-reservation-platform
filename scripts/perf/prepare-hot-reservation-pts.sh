@@ -4,7 +4,7 @@ set -euo pipefail
 # Run only on the isolated ECS load-test host. It refuses any database other
 # than lab_booking_loadtest and never prints the generated JWT values.
 COUNT="${COUNT:-500}"
-QUOTA="${QUOTA:-20}"
+QUOTA="${QUOTA:-200}"
 BASE_URL="${BASE_URL:-http://172.18.225.136:8082}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d%H%M%S)}"
 PASSWORD="${LOADTEST_USER_PASSWORD:-LoadTest!2026}"
@@ -24,8 +24,8 @@ set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 set +a
-if [[ "${LOADTEST_MQ_ENABLED:-false}" != "false" ]]; then
-  echo "Safety stop: LOADTEST_MQ_ENABLED must be false for the Redis core-path benchmark." >&2
+if [[ "${LOADTEST_MQ_ENABLED:-false}" != "true" ]]; then
+  echo "Safety stop: LOADTEST_MQ_ENABLED must be true for the asynchronous reservation benchmark." >&2
   exit 2
 fi
 
@@ -52,10 +52,10 @@ slot_id="$(mysql_exec -e "
   SELECT LAST_INSERT_ID();")"
 
 mkdir -p "$OUT_DIR"
-token_csv="$OUT_DIR/hot-reservation-$RUN_ID-tokens.csv"
+token_csv="$OUT_DIR/hot-reservation-tokens.csv"
 tmp_response="$(mktemp)"
 trap 'rm -f "$tmp_response"' EXIT
-printf 'accessToken,resourceId,slotId\n' > "$token_csv"
+printf 'accessToken,resourceId,slotId,requestId\n' > "$token_csv"
 
 for ((i = 1; i <= COUNT; i++)); do
   username="pts_${RUN_ID}_$(printf '%04d' "$i")"
@@ -88,7 +88,8 @@ PY
     echo "Failed to pre-login test user #$i (HTTP $login_status)." >&2
     exit 1
   fi
-  printf '%s,%s,%s\n' "$token" "$resource_id" "$slot_id" >> "$token_csv"
+  request_id="$(cat /proc/sys/kernel/random/uuid)"
+  printf '%s,%s,%s,%s\n' "$token" "$resource_id" "$slot_id" "$request_id" >> "$token_csv"
 done
 
 chmod 600 "$token_csv"
@@ -107,9 +108,8 @@ if [[ "$ready" != "true" ]]; then
   exit 1
 fi
 
-# The HOT slot is created through SQL so it may not be seen by a startup-time
-# preheater that ran before the datasource finished initializing. Populate the
-# same stock/user keys explicitly before the first PTS request.
+# Keep this explicit preheat as a deployment check: request threads never
+# rebuild a missing HOT snapshot or fall back to MySQL.
 "$(dirname "$0")/preheat-hot-reservation-redis.sh" "$slot_id"
 
 echo "RUN_ID=$RUN_ID"

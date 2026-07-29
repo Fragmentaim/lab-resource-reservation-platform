@@ -2,7 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="热点预约抢占 - 预登录用户" enabled="true">
-      <stringProp name="TestPlan.comments">仅压 POST /reservation。登录、建号与 Redis 预热均在压测前完成。200 表示抢到名额；409 表示库存售罄或重复预约，属于预期业务结果，须结合服务端校验脚本统计。</stringProp>
+      <stringProp name="TestPlan.comments">仅压 POST /reservation。登录、建号与 Redis 预热均在压测前完成。202/PENDING 表示 Redis 已受理并交给 RocketMQ 异步确认；409 表示正常售罄或重复预约。最终结果由服务端一致性脚本校验。</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
       <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="用户变量" enabled="true">
@@ -17,14 +17,14 @@
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="每个用户只提交一次" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
-          <stringProp name="LoopController.loops">1</stringProp>
+          <stringProp name="LoopController.loops">${__P(loops,1)}</stringProp>
         </elementProp>
       </ThreadGroup>
       <hashTree>
         <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="预登录 Token 数据源" enabled="true">
           <stringProp name="filename">${__P(tokens_csv,hot-reservation-tokens.csv)}</stringProp>
           <stringProp name="fileEncoding">UTF-8</stringProp>
-          <stringProp name="variableNames">accessToken,resourceId,slotId</stringProp>
+          <stringProp name="variableNames">accessToken,resourceId,slotId,requestId</stringProp>
           <boolProp name="ignoreFirstLine">true</boolProp>
           <stringProp name="delimiter">,</stringProp>
           <boolProp name="quotedData">true</boolProp>
@@ -41,7 +41,7 @@
           <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
         </ConfigTestElement>
         <hashTree/>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="提交热点预约（200=抢到，409=正常售罄）" enabled="true">
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="提交热点预约（202=异步受理，409=正常售罄）" enabled="true">
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="用户定义的变量" enabled="true">
             <collectionProp name="Arguments.arguments">
               <elementProp name="" elementType="HTTPArgument">
@@ -68,6 +68,7 @@
               <elementProp name="Content-Type" elementType="Header"><stringProp name="Header.name">Content-Type</stringProp><stringProp name="Header.value">application/json</stringProp></elementProp>
               <elementProp name="Accept" elementType="Header"><stringProp name="Header.name">Accept</stringProp><stringProp name="Header.value">application/json</stringProp></elementProp>
               <elementProp name="Authorization" elementType="Header"><stringProp name="Header.name">Authorization</stringProp><stringProp name="Header.value">Bearer ${accessToken}</stringProp></elementProp>
+              <elementProp name="Idempotency-Key" elementType="Header"><stringProp name="Header.name">Idempotency-Key</stringProp><stringProp name="Header.value">${requestId}</stringProp></elementProp>
             </collectionProp>
           </HeaderManager>
           <hashTree/>
