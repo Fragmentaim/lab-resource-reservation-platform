@@ -70,14 +70,12 @@ class HotReservationRedisServiceTest {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(hashOperations.entries("reservation:request:v2:req-1")).thenReturn(Map.of(
                 "requestId", "req-1", "userId", "7", "resourceId", "3", "slotId", "11",
-                "status", "PUBLISHED", "expiresAt", "1000", "publishAttempts", "1",
-                "lastPublishedAt", "500"
+                "status", "PRE_RESERVED", "expiresAt", "1000"
         ));
 
         var state = service.accept("req-1", 7L, 3L, 11L, 1000);
 
-        assertThat(state.status()).isEqualTo("PUBLISHED");
-        assertThat(state.publishAttempts()).isEqualTo(1);
+        assertThat(state.status()).isEqualTo("PRE_RESERVED");
     }
 
     @Test

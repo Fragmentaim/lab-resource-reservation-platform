@@ -57,7 +57,6 @@ class HotReservationRedisIntegrationTest {
         String stockKey = "reservation:hot:v2:stock:" + slotId;
         String usersKey = "reservation:hot:v2:users:" + slotId;
         String requestKey = "reservation:request:v2:" + requestId;
-        String pendingKey = "reservation:pending:v2";
 
         try {
             long now = System.currentTimeMillis();
@@ -105,7 +104,6 @@ class HotReservationRedisIntegrationTest {
             assertThat(redis.getExpire(requestKey)).isPositive();
         } finally {
             redis.delete(List.of(snapshotKey, stockKey, usersKey, requestKey));
-            redis.opsForZSet().remove(pendingKey, requestId);
         }
     }
 }

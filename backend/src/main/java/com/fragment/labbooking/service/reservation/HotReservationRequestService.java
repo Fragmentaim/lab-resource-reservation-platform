@@ -5,74 +5,53 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.common.redis.HotReservationRedisService;
 import com.fragment.labbooking.common.reservation.ReservationCommandPublisher;
 import com.fragment.labbooking.common.reservation.ReservationCreateCommand;
-import com.fragment.labbooking.common.reservation.ReservationResultEvent;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.ReservationRequest;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.mapper.ReservationRequestMapper;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
-import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RLock;
-import org.redisson.api.RedissonClient;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
 
+/**
+ * Accepts hot-reservation requests and exposes their eventual result.
+ *
+ * <p>The RocketMQ transaction listener performs the Redis pre-reservation.
+ * This service therefore does not maintain a second retry queue or rebuild hot
+ * inventory in the request thread.</p>
+ */
 @Service
-@Slf4j
 public class HotReservationRequestService {
 
-    private final HotReservationRedisService hotRedis;
     private final ReservationCommandPublisher commandPublisher;
+    private final HotReservationRedisService hotRedis;
     private final ReservationRequestMapper requestMapper;
     private final ReservationMapper reservationMapper;
-    private final ReservationConfirmationService confirmationService;
-    private final RedissonClient redissonClient;
-    private final boolean commandEnabled;
     private final long requestTtlMillis;
-    private final int reconcileBatchSize;
-    private final long republishIntervalMillis;
-    private final int maxPublishAttempts;
 
-    public HotReservationRequestService(HotReservationRedisService hotRedis,
-                                        ReservationCommandPublisher commandPublisher,
+    public HotReservationRequestService(ReservationCommandPublisher commandPublisher,
+                                        HotReservationRedisService hotRedis,
                                         ReservationRequestMapper requestMapper,
                                         ReservationMapper reservationMapper,
-                                        ReservationConfirmationService confirmationService,
-                                        RedissonClient redissonClient,
-                                        @Value("${app.reservation.command.enabled:false}") boolean commandEnabled,
-                                        @Value("${app.reservation.hot-request-ttl-seconds:300}") long requestTtlSeconds,
-                                        @Value("${app.reservation.command.reconcile-batch-size:100}") int reconcileBatchSize,
-                                        @Value("${app.reservation.command.republish-interval-millis:10000}") long republishIntervalMillis,
-                                        @Value("${app.reservation.command.max-publish-attempts:3}") int maxPublishAttempts) {
-        this.hotRedis = hotRedis;
+                                        @Value("${app.reservation.hot-request-ttl-seconds:300}") long requestTtlSeconds) {
         this.commandPublisher = commandPublisher;
+        this.hotRedis = hotRedis;
         this.requestMapper = requestMapper;
         this.reservationMapper = reservationMapper;
-        this.confirmationService = confirmationService;
-        this.redissonClient = redissonClient;
-        this.commandEnabled = commandEnabled;
         this.requestTtlMillis = Math.max(30, requestTtlSeconds) * 1000L;
-        this.reconcileBatchSize = Math.max(1, reconcileBatchSize);
-        this.republishIntervalMillis = Math.max(1000, republishIntervalMillis);
-        this.maxPublishAttempts = Math.max(1, maxPublishAttempts);
     }
 
     public ReservationSubmitVO accept(String idempotencyKey, Long userId, Long resourceId, Long slotId) {
         String requestId = normalizeRequestId(idempotencyKey);
-        HotReservationRedisService.HotRequestState state = hotRedis.accept(
-                requestId, userId, resourceId, slotId, System.currentTimeMillis() + requestTtlMillis);
+        ReservationCreateCommand command = new ReservationCreateCommand(
+                requestId, userId, resourceId, slotId,
+                System.currentTimeMillis() + requestTtlMillis);
 
-        if ("PRE_RESERVED".equals(state.status())) {
-            publish(state);
-            state = hotRedis.getRequest(requestId);
-            if (state == null) {
-                throw brokerStateUnknown(null);
-            }
-        }
-        return toResult(state);
+        // The call returns only after the half message has been sent and the
+        // local Redis transaction has produced a commit/rollback decision.
+        return toResult(commandPublisher.publish(command));
     }
 
     public ReservationSubmitVO getRequest(Long userId, String rawRequestId) {
@@ -91,28 +70,6 @@ public class HotReservationRequestService {
         return toResult(state);
     }
 
-    @Scheduled(fixedDelayString = "${app.reservation.command.reconcile-delay-millis:5000}")
-    public void reconcilePendingRequests() {
-        if (!commandEnabled) {
-            return;
-        }
-        for (String requestId : hotRedis.findPendingRequestIds(reconcileBatchSize)) {
-            RLock lock = redissonClient.getLock("lock:reservation:request:reconcile:" + requestId);
-            if (!lock.tryLock()) {
-                continue;
-            }
-            try {
-                reconcile(requestId);
-            } catch (RuntimeException exception) {
-                log.warn("Failed to reconcile hot reservation request. requestId={}", requestId, exception);
-            } finally {
-                if (lock.isHeldByCurrentThread()) {
-                    lock.unlock();
-                }
-            }
-        }
-    }
-
     public String normalizeRequestId(String value) {
         if (value == null) {
             throw new BusinessException(400, "缺少 Idempotency-Key 请求头");
@@ -122,87 +79,6 @@ public class HotReservationRequestService {
         } catch (IllegalArgumentException exception) {
             throw new BusinessException(400, "Idempotency-Key 必须是 UUID");
         }
-    }
-
-    private void publish(HotReservationRedisService.HotRequestState state) {
-        ReservationCreateCommand command = new ReservationCreateCommand(
-                state.requestId(), state.userId(), state.resourceId(), state.slotId(),
-                state.expiresAtEpochMillis());
-        try {
-            commandPublisher.publish(command);
-        } catch (RuntimeException exception) {
-            recordPublishAttemptBestEffort(state.requestId(), false);
-            throw brokerStateUnknown(exception);
-        }
-        try {
-            hotRedis.recordPublishAttempt(state.requestId(), true);
-        } catch (RuntimeException exception) {
-            // Broker has accepted the command. Never rewrite this as a send
-            // failure or release the pre-reservation; reconciliation is safe
-            // because the command is idempotent.
-            throw brokerStateUnknown(exception);
-        }
-    }
-
-    private void recordPublishAttemptBestEffort(String requestId, boolean published) {
-        try {
-            hotRedis.recordPublishAttempt(requestId, published);
-        } catch (RuntimeException redisFailure) {
-            log.warn("Failed to record reservation command publish attempt. requestId={}", requestId, redisFailure);
-        }
-    }
-
-    private BusinessException brokerStateUnknown(Throwable cause) {
-        BusinessException unavailable = new BusinessException(
-                503,
-                "预约已预占但消息发送状态未知，请使用相同 Idempotency-Key 重试或查询结果"
-        );
-        if (cause != null) {
-            unavailable.initCause(cause);
-        }
-        return unavailable;
-    }
-
-    private void reconcile(String requestId) {
-        HotReservationRedisService.HotRequestState state = hotRedis.getRequest(requestId);
-        if (state == null) {
-            hotRedis.removePendingRequest(requestId);
-            return;
-        }
-        ReservationRequest ledger = findLedger(requestId);
-        if (ledger != null && ReservationRequestStatus.isTerminal(ledger.getStatus())) {
-            hotRedis.complete(toEvent(ledger));
-            return;
-        }
-
-        ReservationCreateCommand command = new ReservationCreateCommand(
-                state.requestId(), state.userId(), state.resourceId(), state.slotId(),
-                state.expiresAtEpochMillis());
-        long now = System.currentTimeMillis();
-        if (now >= state.expiresAtEpochMillis()) {
-            confirmationService.expire(command);
-            return;
-        }
-        if (state.publishAttempts() < maxPublishAttempts
-                && now - state.lastPublishedAtEpochMillis() >= republishIntervalMillis) {
-            publish(state);
-        }
-    }
-
-    private ReservationResultEvent toEvent(ReservationRequest request) {
-        Reservation reservation = request.getReservationId() == null
-                ? null : reservationMapper.selectById(request.getReservationId());
-        return new ReservationResultEvent(
-                request.getRequestId(),
-                request.getUserId(),
-                request.getResourceId(),
-                request.getSlotId(),
-                request.getStatus(),
-                request.getReservationId(),
-                reservation == null ? null : reservation.getReservationNo(),
-                request.getRejectCode(),
-                request.getRejectReason()
-        );
     }
 
     private ReservationRequest findLedger(String requestId) {
@@ -234,8 +110,7 @@ public class HotReservationRequestService {
     }
 
     private String apiStatus(String status) {
-        if ("PRE_RESERVED".equals(status) || "PUBLISHED".equals(status)
-                || ReservationRequestStatus.PROCESSING.name().equals(status)) {
+        if ("PRE_RESERVED".equals(status) || ReservationRequestStatus.PROCESSING.name().equals(status)) {
             return "PENDING";
         }
         return status;

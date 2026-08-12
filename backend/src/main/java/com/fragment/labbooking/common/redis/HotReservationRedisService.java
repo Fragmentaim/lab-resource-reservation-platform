@@ -28,7 +28,6 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -46,7 +45,6 @@ public class HotReservationRedisService {
     private static final String STOCK_PREFIX = "reservation:hot:v2:stock:";
     private static final String USERS_PREFIX = "reservation:hot:v2:users:";
     private static final String REQUEST_PREFIX = "reservation:request:v2:";
-    private static final String PENDING_KEY = "reservation:pending:v2";
     private static final String INIT_LOCK_PREFIX = "lock:reservation:hot:v2:init:";
 
     private static final long ACCEPTED = 0L;
@@ -69,7 +67,6 @@ public class HotReservationRedisService {
     private final Duration requestRetention;
     private final DefaultRedisScript<Long> initializeScript = initializeScript();
     private final DefaultRedisScript<Long> acceptScript = acceptScript();
-    private final DefaultRedisScript<Long> publishAttemptScript = publishAttemptScript();
     private final DefaultRedisScript<Long> completeScript = completeScript();
     private final DefaultRedisScript<Long> releaseConfirmedScript = releaseConfirmedScript();
 
@@ -114,8 +111,7 @@ public class HotReservationRedisService {
         try {
             result = redisTemplate.execute(
                     acceptScript,
-                    List.of(snapshotKey(slotId), stockKey(slotId), usersKey(slotId),
-                            requestKey(requestId), PENDING_KEY),
+                    List.of(snapshotKey(slotId), stockKey(slotId), usersKey(slotId), requestKey(requestId)),
                     requestId,
                     String.valueOf(userId),
                     String.valueOf(resourceId),
@@ -135,15 +131,6 @@ public class HotReservationRedisService {
         return state;
     }
 
-    public void recordPublishAttempt(String requestId, boolean published) {
-        redisTemplate.execute(
-                publishAttemptScript,
-                List.of(requestKey(requestId)),
-                published ? "1" : "0",
-                String.valueOf(System.currentTimeMillis())
-        );
-    }
-
     public HotRequestState getRequest(String requestId) {
         Map<Object, Object> values = redisTemplate.opsForHash().entries(requestKey(requestId));
         if (values == null || values.isEmpty()) {
@@ -156,8 +143,6 @@ public class HotReservationRedisService {
                 number(values, "slotId"),
                 text(values, "status"),
                 longValue(values, "expiresAt", 0L),
-                integer(values, "publishAttempts", 0),
-                longValue(values, "lastPublishedAt", 0L),
                 number(values, "reservationId"),
                 text(values, "reservationNo"),
                 text(values, "rejectCode"),
@@ -165,22 +150,10 @@ public class HotReservationRedisService {
         );
     }
 
-    public List<String> findPendingRequestIds(int limit) {
-        Set<String> ids = redisTemplate.opsForZSet().range(PENDING_KEY, 0, Math.max(1, limit) - 1L);
-        return ids == null ? List.of() : List.copyOf(ids);
-    }
-
-    public void removePendingRequest(String requestId) {
-        if (requestId != null) {
-            redisTemplate.opsForZSet().remove(PENDING_KEY, requestId);
-        }
-    }
-
     public void complete(ReservationResultEvent event) {
         Long result = redisTemplate.execute(
                 completeScript,
-                List.of(stockKey(event.slotId()), usersKey(event.slotId()),
-                        requestKey(event.requestId()), PENDING_KEY),
+                List.of(stockKey(event.slotId()), usersKey(event.slotId()), requestKey(event.requestId())),
                 String.valueOf(event.userId()),
                 event.requestId(),
                 event.status(),
@@ -393,11 +366,6 @@ public class HotReservationRedisService {
         return value == null ? fallback : value;
     }
 
-    private int integer(Map<Object, Object> values, String key, int fallback) {
-        Long value = number(values, key);
-        return value == null ? fallback : value.intValue();
-    }
-
     private String value(Object value) {
         return value == null ? "" : String.valueOf(value);
     }
@@ -450,21 +418,9 @@ public class HotReservationRedisService {
                     'requestId', ARGV[1], 'userId', ARGV[2],
                     'resourceId', ARGV[3], 'slotId', ARGV[4],
                     'status', 'PRE_RESERVED', 'createdAt', ARGV[5],
-                    'expiresAt', ARGV[6], 'publishAttempts', '0',
-                    'lastPublishedAt', '0')
+                    'expiresAt', ARGV[6])
                 redis.call('PEXPIRE', KEYS[4], ARGV[7])
-                redis.call('ZADD', KEYS[5], ARGV[6], ARGV[1])
                 return 0
-                """);
-    }
-
-    private DefaultRedisScript<Long> publishAttemptScript() {
-        return script("""
-                if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
-                redis.call('HINCRBY', KEYS[1], 'publishAttempts', 1)
-                redis.call('HSET', KEYS[1], 'lastPublishedAt', ARGV[2])
-                if ARGV[1] == '1' then redis.call('HSET', KEYS[1], 'status', 'PUBLISHED') end
-                return 1
                 """);
     }
 
@@ -472,7 +428,6 @@ public class HotReservationRedisService {
         return script("""
                 local current = redis.call('HGET', KEYS[3], 'status')
                 if current == 'CONFIRMED' or current == 'REJECTED' or current == 'EXPIRED' then
-                    redis.call('ZREM', KEYS[4], ARGV[2])
                     return 0
                 end
                 if ARGV[3] ~= 'CONFIRMED' then
@@ -488,7 +443,6 @@ public class HotReservationRedisService {
                     'reservationId', ARGV[4], 'reservationNo', ARGV[5],
                     'rejectCode', ARGV[6], 'rejectReason', ARGV[7])
                 redis.call('PEXPIRE', KEYS[3], ARGV[10])
-                redis.call('ZREM', KEYS[4], ARGV[2])
                 return 1
                 """);
     }
@@ -517,8 +471,6 @@ public class HotReservationRedisService {
             Long slotId,
             String status,
             long expiresAtEpochMillis,
-            int publishAttempts,
-            long lastPublishedAtEpochMillis,
             Long reservationId,
             String reservationNo,
             String rejectCode,

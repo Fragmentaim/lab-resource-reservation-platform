@@ -33,7 +33,6 @@ before_requests="$(mysql_exec -e "SELECT COUNT(*) FROM reservation_request WHERE
 while IFS= read -r request_id; do
   [[ -z "$request_id" ]] && continue
   redis-cli -n "$redis_db" DEL "reservation:request:v2:$request_id" >/dev/null
-  redis-cli -n "$redis_db" ZREM "reservation:pending:v2" "$request_id" >/dev/null
 done < <(mysql_exec -e "SELECT request_id FROM reservation_request WHERE slot_id = $SLOT_ID;")
 
 mysql_exec -e "

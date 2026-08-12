@@ -52,8 +52,10 @@ spring:
           reservationCommand-out-0:
             producer:
               group: ${app.reservation.command.producer-group:reservation-command-producer-group}
+              producer-type: Trans
+              transaction-listener: reservationTransactionListener
               send-type: Sync
-              send-message-timeout: ${app.reservation.command.send-timeout-millis:3000}
+              send-msg-timeout: ${app.reservation.command.send-timeout-millis:3000}
               retry-times-when-send-failed: ${app.reservation.command.send-retry-times:2}
           reservationResult-out-0:
             producer:
@@ -157,10 +159,6 @@ app:
       max-reconsume-times: 16
       consumer-concurrency: 4
       result-consumer-concurrency: 2
-      reconcile-delay-millis: 5000
-      reconcile-batch-size: 100
-      republish-interval-millis: 10000
-      max-publish-attempts: 3
     rate-limit:
       enabled: false
       normal-max-requests: 5

@@ -29,10 +29,10 @@ Java 服务负责身份、权限、预约业务、文档元数据、Spring AI �
 ### 1. 预约与可靠异步链路
 
 - 通过数据库事务、名额条件更新与唯一约束保证同一用户、资源和时段不会重复预约。
-- 热门时段在开放前由 MySQL 预热 Redis 快照，请求侧通过单个 Lua 脚本原子完成时段校验、用户去重与库存扣减；缓存缺失时快速失败，不在高并发请求线程中回源重建。
-- 抢占成功后保存短期请求状态，并以 `requestId` 为 Key 同步投递 RocketMQ 命令；消费端在事务内写入精简请求账本、条件扣减 MySQL 名额并完成预约落库。
+- 热门时段在开放前由 MySQL 预热 Redis 快照；请求先发送 RocketMQ 半消息，再由事务监听器通过单个 Lua 脚本原子完成时段校验、用户去重、库存扣减和短期请求状态写入，成功后提交消息，失败则回滚半消息。
+- RocketMQ 提供事务回查与至少一次投递；消费端以 `requestId` 幂等地写入精简请求账本，在事务内条件扣减 MySQL 名额并完成预约落库。
 - 使用 Outbox 记录待投递事件，避免“数据库提交成功但消息未发送”的双写不一致。
-- 预约结果通过 Outbox 发布，驱动 Redis 状态收敛、站内通知、预约提醒和未签到自动取消；请求超时由 Redis Pending ZSet 定时补偿并写入 `EXPIRED` 终态。
+- 预约结果通过 Outbox 发布，驱动 Redis 状态收敛、站内通知、预约提醒和未签到自动取消；不再维护 Redis Pending ZSet 和应用层定时重发器。
 - `POST /reservation` 使用 UUID `Idempotency-Key`：普通时段同步返回 `CONFIRMED`，热门时段返回 HTTP 202 `PENDING`；`GET /reservation/requests/{requestId}` 查询本人最终结果。
 - Redis 仅缓存首页资源目录，并承担热门时段原子预占、限流和重复提交控制；资源详情与普通时段实时读取 MySQL，MySQL 保存最终业务事实。
 

@@ -1,6 +1,6 @@
 # 热点预约 PTS 压测包
 
-这个目录只用于 ECS 上的隔离库 `lab_booking_loadtest`。场景刻意不包含登录：登录和 JWT 签发会污染热点预约受理接口的吞吐与延迟。压测请求仍经过真实 JWT 鉴权，并执行 `Redis Lua 预占 → RocketMQ 异步确认 → MySQL 最终落库 → Outbox 结果事件`。
+这个目录只用于 ECS 上的隔离库 `lab_booking_loadtest`。场景刻意不包含登录：登录和 JWT 签发会污染热点预约受理接口的吞吐与延迟。压测请求仍经过真实 JWT 鉴权，并执行 `RocketMQ 半消息 → Redis Lua 预占 → 提交消息 → MySQL 异步确认 → Outbox 结果事件`。
 
 ## 目标场景
 
