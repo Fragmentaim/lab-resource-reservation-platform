@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.0 r1840935">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="预约链路 A/B 对比 - 预登录用户" enabled="true">
       <stringProp name="TestPlan.comments">同一脚本用于纯 SQL 与 MQ + Redis + SQL 两组测试。仅压 POST /reservation；登录和建号均在压测前完成。200/CONFIRMED、202/PENDING 和 409/售罄均属于合法业务结果，最终库存由服务端脚本校验。</stringProp>
@@ -13,7 +13,6 @@
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="500 个预登录用户抢占同一时段" enabled="true">
         <stringProp name="ThreadGroup.num_threads">${__P(threads,500)}</stringProp>
         <stringProp name="ThreadGroup.ramp_time">${__P(ramp_seconds,5)}</stringProp>
-        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="每个用户只提交一次" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
