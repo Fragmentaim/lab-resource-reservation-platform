@@ -7,11 +7,9 @@ import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.dto.ReservationPageQueryDTO;
 import com.fragment.labbooking.entity.Reservation;
 import com.fragment.labbooking.entity.Resource;
-import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.entity.SysUser;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.service.ResourceService;
-import com.fragment.labbooking.service.ResourceSlotService;
 import com.fragment.labbooking.service.SysUserService;
 import com.fragment.labbooking.vo.ReservationVO;
 import com.fragment.labbooking.vo.UserReservationOverviewVO;
@@ -36,23 +34,17 @@ public class ReservationQueryService {
     private final ReservationMapper reservationMapper;
     private final SysUserService userService;
     private final ResourceService resourceService;
-    private final ResourceSlotService slotService;
-    private final ReservationAssembler assembler;
 
     public ReservationQueryService(ReservationMapper reservationMapper,
                                    SysUserService userService,
-                                   ResourceService resourceService,
-                                   ResourceSlotService slotService,
-                                   ReservationAssembler assembler) {
+                                   ResourceService resourceService) {
         this.reservationMapper = reservationMapper;
         this.userService = userService;
         this.resourceService = resourceService;
-        this.slotService = slotService;
-        this.assembler = assembler;
     }
 
     public List<ReservationVO> listByUserId(Long userId) {
-        return assembler.toList(listForUser(userId));
+        return toViews(listForUser(userId));
     }
 
     public Page<ReservationVO> page(ReservationPageQueryDTO query) {
@@ -62,7 +54,7 @@ public class ReservationQueryService {
                         actual.getPageSize() == null ? 10 : actual.getPageSize()),
                 pageFilter(actual));
         Page<ReservationVO> result = new Page<>(source.getCurrent(), source.getSize(), source.getTotal());
-        result.setRecords(assembler.toList(source.getRecords()));
+        result.setRecords(toViews(source.getRecords()));
         return result;
     }
 
@@ -73,14 +65,13 @@ public class ReservationQueryService {
         if (!admin && !reservation.getUserId().equals(userId)) {
             throw new BusinessException(403, "无权查看他人的预约详情");
         }
-        return assembler.toList(List.of(reservation)).get(0);
+        return toViews(List.of(reservation)).get(0);
     }
 
     public UserReservationOverviewVO getUserOverview(Long userId) {
         SysUser user = requireUser(userId);
         List<Reservation> reservations = listForUser(userId);
         Map<Long, Resource> resources = loadResources(reservations);
-        Map<Long, ResourceSlot> slots = loadSlots(reservations);
 
         UserVO userView = new UserVO();
         BeanUtils.copyProperties(user, userView);
@@ -96,8 +87,7 @@ public class ReservationQueryService {
         result.setLatestReservationAt(reservations.stream().map(Reservation::getCreatedAt)
                 .filter(Objects::nonNull).max(Comparator.naturalOrder()).orElse(null));
         result.setFavoriteResourceName(mostFrequent(reservations.stream()
-                .map(item -> StringUtils.hasText(item.getResourceName()) ? item.getResourceName()
-                        : resourceValue(resources, item.getResourceId(), Resource::getResourceName))
+                .map(Reservation::getResourceName)
                 .filter(StringUtils::hasText).toList()));
         result.setFavoriteResourceType(mostFrequent(reservations.stream()
                 .map(item -> resourceValue(resources, item.getResourceId(), Resource::getResourceType))
@@ -105,8 +95,8 @@ public class ReservationQueryService {
         result.setFavoriteSourceType(mostFrequent(reservations.stream().map(Reservation::getSourceType)
                 .filter(StringUtils::hasText).toList()));
         result.setFavoriteTimeBucket(mostFrequent(reservations.stream()
-                .map(item -> timeBucket(item.getSlotStartDatetime() != null ? item.getSlotStartDatetime()
-                        : slotStart(slots, item.getSlotId())))
+                .map(Reservation::getSlotStartDatetime)
+                .map(this::timeBucket)
                 .filter(StringUtils::hasText).toList()));
         return result;
     }
@@ -150,11 +140,40 @@ public class ReservationQueryService {
                 .collect(Collectors.toMap(Resource::getId, Function.identity()));
     }
 
-    private Map<Long, ResourceSlot> loadSlots(List<Reservation> reservations) {
-        Set<Long> ids = reservations.stream().filter(item -> item.getSlotStartDatetime() == null)
-                .map(Reservation::getSlotId).filter(Objects::nonNull).collect(Collectors.toSet());
-        return ids.isEmpty() ? Map.of() : slotService.listByIds(ids).stream()
-                .collect(Collectors.toMap(ResourceSlot::getId, Function.identity()));
+    /**
+     * 使用预约快照转换接口视图，并批量补充当前用户资料。
+     */
+    private List<ReservationVO> toViews(List<Reservation> reservations) {
+        if (reservations == null || reservations.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, SysUser> users = loadUsers(reservations);
+        return reservations.stream().map(item -> toView(item, users.get(item.getUserId()))).toList();
+    }
+
+    /** 批量查询用户，避免预约列表逐条查用户造成 N+1。 */
+    private Map<Long, SysUser> loadUsers(List<Reservation> reservations) {
+        Set<Long> ids = reservations.stream().map(Reservation::getUserId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        return ids.isEmpty() ? Map.of() : userService.listByIds(ids).stream()
+                .collect(Collectors.toMap(SysUser::getId, Function.identity()));
+    }
+
+    /**
+     * 资源与时段信息来自创建预约时保存的快照，避免资源修改后历史记录发生变化。
+     */
+    private ReservationVO toView(Reservation reservation, SysUser user) {
+        ReservationVO view = new ReservationVO();
+        BeanUtils.copyProperties(reservation, view);
+        view.setLocation(reservation.getResourceLocation());
+        view.setStartDatetime(reservation.getSlotStartDatetime());
+        view.setEndDatetime(reservation.getSlotEndDatetime());
+        view.setCheckedIn(reservation.getCheckedInAt() != null);
+        if (user != null) {
+            view.setUserNickname(user.getNickname());
+            view.setUserPhone(user.getPhone());
+        }
+        return view;
     }
 
     private long countStatus(List<Reservation> reservations, String status) {
@@ -165,11 +184,6 @@ public class ReservationQueryService {
                                  Function<Resource, String> extractor) {
         Resource resource = resources.get(id);
         return resource == null ? null : extractor.apply(resource);
-    }
-
-    private LocalDateTime slotStart(Map<Long, ResourceSlot> slots, Long id) {
-        ResourceSlot slot = slots.get(id);
-        return slot == null ? null : slot.getStartDatetime();
     }
 
     private String timeBucket(LocalDateTime time) {

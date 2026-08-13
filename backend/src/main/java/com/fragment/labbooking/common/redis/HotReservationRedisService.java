@@ -103,10 +103,11 @@ public class HotReservationRedisService {
         }
     }
 
-    public HotRequestState accept(String requestId, Long userId, Long resourceId, Long slotId,
-                                  long expiresAtEpochMillis) {
+    /**
+     * 预占入口：发半消息后由事务监听器调用，把「校验+扣库存+占用户+写请求」原子做完。
+     */
+    public HotRequestState accept(String requestId, Long userId, Long resourceId, Long slotId) {
         long now = System.currentTimeMillis();
-        long requestTtl = Math.max(requestRetention.toMillis(), expiresAtEpochMillis - now + requestRetention.toMillis());
         Long result;
         try {
             result = redisTemplate.execute(
@@ -117,8 +118,7 @@ public class HotReservationRedisService {
                     String.valueOf(resourceId),
                     String.valueOf(slotId),
                     String.valueOf(now),
-                    String.valueOf(expiresAtEpochMillis),
-                    String.valueOf(requestTtl)
+                    String.valueOf(requestRetention.toMillis())
             );
         } catch (RuntimeException exception) {
             throw unavailable(exception);
@@ -142,7 +142,6 @@ public class HotReservationRedisService {
                 number(values, "resourceId"),
                 number(values, "slotId"),
                 text(values, "status"),
-                longValue(values, "expiresAt", 0L),
                 number(values, "reservationId"),
                 text(values, "reservationNo"),
                 text(values, "rejectCode"),
@@ -271,6 +270,7 @@ public class HotReservationRedisService {
         }
     }
 
+    /** 把 Lua 返回的数字状态码，翻译成 Java 业务异常（供请求线程直接抛给客户端）。 */
     private void assertAccepted(long result) {
         if (result == ACCEPTED || result == IDEMPOTENT_REPLAY) {
             return;
@@ -361,82 +361,130 @@ public class HotReservationRedisService {
         return value == null ? null : Long.valueOf(value);
     }
 
-    private long longValue(Map<Object, Object> values, String key, long fallback) {
-        Long value = number(values, key);
-        return value == null ? fallback : value;
-    }
-
     private String value(Object value) {
         return value == null ? "" : String.valueOf(value);
     }
 
+    /**
+     * 预热脚本：把 MySQL 里的热门时段名额，初始化成 Redis 里的三把 key。
+     * 只在应用启动或管理员改时段后调用（见 loadCache()）。
+     *
+     * 参数约定：
+     *   KEYS[1] = snapshot   KEYS[2] = stock   KEYS[3] = users
+     *   ARGV[1] = resourceId  ARGV[2] = status(OPEN)  ARGV[3] = openAt毫秒
+     *   ARGV[4] = endAt毫秒   ARGV[5] = 剩余名额   ARGV[6] = 缓存存活毫秒
+     *   ARGV[7..] = 已 BOOKED 的 userId 列表（来自 MySQL，逐个回填）
+     */
     private DefaultRedisScript<Long> initializeScript() {
         return script("""
+                -- 快照已存在 → 说明已预热过，直接返回，绝不覆盖当前库存（防止把正在抢的库存重置）
                 if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
-                redis.call('DEL', KEYS[2], KEYS[3])
-                redis.call('HSET', KEYS[1],
+                redis.call('DEL', KEYS[2], KEYS[3])   -- 先清掉旧库存和用户集合，防止上一次的残留
+                redis.call('HSET', KEYS[1],           -- 写时段快照：这个时段属于哪个资源、开放/结束时间
                     'resourceId', ARGV[1], 'status', ARGV[2],
                     'openAtMillis', ARGV[3], 'endAtMillis', ARGV[4])
-                redis.call('PEXPIRE', KEYS[1], ARGV[6])
-                redis.call('SET', KEYS[2], ARGV[5], 'PX', ARGV[6])
+                redis.call('PEXPIRE', KEYS[1], ARGV[6])   -- 快照带过期时间
+                redis.call('SET', KEYS[2], ARGV[5], 'PX', ARGV[6])  -- 库存 = MySQL 剩余名额，带过期
                 for index = 7, #ARGV do
+                    -- 把 MySQL 里已 BOOKED 的用户回填进 users 集合，防止「已被占的名额」被重复抢
                     redis.call('HSET', KEYS[3], ARGV[index], 'BOOKED')
                 end
                 if #ARGV >= 7 then redis.call('PEXPIRE', KEYS[3], ARGV[6]) end
-                return 1
+                return 1  -- 预热成功
                 """);
     }
 
+    /**
+     * 预占脚本：一次原子调用完成「校验 + 扣库存 + 占用户位 + 写请求记录」。
+     *
+     * 参数约定（看 Java 侧 accept() 调用顺序）：
+     *   KEYS[1] = snapshot（时段快照 hash，如 reservation:hot:v2:snapshot:5）
+     *   KEYS[2] = stock   （剩余库存 string）
+     *   KEYS[3] = users   （已占用用户 hash，key=userId, value=requestId）
+     *   KEYS[4] = request （本次请求 hash，如 reservation:request:v2:<requestId>）
+     *   ARGV[1] = requestId   ARGV[2] = userId    ARGV[3] = resourceId
+     *   ARGV[4] = slotId      ARGV[5] = now
+     *   ARGV[6] = requestTtl（请求记录存活时长，仅用于缓存清理）
+     *
+     * 返回值（对照类顶部常量）：
+     *   0=成功占位  1=库存不足  2=该用户已占过  3=快照没预热/已失效
+     *   4=时段不属于该资源  5=不可预约(未开放/已结束/非OPEN)  6=幂等键冲突
+     *   10=完全相同的请求重放(幂等，按成功处理)
+     */
     private DefaultRedisScript<Long> acceptScript() {
         return script("""
+                -- ① 幂等检查：这个 requestId 之前处理过吗？
                 if redis.call('EXISTS', KEYS[4]) == 1 then
+                    -- 已存在，但用户/资源/时段对不上 → 同一个幂等键被不同请求复用 → 冲突(6)
                     if redis.call('HGET', KEYS[4], 'userId') ~= ARGV[2]
                         or redis.call('HGET', KEYS[4], 'resourceId') ~= ARGV[3]
                         or redis.call('HGET', KEYS[4], 'slotId') ~= ARGV[4] then
                         return 6
                     end
+                    -- 完全一致 → 用户用同一个 Idempotency-Key 重试 → 幂等重放(10)，Java 侧按成功处理
                     return 10
                 end
+                -- ② 快照或库存不存在 → 时段还没预热，或缓存已过期 → 通道不可用(3)
                 if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('EXISTS', KEYS[2]) == 0 then
                     return 3
                 end
+                -- ③ 快照里登记的 resourceId 和请求对不上 → 时段不属于该资源(4)
                 if redis.call('HGET', KEYS[1], 'resourceId') ~= ARGV[3] then return 4 end
+                -- ④ 时段状态不是 OPEN（可能被管理员关闭）→ 不可预约(5)
                 if redis.call('HGET', KEYS[1], 'status') ~= 'OPEN' then return 5 end
+                -- ⑤ 时间窗口：现在必须落在 [openAt, endAt) 内，否则不可预约(5)
                 local now = tonumber(ARGV[5])
                 local openAt = tonumber(redis.call('HGET', KEYS[1], 'openAtMillis') or '-1')
                 local endAt = tonumber(redis.call('HGET', KEYS[1], 'endAtMillis') or '-1')
                 if openAt < 0 or endAt < 0 or now < openAt or now >= endAt then return 5 end
+                -- ⑥ 该 userId 已经在 users 集合里 → 这个用户已占过该时段 → 重复预约(2)
                 if redis.call('HEXISTS', KEYS[3], ARGV[2]) == 1 then return 2 end
+                -- ⑦ 库存检查：剩余名额 <= 0 → 抢光了(1)
                 local stock = tonumber(redis.call('GET', KEYS[2]) or '-1')
                 if stock <= 0 then return 1 end
 
-                redis.call('DECR', KEYS[2])
-                redis.call('HSET', KEYS[3], ARGV[2], ARGV[1])
-                local stockTtl = redis.call('PTTL', KEYS[2])
+                -- ⑧ 全部校验通过，开始「占位」（这几步必须原子，缺一步就会超卖/漏占）：
+                redis.call('DECR', KEYS[2])                                  -- 库存 -1
+                redis.call('HSET', KEYS[3], ARGV[2], ARGV[1])                -- 记录用户占位：userId -> requestId
+                local stockTtl = redis.call('PTTL', KEYS[2])                 -- 让 users 集合跟库存一起过期，防脏数据残留
                 if stockTtl > 0 then redis.call('PEXPIRE', KEYS[3], stockTtl) end
-                redis.call('HSET', KEYS[4],
+                redis.call('HSET', KEYS[4],                                  -- 写请求记录，标记 PRE_RESERVED(预占成功，等异步确认)
                     'requestId', ARGV[1], 'userId', ARGV[2],
                     'resourceId', ARGV[3], 'slotId', ARGV[4],
-                    'status', 'PRE_RESERVED', 'createdAt', ARGV[5],
-                    'expiresAt', ARGV[6])
-                redis.call('PEXPIRE', KEYS[4], ARGV[7])
-                return 0
+                    'status', 'PRE_RESERVED', 'createdAt', ARGV[5])
+                redis.call('PEXPIRE', KEYS[4], ARGV[6])
+                return 0  -- 成功
                 """);
     }
 
+    /**
+     * 最终确认脚本：消费端落库完成后调用（见 complete()），把请求 hash
+     * 从 PRE_RESERVED 收敛成最终态（CONFIRMED / REJECTED）。
+     * 只有非 CONFIRMED 的终态才会释放占位并回补库存。
+     *
+     * 参数约定：
+     *   KEYS[1] = stock   KEYS[2] = users   KEYS[3] = request
+     *   ARGV[1] = userId      ARGV[2] = requestId   ARGV[3] = 最终状态
+     *   ARGV[4] = reservationId  ARGV[5] = reservationNo  ARGV[6] = rejectCode
+     *   ARGV[7] = rejectReason   ARGV[8] = resourceId   ARGV[9] = slotId
+     *   ARGV[10] = 请求记录存活时长
+     */
     private DefaultRedisScript<Long> completeScript() {
         return script("""
+                -- 已是终态 → 幂等返回，不重复处理（消息可能被投递多次）
                 local current = redis.call('HGET', KEYS[3], 'status')
-                if current == 'CONFIRMED' or current == 'REJECTED' or current == 'EXPIRED' then
+                if current == 'CONFIRMED' or current == 'REJECTED' then
                     return 0
                 end
+                -- REJECTED → 释放占位、回补库存：
                 if ARGV[3] ~= 'CONFIRMED' then
-                    local ownerRequest = redis.call('HGET', KEYS[2], ARGV[1])
-                    if ownerRequest == ARGV[2] then
-                        redis.call('HDEL', KEYS[2], ARGV[1])
-                        if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('INCR', KEYS[1]) end
+                    local ownerRequest = redis.call('HGET', KEYS[2], ARGV[1])  -- 这个用户占位记录里的 requestId
+                    if ownerRequest == ARGV[2] then                            -- 确实是本次请求占的位才释放
+                        redis.call('HDEL', KEYS[2], ARGV[1])                   -- 移除用户占位
+                        if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('INCR', KEYS[1]) end  -- 库存 +1 归还
                     end
                 end
+                -- 把请求 hash 更新成最终状态，供 GET /reservation/requests 查询
                 redis.call('HSET', KEYS[3], 'status', ARGV[3],
                     'requestId', ARGV[2], 'userId', ARGV[1],
                     'resourceId', ARGV[8], 'slotId', ARGV[9],
@@ -447,8 +495,13 @@ public class HotReservationRedisService {
                 """);
     }
 
+    /**
+     * 取消回补脚本：用户主动取消预约后调用（见 releaseAfterSuccessfulCancellation()），
+     * 把该用户从 users 集合移除，并给库存 +1。
+     */
     private DefaultRedisScript<Long> releaseConfirmedScript() {
         return script("""
+                -- 只有真的删掉了占位记录才回补库存（HDEL 返回 1 = 删掉了）
                 if redis.call('HDEL', KEYS[2], ARGV[1]) == 1 then
                     if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('INCR', KEYS[1]) end
                     return 1
@@ -470,7 +523,6 @@ public class HotReservationRedisService {
             Long resourceId,
             Long slotId,
             String status,
-            long expiresAtEpochMillis,
             Long reservationId,
             String reservationNo,
             String rejectCode,

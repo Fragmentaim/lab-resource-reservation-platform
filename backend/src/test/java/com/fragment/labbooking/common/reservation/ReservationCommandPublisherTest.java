@@ -47,12 +47,12 @@ class ReservationCommandPublisherTest {
     private ReservationCreateCommand command() {
         return new ReservationCreateCommand(
                 "33c8aa68-9fe0-4d30-afd5-6e62de86bd6c",
-                7L, 1L, 10L, System.currentTimeMillis() + 300_000);
+                7L, 1L, 10L);
     }
 
     private HotReservationRedisService.HotRequestState state(ReservationCreateCommand command) {
         return new HotReservationRedisService.HotRequestState(
                 command.requestId(), command.userId(), command.resourceId(), command.slotId(),
-                "PRE_RESERVED", command.expiresAtEpochMillis(), null, null, null, null);
+                "PRE_RESERVED", null, null, null, null);
     }
 }

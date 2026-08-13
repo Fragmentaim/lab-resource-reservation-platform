@@ -10,18 +10,10 @@ import com.fragment.labbooking.entity.ReservationRequest;
 import com.fragment.labbooking.mapper.ReservationMapper;
 import com.fragment.labbooking.mapper.ReservationRequestMapper;
 import com.fragment.labbooking.vo.ReservationSubmitVO;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
 
-/**
- * Accepts hot-reservation requests and exposes their eventual result.
- *
- * <p>The RocketMQ transaction listener performs the Redis pre-reservation.
- * This service therefore does not maintain a second retry queue or rebuild hot
- * inventory in the request thread.</p>
- */
 @Service
 public class HotReservationRequestService {
 
@@ -29,46 +21,49 @@ public class HotReservationRequestService {
     private final HotReservationRedisService hotRedis;
     private final ReservationRequestMapper requestMapper;
     private final ReservationMapper reservationMapper;
-    private final long requestTtlMillis;
 
     public HotReservationRequestService(ReservationCommandPublisher commandPublisher,
                                         HotReservationRedisService hotRedis,
                                         ReservationRequestMapper requestMapper,
-                                        ReservationMapper reservationMapper,
-                                        @Value("${app.reservation.hot-request-ttl-seconds:300}") long requestTtlSeconds) {
+                                        ReservationMapper reservationMapper) {
         this.commandPublisher = commandPublisher;
         this.hotRedis = hotRedis;
         this.requestMapper = requestMapper;
         this.reservationMapper = reservationMapper;
-        this.requestTtlMillis = Math.max(30, requestTtlSeconds) * 1000L;
     }
 
+    /**
+     * 受理一次热门预约请求。
+     */
     public ReservationSubmitVO accept(String idempotencyKey, Long userId, Long resourceId, Long slotId) {
         String requestId = normalizeRequestId(idempotencyKey);
-        ReservationCreateCommand command = new ReservationCreateCommand(
-                requestId, userId, resourceId, slotId,
-                System.currentTimeMillis() + requestTtlMillis);
 
-        // The call returns only after the half message has been sent and the
-        // local Redis transaction has produced a commit/rollback decision.
+        ReservationCreateCommand command = new ReservationCreateCommand(requestId, userId, resourceId, slotId);
+
         return toResult(commandPublisher.publish(command));
     }
 
+    /**
+     * 查询本人预约请求的最终结果。
+     */
     public ReservationSubmitVO getRequest(Long userId, String rawRequestId) {
         String requestId = normalizeRequestId(rawRequestId);
+        //优先查 MySQL 账本
         ReservationRequest request = findLedger(requestId);
         if (request != null) {
-            assertOwner(userId, request.getUserId());
+            assertOwner(userId, request.getUserId());   // 只能查自己的
             return toResult(request);
         }
 
+        // 查 Redis 请求记录：可能预占成功但未落库
         HotReservationRedisService.HotRequestState state = hotRedis.getRequest(requestId);
         if (state == null) {
             throw new BusinessException(404, "预约请求不存在");
         }
-        assertOwner(userId, state.userId());
+        assertOwner(userId, state.userId());   // 只能查自己的
         return toResult(state);
     }
+
 
     public String normalizeRequestId(String value) {
         if (value == null) {
@@ -81,6 +76,7 @@ public class HotReservationRequestService {
         }
     }
 
+
     private ReservationRequest findLedger(String requestId) {
         return requestMapper.selectOne(new LambdaQueryWrapper<ReservationRequest>()
                 .eq(ReservationRequest::getRequestId, requestId));
@@ -89,7 +85,7 @@ public class HotReservationRequestService {
     private ReservationSubmitVO toResult(HotReservationRedisService.HotRequestState state) {
         ReservationSubmitVO result = new ReservationSubmitVO();
         result.setRequestId(state.requestId());
-        result.setStatus(apiStatus(state.status()));
+        result.setStatus(apiStatus(state.status()));   // 把内部状态翻译成对外状态(PENDING等)
         result.setReservationId(state.reservationId());
         result.setReservationNo(state.reservationNo());
         result.setMessage(message(state.status(), state.rejectReason()));
@@ -120,7 +116,6 @@ public class HotReservationRequestService {
         return switch (apiStatus(status)) {
             case "PENDING" -> "预约请求已受理，正在异步确认";
             case "CONFIRMED" -> "预约成功";
-            case "EXPIRED" -> "预约请求已过期";
             case "REJECTED" -> rejectReason == null ? "预约未通过最终确认" : rejectReason;
             default -> "预约请求状态未知";
         };

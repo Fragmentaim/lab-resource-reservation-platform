@@ -70,10 +70,10 @@ class HotReservationRedisServiceTest {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(hashOperations.entries("reservation:request:v2:req-1")).thenReturn(Map.of(
                 "requestId", "req-1", "userId", "7", "resourceId", "3", "slotId", "11",
-                "status", "PRE_RESERVED", "expiresAt", "1000"
+                "status", "PRE_RESERVED"
         ));
 
-        var state = service.accept("req-1", 7L, 3L, 11L, 1000);
+        var state = service.accept("req-1", 7L, 3L, 11L);
 
         assertThat(state.status()).isEqualTo("PRE_RESERVED");
     }
@@ -83,7 +83,7 @@ class HotReservationRedisServiceTest {
         when(redisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
                 .thenReturn(2L);
 
-        assertThatThrownBy(() -> service.accept("req-2", 7L, 3L, 11L, 1000))
+        assertThatThrownBy(() -> service.accept("req-2", 7L, 3L, 11L))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(409));
     }
@@ -93,7 +93,7 @@ class HotReservationRedisServiceTest {
         when(redisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
                 .thenReturn(3L);
 
-        assertThatThrownBy(() -> service.accept("req-3", 7L, 3L, 11L, 1000))
+        assertThatThrownBy(() -> service.accept("req-3", 7L, 3L, 11L))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(503));
     }

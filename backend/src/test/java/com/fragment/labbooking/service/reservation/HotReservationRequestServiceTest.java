@@ -32,7 +32,7 @@ class HotReservationRequestServiceTest {
     @BeforeEach
     void setUp() {
         service = new HotReservationRequestService(
-                publisher, hotRedis, requestMapper, reservationMapper, 300);
+                publisher, hotRedis, requestMapper, reservationMapper);
     }
 
     @Test
@@ -75,7 +75,6 @@ class HotReservationRequestServiceTest {
     private HotReservationRedisService.HotRequestState state(String status, Long reservationId) {
         return new HotReservationRedisService.HotRequestState(
                 REQUEST_ID, 7L, 1L, 10L, status,
-                System.currentTimeMillis() + 300_000,
                 reservationId, null, null, null);
     }
 }

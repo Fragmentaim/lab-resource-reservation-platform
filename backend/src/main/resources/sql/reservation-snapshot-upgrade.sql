@@ -13,3 +13,10 @@ SET r.resource_name = COALESCE(r.resource_name, res.resource_name),
     r.resource_location = COALESCE(r.resource_location, res.location),
     r.slot_start_datetime = COALESCE(r.slot_start_datetime, slot.start_datetime),
     r.slot_end_datetime = COALESCE(r.slot_end_datetime, slot.end_datetime);
+
+-- 回填完成后固化预约快照约束，读取历史预约时不再回查当前资源和时段。
+ALTER TABLE reservation
+    MODIFY COLUMN resource_name VARCHAR(100) NOT NULL,
+    MODIFY COLUMN resource_code VARCHAR(50) NOT NULL,
+    MODIFY COLUMN slot_start_datetime DATETIME NOT NULL,
+    MODIFY COLUMN slot_end_datetime DATETIME NOT NULL;

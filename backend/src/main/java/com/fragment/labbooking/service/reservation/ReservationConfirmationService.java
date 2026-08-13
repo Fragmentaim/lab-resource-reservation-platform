@@ -22,7 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 
 /**
- * Converts a Redis-accepted hot request into one authoritative MySQL result.
+ * 消费端「确认落库」服务。
  */
 @Service
 public class ReservationConfirmationService {
@@ -54,21 +54,21 @@ public class ReservationConfirmationService {
         this.resultTopic = resultTopic;
     }
 
+    /**
+     * 消费预约命令，把它转成 MySQL 里的权威结果（整个方法在一个事务里）。
+     */
     @Transactional(rollbackFor = Exception.class)
     public void confirm(ReservationCreateCommand command) {
         validateCommand(command);
+
+        // 请求账本的唯一键负责抵御 RocketMQ 重复投递。
         ReservationRequest request = newProcessingRequest(command);
         if (requestMapper.insertProcessingIgnore(request) == 0) {
             handleDuplicateDelivery(command);
             return;
         }
 
-        if (System.currentTimeMillis() >= command.expiresAtEpochMillis()) {
-            finish(request, ReservationRequestStatus.EXPIRED, null,
-                    "REQUEST_EXPIRED", "预约请求已过期");
-            return;
-        }
-
+        // Redis 负责高并发预占，MySQL 仍需校验最终业务状态。
         Resource resource = resourceMapper.selectById(command.resourceId());
         ResourceSlot slot = slotMapper.selectById(command.slotId());
         Rejection rejection = validateBusiness(command, resource, slot);
@@ -86,6 +86,7 @@ public class ReservationConfirmationService {
             return;
         }
 
+        // 条件更新是数据库侧防超卖的最后一道约束。
         if (slotMapper.deductQuotaIfAvailable(command.slotId()) == 0) {
             reservationMapper.deleteById(reservation.getId());
             finish(request, ReservationRequestStatus.REJECTED, null,
@@ -95,21 +96,7 @@ public class ReservationConfirmationService {
         finish(request, ReservationRequestStatus.CONFIRMED, reservation, null, null);
     }
 
-    @Transactional(rollbackFor = Exception.class)
-    public void expire(ReservationCreateCommand command) {
-        validateCommand(command);
-        ReservationRequest request = newProcessingRequest(command);
-        if (requestMapper.insertProcessingIgnore(request) == 0) {
-            ReservationRequest existing = find(command.requestId());
-            if (existing != null && ReservationRequestStatus.isTerminal(existing.getStatus())) {
-                return;
-            }
-            throw new IllegalStateException("Reservation request is already being processed: " + command.requestId());
-        }
-        finish(request, ReservationRequestStatus.EXPIRED, null,
-                "REQUEST_EXPIRED", "预约请求已过期");
-    }
-
+    /** 幂等分支：账本已存在，说明这是重复投递。校验一致且已是终态才允许安全返回。 */
     private void handleDuplicateDelivery(ReservationCreateCommand command) {
         ReservationRequest existing = find(command.requestId());
         if (existing == null) {
@@ -123,6 +110,14 @@ public class ReservationConfirmationService {
         }
     }
 
+    /**
+     * 收尾：把账本更新成最终状态，并发出结果事件（经 Outbox 可靠投递）。
+     *
+     * 结果事件会被 ReservationResultService 消费，做三件事：
+     *   - 收敛 Redis 状态（CONFIRMED 保留 / REJECTED 释放占位并回补库存）
+     *   - 发站内通知
+     *   - 仅成功时：建提醒 + 排自动取消
+     */
     private void finish(ReservationRequest request,
                         ReservationRequestStatus status,
                         Reservation reservation,
@@ -137,6 +132,7 @@ public class ReservationConfirmationService {
             throw new IllegalStateException("Failed to finalize reservation request " + request.getRequestId());
         }
 
+        // 结果事件与业务数据同事务写入 Outbox，避免数据库成功但事件丢失。
         ReservationResultEvent event = new ReservationResultEvent(
                 request.getRequestId(),
                 request.getUserId(),
@@ -149,17 +145,18 @@ public class ReservationConfirmationService {
                 rejectReason
         );
         outboxService.enqueue(
-                "RESERVATION_REQUEST",
-                request.getRequestId(),
-                RESULT_EVENT_TYPE,
-                resultTopic,
-                RESULT_TAG,
-                request.getRequestId(),
-                LocalDateTime.now(),
-                event
+                "RESERVATION_REQUEST",   // 业务类型
+                request.getRequestId(),  // 业务 key（幂等）
+                RESULT_EVENT_TYPE,       // 事件类型
+                resultTopic,             // 目标 topic
+                RESULT_TAG,              // tag
+                request.getRequestId(),  // 消息 key
+                LocalDateTime.now(),     // 入队时间
+                event                    // 事件本体
         );
     }
 
+    /** 造一条 PROCESSING 状态的请求账本记录（insertProcessingIgnore 用它做幂等）。 */
     private ReservationRequest newProcessingRequest(ReservationCreateCommand command) {
         ReservationRequest request = new ReservationRequest();
         request.setRequestId(command.requestId());
@@ -176,6 +173,11 @@ public class ReservationConfirmationService {
                 .eq(ReservationRequest::getRequestId, requestId));
     }
 
+    /**
+     * 业务校验：消费端拿到 Redis 预占成功的命令后，还要在 MySQL 侧再核一遍。
+     * 任何一项不过就返回一个拒绝原因（Rejection），由调用方 finish 成 REJECTED。
+     * 返回 null 表示全部通过。
+     */
     private Rejection validateBusiness(ReservationCreateCommand command, Resource resource, ResourceSlot slot) {
         if (resource == null) {
             return new Rejection("RESOURCE_NOT_FOUND", "资源不存在");
@@ -202,14 +204,15 @@ public class ReservationConfirmationService {
         return null;
     }
 
+    /** 命令基本校验：必要字段缺了直接拒绝（数据异常，不落账本）。 */
     private void validateCommand(ReservationCreateCommand command) {
         if (command == null || command.requestId() == null || command.userId() == null
-                || command.resourceId() == null || command.slotId() == null
-                || command.expiresAtEpochMillis() <= 0) {
+                || command.resourceId() == null || command.slotId() == null) {
             throw new IllegalArgumentException("Invalid reservation create command");
         }
     }
 
+    /** 比对：重复投递的命令和账本记录是否同一件事（用户/资源/时段一致）。 */
     private boolean sameRequest(ReservationRequest request, ReservationCreateCommand command) {
         return request.getUserId().equals(command.userId())
                 && request.getResourceId().equals(command.resourceId())

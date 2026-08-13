@@ -14,7 +14,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -39,7 +38,7 @@ class ReservationTransactionListenerTest {
         ReservationCreateCommand command = command();
         var state = state(command);
         var context = new ReservationCommandPublisher.LocalTransactionContext(command);
-        when(hotRedis.accept(eq(REQUEST_ID), eq(7L), eq(1L), eq(10L), anyLong()))
+        when(hotRedis.accept(eq(REQUEST_ID), eq(7L), eq(1L), eq(10L)))
                 .thenReturn(state);
 
         LocalTransactionState decision = listener.executeLocalTransaction(message(command), context);
@@ -52,7 +51,7 @@ class ReservationTransactionListenerTest {
     void deterministicBusinessRejectionShouldRollbackHalfMessage() {
         ReservationCreateCommand command = command();
         var context = new ReservationCommandPublisher.LocalTransactionContext(command);
-        when(hotRedis.accept(eq(REQUEST_ID), eq(7L), eq(1L), eq(10L), anyLong()))
+        when(hotRedis.accept(eq(REQUEST_ID), eq(7L), eq(1L), eq(10L)))
                 .thenThrow(new BusinessException(409, "热门时段余量不足"));
 
         LocalTransactionState decision = listener.executeLocalTransaction(message(command), context);
@@ -67,7 +66,7 @@ class ReservationTransactionListenerTest {
     void unavailableRedisShouldLeaveTransactionForBrokerCheck() {
         ReservationCreateCommand command = command();
         var context = new ReservationCommandPublisher.LocalTransactionContext(command);
-        when(hotRedis.accept(eq(REQUEST_ID), eq(7L), eq(1L), eq(10L), anyLong()))
+        when(hotRedis.accept(eq(REQUEST_ID), eq(7L), eq(1L), eq(10L)))
                 .thenThrow(new BusinessException(503, "Redis unavailable"));
 
         assertThat(listener.executeLocalTransaction(message(command), context))
@@ -104,7 +103,7 @@ class ReservationTransactionListenerTest {
         ReservationCreateCommand command = command();
         when(hotRedis.getRequest(REQUEST_ID)).thenReturn(new HotReservationRedisService.HotRequestState(
                 REQUEST_ID, 7L, 99L, 10L, "PRE_RESERVED",
-                command.expiresAtEpochMillis(), null, null, null, null));
+                null, null, null, null));
 
         assertThat(listener.checkLocalTransaction(checkMessage(command)))
                 .isEqualTo(LocalTransactionState.ROLLBACK_MESSAGE);
@@ -112,13 +111,13 @@ class ReservationTransactionListenerTest {
 
     private ReservationCreateCommand command() {
         return new ReservationCreateCommand(
-                REQUEST_ID, 7L, 1L, 10L, System.currentTimeMillis() + 300_000);
+                REQUEST_ID, 7L, 1L, 10L);
     }
 
     private HotReservationRedisService.HotRequestState state(ReservationCreateCommand command) {
         return new HotReservationRedisService.HotRequestState(
                 command.requestId(), command.userId(), command.resourceId(), command.slotId(),
-                "PRE_RESERVED", command.expiresAtEpochMillis(), null, null, null, null);
+                "PRE_RESERVED", null, null, null, null);
     }
 
     private Message message(ReservationCreateCommand command) {

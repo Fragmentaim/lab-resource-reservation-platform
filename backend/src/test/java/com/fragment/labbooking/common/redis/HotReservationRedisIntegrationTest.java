@@ -80,15 +80,14 @@ class HotReservationRedisIntegrationTest {
                     1
             );
 
-            var accepted = service.accept(
-                    requestId, userId, resourceId, slotId, now + 30_000);
+            var accepted = service.accept(requestId, userId, resourceId, slotId);
             assertThat(accepted.status()).isEqualTo("PRE_RESERVED");
             assertThat(redis.opsForValue().get(stockKey)).isEqualTo("1");
 
-            service.accept(requestId, userId, resourceId, slotId, now + 30_000);
+            service.accept(requestId, userId, resourceId, slotId);
             assertThat(redis.opsForValue().get(stockKey)).isEqualTo("1");
             assertThatThrownBy(() -> service.accept(
-                    UUID.randomUUID().toString(), userId, resourceId, slotId, now + 30_000))
+                    UUID.randomUUID().toString(), userId, resourceId, slotId))
                     .isInstanceOf(BusinessException.class)
                     .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(409));
 

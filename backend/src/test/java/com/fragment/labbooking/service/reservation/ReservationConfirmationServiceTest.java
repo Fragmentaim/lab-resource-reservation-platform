@@ -137,26 +137,9 @@ class ReservationConfirmationServiceTest {
         verifyNoInteractions(outboxService);
     }
 
-    @Test
-    void lateCommandShouldBecomeExpiredWithoutCreatingReservation() {
-        ReservationCreateCommand expired = new ReservationCreateCommand(
-                "33c8aa68-9fe0-4d30-afd5-6e62de86bd6c", 7L, 1L, 10L,
-                System.currentTimeMillis() - 1);
-        when(requestMapper.insertProcessingIgnore(any())).thenReturn(1);
-        when(requestMapper.updateById(any(ReservationRequest.class))).thenReturn(1);
-
-        service.confirm(expired);
-
-        ArgumentCaptor<ReservationRequest> ledger = ArgumentCaptor.forClass(ReservationRequest.class);
-        verify(requestMapper).updateById(ledger.capture());
-        assertThat(ledger.getValue().getStatus()).isEqualTo("EXPIRED");
-        verifyNoInteractions(resourceMapper, slotMapper, persistenceHelper);
-    }
-
     private ReservationCreateCommand command() {
         return new ReservationCreateCommand(
-                "33c8aa68-9fe0-4d30-afd5-6e62de86bd6c", 7L, 1L, 10L,
-                System.currentTimeMillis() + 60_000);
+                "33c8aa68-9fe0-4d30-afd5-6e62de86bd6c", 7L, 1L, 10L);
     }
 
     private ReservationRequest ledger(String status) {

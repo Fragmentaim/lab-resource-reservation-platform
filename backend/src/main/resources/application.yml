@@ -145,7 +145,6 @@ app:
     hot-init-wait-millis: 1000
     hot-cache-retention-hours: 24
     hot-request-retention-hours: 24
-    hot-request-ttl-seconds: 300
     command:
       enabled: false
       consumer-enabled: false
