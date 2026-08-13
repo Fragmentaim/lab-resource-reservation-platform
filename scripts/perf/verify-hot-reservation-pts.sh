@@ -29,6 +29,13 @@ SELECT CONCAT(
 ) FROM resource_slot s WHERE s.id = $SLOT_ID;"
 }
 
+read_confirmation_span() {
+  MYSQL_PWD="$LOADTEST_DB_PASSWORD" mysql --protocol=TCP --host="$db_host" --port="$db_port" --user="$LOADTEST_DB_USERNAME" --database="$db_name" --batch --skip-column-names -e "
+SELECT COALESCE(ROUND(TIMESTAMPDIFF(MICROSECOND, MIN(created_at), MAX(completed_at)) / 1000), 0)
+FROM reservation_request
+WHERE slot_id = $SLOT_ID AND status = 'CONFIRMED';"
+}
+
 deadline="$(( $(date +%s) + wait_seconds ))"
 while true; do
   row="$(read_state)"
@@ -56,4 +63,6 @@ if [[ "$total" != "$EXPECTED_QUOTA" || "$booked" != "$EXPECTED_QUOTA" || "$confi
   echo "Verification failed: quota/accounting/duplicate invariant is broken." >&2
   exit 1
 fi
+confirmation_span_ms="$(read_confirmation_span)"
+echo "confirmationSpanMs=$confirmation_span_ms"
 echo "Verification passed: no oversell, no duplicate booking, and Redis/MySQL accounting is consistent."

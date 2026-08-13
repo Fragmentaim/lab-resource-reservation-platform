@@ -1,4 +1,26 @@
-# 热点预约 PTS 压测包
+# 预约链路 A/B 与热点预约 PTS 压测包
+
+## A/B 对比口径
+
+- **A / SQL 基线**：NORMAL 时段，纯 MySQL 条件扣减和同步事务落库。
+- **B / 优化版**：HOT 时段，RocketMQ 事务半消息、Redis Lua 预占、MQ 异步确认、MySQL 最终落库和 Outbox 结果事件。
+
+两组都使用当前代码、同一 `/reservation`、同一 JMX、500 个预登录独立用户和 200 个名额。限流、提醒、自动取消与审计在对比中关闭，避免污染核心指标。
+
+```bash
+# A：准备纯 SQL 基线
+COUNT=500 QUOTA=200 /opt/lab-booking/loadtest/prepare-sql-baseline-pts.sh
+
+# B：准备 Redis + MQ 优化版
+COUNT=500 QUOTA=200 /opt/lab-booking/loadtest/prepare-optimized-pts.sh
+```
+
+分别上传脚本输出的 CSV；PTS 参数都设为 500 并发、5 秒升压、每用户一次。压测后分别执行：
+
+```bash
+/opt/lab-booking/loadtest/verify-sql-baseline-pts.sh <SQL_SLOT_ID> 200
+/opt/lab-booking/loadtest/verify-hot-reservation-pts.sh <HOT_SLOT_ID> 200
+```
 
 这个目录只用于 ECS 上的隔离库 `lab_booking_loadtest`。场景刻意不包含登录：登录和 JWT 签发会污染热点预约受理接口的吞吐与延迟。压测请求仍经过真实 JWT 鉴权，并执行 `RocketMQ 半消息 → Redis Lua 预占 → 提交消息 → MySQL 异步确认 → Outbox 结果事件`。
 

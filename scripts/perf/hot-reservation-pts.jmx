@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
-    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="热点预约抢占 - 预登录用户" enabled="true">
-      <stringProp name="TestPlan.comments">仅压 POST /reservation。登录、建号与 Redis 预热均在压测前完成。202/PENDING 表示 Redis 已受理并交给 RocketMQ 异步确认；409 表示正常售罄或重复预约。最终结果由服务端一致性脚本校验。</stringProp>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="预约链路 A/B 对比 - 预登录用户" enabled="true">
+      <stringProp name="TestPlan.comments">同一脚本用于纯 SQL 与 MQ + Redis + SQL 两组测试。仅压 POST /reservation；登录和建号均在压测前完成。200/CONFIRMED、202/PENDING 和 409/售罄均属于合法业务结果，最终库存由服务端脚本校验。</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
       <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="用户变量" enabled="true">
@@ -22,7 +22,7 @@
       </ThreadGroup>
       <hashTree>
         <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="预登录 Token 数据源" enabled="true">
-          <stringProp name="filename">${__P(tokens_csv,hot-reservation-tokens.csv)}</stringProp>
+          <stringProp name="filename">${__P(tokens_csv,reservation-tokens.csv)}</stringProp>
           <stringProp name="fileEncoding">UTF-8</stringProp>
           <stringProp name="variableNames">accessToken,resourceId,slotId,requestId</stringProp>
           <boolProp name="ignoreFirstLine">true</boolProp>
@@ -41,7 +41,7 @@
           <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
         </ConfigTestElement>
         <hashTree/>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="提交热点预约（202=异步受理，409=正常售罄）" enabled="true">
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="提交预约（200=同步确认，202=异步受理，409=正常售罄）" enabled="true">
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="用户定义的变量" enabled="true">
             <collectionProp name="Arguments.arguments">
               <elementProp name="" elementType="HTTPArgument">
@@ -71,6 +71,14 @@
               <elementProp name="Idempotency-Key" elementType="Header"><stringProp name="Header.name">Idempotency-Key</stringProp><stringProp name="Header.value">${requestId}</stringProp></elementProp>
             </collectionProp>
           </HeaderManager>
+          <hashTree/>
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="将售罄视为合法业务结果" enabled="true">
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="script">prev.setSuccessful(['200','202','409'].contains(prev.getResponseCode()))</stringProp>
+            <stringProp name="scriptLanguage">groovy</stringProp>
+          </JSR223PostProcessor>
           <hashTree/>
         </hashTree>
       </hashTree>
