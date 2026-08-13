@@ -11,17 +11,18 @@
     </TestPlan>
     <hashTree>
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="500 个预登录用户抢占同一时段" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">${__P(threads,500)}</stringProp>
-        <stringProp name="ThreadGroup.ramp_time">${__P(ramp_seconds,5)}</stringProp>
+        <!-- PTS 会按控制台配置改写普通线程组；脚本内保持 1，避免动态表达式被解析为 0。 -->
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">1</stringProp>
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="每个用户只提交一次" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
-          <stringProp name="LoopController.loops">${__P(loops,1)}</stringProp>
+          <stringProp name="LoopController.loops">1</stringProp>
         </elementProp>
       </ThreadGroup>
       <hashTree>
         <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="预登录 Token 数据源" enabled="true">
-          <stringProp name="filename">${__P(tokens_csv,reservation-tokens.csv)}</stringProp>
+          <stringProp name="filename">reservation-tokens.csv</stringProp>
           <stringProp name="fileEncoding">UTF-8</stringProp>
           <stringProp name="variableNames">accessToken,resourceId,slotId,requestId</stringProp>
           <boolProp name="ignoreFirstLine">true</boolProp>
