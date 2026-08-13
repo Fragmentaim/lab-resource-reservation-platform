@@ -35,11 +35,8 @@ public class HotReservationRequestService {
     /**
      * 受理一次热门预约请求。
      */
-    public ReservationSubmitVO accept(String idempotencyKey, Long userId, Long resourceId, Long slotId) {
-        String requestId = normalizeRequestId(idempotencyKey);
-
+    public ReservationSubmitVO accept(String requestId, Long userId, Long resourceId, Long slotId) {
         ReservationCreateCommand command = new ReservationCreateCommand(requestId, userId, resourceId, slotId);
-
         return toResult(commandPublisher.publish(command));
     }
 

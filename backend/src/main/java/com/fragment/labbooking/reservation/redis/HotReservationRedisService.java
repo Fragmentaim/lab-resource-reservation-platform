@@ -123,12 +123,20 @@ public class HotReservationRedisService {
         } catch (RuntimeException exception) {
             throw unavailable(exception);
         }
-        assertAccepted(result == null ? NOT_READY : result);
-        HotRequestState state = getRequest(requestId);
-        if (state == null) {
+        long outcome = result == null ? NOT_READY : result;
+        if (outcome == ACCEPTED) {
+            // Lua 已原子写入 PRE_RESERVED；首次受理直接使用已知参数返回，避免再次 HGETALL。
+            return HotRequestState.preReserved(requestId, userId, resourceId, slotId);
+        }
+        if (outcome == IDEMPOTENT_REPLAY) {
+            // 重放时状态可能已被异步链路推进到终态，因此必须读取现有请求记录。
+            HotRequestState state = getRequest(requestId);
+            if (state != null) {
+                return state;
+            }
             throw unavailable(null);
         }
-        return state;
+        throw rejection(outcome);
     }
 
     public HotRequestState getRequest(String requestId) {
@@ -270,27 +278,24 @@ public class HotReservationRedisService {
         }
     }
 
-    /** 把 Lua 返回的数字状态码，翻译成 Java 业务异常（供请求线程直接抛给客户端）。 */
-    private void assertAccepted(long result) {
-        if (result == ACCEPTED || result == IDEMPOTENT_REPLAY) {
-            return;
-        }
+    /** 把 Lua 的失败状态码翻译成接口业务异常。 */
+    private BusinessException rejection(long result) {
         if (result == OUT_OF_STOCK) {
-            throw new BusinessException(409, "热门时段余量不足");
+            return new BusinessException(409, "热门时段余量不足");
         }
         if (result == DUPLICATE_USER) {
-            throw new BusinessException(409, "当前用户已提交该时段的预约");
+            return new BusinessException(409, "当前用户已提交该时段的预约");
         }
         if (result == RESOURCE_MISMATCH) {
-            throw new BusinessException(400, "时段不属于当前资源");
+            return new BusinessException(400, "时段不属于当前资源");
         }
         if (result == NOT_BOOKABLE) {
-            throw new BusinessException(409, "热门时段当前不可预约");
+            return new BusinessException(409, "热门时段当前不可预约");
         }
         if (result == IDEMPOTENCY_CONFLICT) {
-            throw new BusinessException(409, "Idempotency-Key 已用于其他预约请求");
+            return new BusinessException(409, "Idempotency-Key 已用于其他预约请求");
         }
-        throw unavailable(null);
+        return unavailable(null);
     }
 
     private boolean isOpenHotSlot(ResourceSlot slot) {
@@ -528,5 +533,10 @@ public class HotReservationRedisService {
             String rejectCode,
             String rejectReason
     ) {
+        static HotRequestState preReserved(String requestId, Long userId, Long resourceId, Long slotId) {
+            return new HotRequestState(
+                    requestId, userId, resourceId, slotId,
+                    "PRE_RESERVED", null, null, null, null);
+        }
     }
 }

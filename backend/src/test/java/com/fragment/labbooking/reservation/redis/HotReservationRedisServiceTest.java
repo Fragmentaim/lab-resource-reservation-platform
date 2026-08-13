@@ -79,6 +79,19 @@ class HotReservationRedisServiceTest {
     }
 
     @Test
+    void newlyAcceptedRequestShouldReturnKnownStateWithoutReadingRedisAgain() {
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
+                .thenReturn(0L);
+
+        var state = service.accept("req-new", 7L, 3L, 11L);
+
+        assertThat(state).isEqualTo(new HotReservationRedisService.HotRequestState(
+                "req-new", 7L, 3L, 11L, "PRE_RESERVED",
+                null, null, null, null));
+        verify(redisTemplate, never()).opsForHash();
+    }
+
+    @Test
     void differentRequestForSameUserShouldBeRejected() {
         when(redisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
                 .thenReturn(2L);
