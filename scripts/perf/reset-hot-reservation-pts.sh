@@ -30,10 +30,23 @@ fi
 before_booked="$(mysql_exec -e "SELECT COUNT(*) FROM reservation WHERE slot_id = $SLOT_ID AND status = 'BOOKED';")"
 before_requests="$(mysql_exec -e "SELECT COUNT(*) FROM reservation_request WHERE slot_id = $SLOT_ID;")"
 
+# 请求账本只覆盖真正进入 MQ 的请求；售罄前后复用过的 CSV 也可能在 Redis
+# 留下终态 request hash，因此重置时同时收集账本和当前压测 CSV 中的 requestId。
+request_ids_file="$(mktemp)"
+trap 'rm -f "$request_ids_file"' EXIT
+mysql_exec -e "SELECT request_id FROM reservation_request WHERE slot_id = $SLOT_ID;" > "$request_ids_file"
+for csv_file in "$SCRIPT_DIR"/*reservation*tokens.csv; do
+  [[ -f "$csv_file" ]] || continue
+  awk -F',' -v slot="$SLOT_ID" 'NR > 1 && $3 == slot && $4 != "" { gsub(/\r/, "", $4); print $4 }' \
+    "$csv_file" >> "$request_ids_file"
+done
+
+deleted_request_keys=0
 while IFS= read -r request_id; do
   [[ -z "$request_id" ]] && continue
-  redis-cli -n "$redis_db" DEL "reservation:request:v2:$request_id" >/dev/null
-done < <(mysql_exec -e "SELECT request_id FROM reservation_request WHERE slot_id = $SLOT_ID;")
+  deleted="$(redis-cli -n "$redis_db" DEL "reservation:request:v2:$request_id")"
+  deleted_request_keys=$((deleted_request_keys + deleted))
+done < <(sort -u "$request_ids_file")
 
 mysql_exec -e "
 START TRANSACTION;
@@ -66,4 +79,4 @@ UPDATE resource_slot SET remain_quota = total_quota, updated_at = NOW() WHERE id
 COMMIT;"
 
 "$SCRIPT_DIR/preheat-hot-reservation-redis.sh" "$SLOT_ID"
-echo "Reset complete: slot=$SLOT_ID removedBooked=$before_booked removedRequests=$before_requests restoredQuota=$total_quota"
+echo "Reset complete: slot=$SLOT_ID removedBooked=$before_booked removedRequests=$before_requests deletedRequestKeys=$deleted_request_keys restoredQuota=$total_quota"
