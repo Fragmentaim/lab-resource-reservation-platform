@@ -2,10 +2,10 @@ package com.fragment.labbooking.common.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.audit.AdminAuditLogEvent;
-import com.fragment.labbooking.common.delay.DelayMessageEventTypes;
-import com.fragment.labbooking.common.delay.ReservationReminderDelayPayload;
-import com.fragment.labbooking.common.reminder.ReservationReminderDeliveryService;
-import com.fragment.labbooking.common.reservation.ReservationAutoCancelService;
+import com.fragment.labbooking.reservation.reminder.messaging.DelayMessageEventTypes;
+import com.fragment.labbooking.reservation.reminder.messaging.ReservationReminderDelayPayload;
+import com.fragment.labbooking.reservation.reminder.ReservationReminderDeliveryService;
+import com.fragment.labbooking.reservation.reminder.ReservationAutoCancelService;
 import com.fragment.labbooking.entity.AdminAuditLog;
 import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.mapper.AdminAuditLogMapper;

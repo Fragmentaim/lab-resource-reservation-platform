@@ -7,11 +7,11 @@ import com.fragment.labbooking.knowledge.service.ReservationCancellationPreviewT
 import com.fragment.labbooking.knowledge.service.ReservationDraftToolService;
 import com.fragment.labbooking.knowledge.service.ResourceAvailabilityToolService;
 import com.fragment.labbooking.knowledge.dto.ReservationDraftConfirmDTO;
-import com.fragment.labbooking.dto.ReservationCreateDTO;
+import com.fragment.labbooking.reservation.api.dto.ReservationCreateDTO;
 import com.fragment.labbooking.knowledge.vo.ReservationCancellationPreviewVO;
 import com.fragment.labbooking.knowledge.vo.ReservationDraftVO;
 import com.fragment.labbooking.knowledge.vo.ResourceAvailabilityToolVO;
-import com.fragment.labbooking.vo.ReservationSubmitVO;
+import com.fragment.labbooking.reservation.api.vo.ReservationSubmitVO;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;

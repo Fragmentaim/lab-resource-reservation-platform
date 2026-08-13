@@ -8,6 +8,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @MapperScan({
         "com.fragment.labbooking.mapper",
+        "com.fragment.labbooking.reservation.persistence",
         "com.fragment.labbooking.knowledge.mapper"
 })
 @SpringBootApplication

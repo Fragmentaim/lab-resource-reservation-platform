@@ -3,10 +3,10 @@ package com.fragment.labbooking.service;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.fragment.labbooking.dto.NotificationPageQueryDTO;
-import com.fragment.labbooking.entity.Reservation;
-import com.fragment.labbooking.entity.ReservationReminderTask;
+import com.fragment.labbooking.reservation.model.Reservation;
+import com.fragment.labbooking.reservation.model.ReservationReminderTask;
 import com.fragment.labbooking.entity.UserNotification;
-import com.fragment.labbooking.common.reservation.ReservationResultEvent;
+import com.fragment.labbooking.reservation.messaging.ReservationResultEvent;
 import com.fragment.labbooking.vo.UserNotificationVO;
 
 public interface UserNotificationService extends IService<UserNotification> {

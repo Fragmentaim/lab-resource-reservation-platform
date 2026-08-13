@@ -6,7 +6,7 @@ import com.fragment.labbooking.common.audit.AdminAuditHelper;
 import com.fragment.labbooking.common.redis.ResourceCatalogCache;
 import com.fragment.labbooking.dto.ResourceQueryDTO;
 import com.fragment.labbooking.entity.Resource;
-import com.fragment.labbooking.mapper.ReservationMapper;
+import com.fragment.labbooking.reservation.persistence.ReservationMapper;
 import com.fragment.labbooking.mapper.ResourceMapper;
 import com.fragment.labbooking.service.ResourceSlotService;
 import com.fragment.labbooking.service.SysDictDataService;

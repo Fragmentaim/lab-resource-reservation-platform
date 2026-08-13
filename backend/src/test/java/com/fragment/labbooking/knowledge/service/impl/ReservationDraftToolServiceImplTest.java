@@ -6,10 +6,10 @@ import com.fragment.labbooking.common.auth.LoginUser;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
-import com.fragment.labbooking.service.reservation.ReservationCommandService;
+import com.fragment.labbooking.reservation.service.ReservationCommandService;
 import com.fragment.labbooking.service.ResourceService;
 import com.fragment.labbooking.service.ResourceSlotService;
-import com.fragment.labbooking.vo.ReservationSubmitVO;
+import com.fragment.labbooking.reservation.api.vo.ReservationSubmitVO;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.junit.jupiter.api.BeforeEach;
@@ -89,8 +89,8 @@ class ReservationDraftToolServiceImplTest {
 
         assertThat(result.getReservationNo()).isEqualTo("RES-100");
         ArgumentCaptor<String> requestId = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<com.fragment.labbooking.dto.ReservationCreateDTO> dto =
-                ArgumentCaptor.forClass(com.fragment.labbooking.dto.ReservationCreateDTO.class);
+        ArgumentCaptor<com.fragment.labbooking.reservation.api.dto.ReservationCreateDTO> dto =
+                ArgumentCaptor.forClass(com.fragment.labbooking.reservation.api.dto.ReservationCreateDTO.class);
         verify(reservationCommandService).create(eq(7L), requestId.capture(), dto.capture());
         assertThat(requestId.getValue()).isEqualTo(UUID.nameUUIDFromBytes(
                 ("reservation-draft:" + token).getBytes(StandardCharsets.UTF_8)).toString());

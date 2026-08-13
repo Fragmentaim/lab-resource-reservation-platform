@@ -1,18 +1,18 @@
 package com.fragment.labbooking.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.fragment.labbooking.common.constants.ReservationStatusConstants;
+import com.fragment.labbooking.reservation.model.ReservationStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotStatusConstants;
 import com.fragment.labbooking.common.constants.ResourceSlotTypeConstants;
 import com.fragment.labbooking.entity.MessageOutbox;
-import com.fragment.labbooking.entity.Reservation;
-import com.fragment.labbooking.entity.ReservationReminderTask;
+import com.fragment.labbooking.reservation.model.Reservation;
+import com.fragment.labbooking.reservation.model.ReservationReminderTask;
 import com.fragment.labbooking.entity.Resource;
 import com.fragment.labbooking.entity.ResourceSlot;
 import com.fragment.labbooking.entity.UserNotification;
 import com.fragment.labbooking.mapper.MessageOutboxMapper;
-import com.fragment.labbooking.mapper.ReservationMapper;
-import com.fragment.labbooking.mapper.ReservationReminderTaskMapper;
+import com.fragment.labbooking.reservation.persistence.ReservationMapper;
+import com.fragment.labbooking.reservation.persistence.ReservationReminderTaskMapper;
 import com.fragment.labbooking.mapper.ResourceMapper;
 import com.fragment.labbooking.mapper.ResourceSlotMapper;
 import com.fragment.labbooking.mapper.UserNotificationMapper;

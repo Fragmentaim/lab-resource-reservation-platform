@@ -1,11 +1,11 @@
 package com.fragment.labbooking.knowledge.service.impl;
 
 import com.fragment.labbooking.common.auth.LoginUser;
-import com.fragment.labbooking.common.constants.ReservationStatusConstants;
+import com.fragment.labbooking.reservation.model.ReservationStatusConstants;
 import com.fragment.labbooking.knowledge.service.ReservationCancellationPreviewToolService;
 import com.fragment.labbooking.knowledge.vo.ReservationCancellationPreviewVO;
-import com.fragment.labbooking.service.reservation.ReservationQueryService;
-import com.fragment.labbooking.vo.ReservationVO;
+import com.fragment.labbooking.reservation.service.ReservationQueryService;
+import com.fragment.labbooking.reservation.api.vo.ReservationVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
