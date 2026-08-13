@@ -121,7 +121,7 @@ public class HotReservationRedisService {
                     String.valueOf(requestRetention.toMillis())
             );
         } catch (RuntimeException exception) {
-            throw unavailable(exception);
+            throw new RedisDecisionUnknownException(exception);
         }
         long outcome = result == null ? NOT_READY : result;
         if (outcome == ACCEPTED) {
@@ -134,7 +134,7 @@ public class HotReservationRedisService {
             if (state != null) {
                 return state;
             }
-            throw unavailable(null);
+            throw new RedisDecisionUnknownException(null);
         }
         throw rejection(outcome);
     }

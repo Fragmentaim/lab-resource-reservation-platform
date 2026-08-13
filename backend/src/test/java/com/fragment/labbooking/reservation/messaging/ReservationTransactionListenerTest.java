@@ -3,6 +3,7 @@ package com.fragment.labbooking.reservation.messaging;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.reservation.redis.HotReservationRedisService;
+import com.fragment.labbooking.reservation.redis.RedisDecisionUnknownException;
 import org.apache.rocketmq.client.producer.LocalTransactionState;
 import org.apache.rocketmq.common.message.Message;
 import org.apache.rocketmq.common.message.MessageExt;
@@ -67,13 +68,27 @@ class ReservationTransactionListenerTest {
         ReservationCreateCommand command = command();
         var context = new ReservationCommandPublisher.LocalTransactionContext(command);
         when(hotRedis.accept(eq(REQUEST_ID), eq(7L), eq(1L), eq(10L)))
-                .thenThrow(new BusinessException(503, "Redis unavailable"));
+                .thenThrow(new RedisDecisionUnknownException(new IllegalStateException("Redis unavailable")));
 
         assertThat(listener.executeLocalTransaction(message(command), context))
                 .isEqualTo(LocalTransactionState.UNKNOW);
         assertThatThrownBy(context::result)
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("相同 Idempotency-Key");
+    }
+
+    @Test
+    void deterministicUnavailableStateShouldRollbackInsteadOfWaitingForBrokerCheck() {
+        ReservationCreateCommand command = command();
+        var context = new ReservationCommandPublisher.LocalTransactionContext(command);
+        when(hotRedis.accept(eq(REQUEST_ID), eq(7L), eq(1L), eq(10L)))
+                .thenThrow(new BusinessException(503, "热门预约通道暂时不可用，请稍后重试"));
+
+        assertThat(listener.executeLocalTransaction(message(command), context))
+                .isEqualTo(LocalTransactionState.ROLLBACK_MESSAGE);
+        assertThatThrownBy(context::result)
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(503));
     }
 
     @Test

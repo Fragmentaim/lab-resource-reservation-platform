@@ -3,6 +3,7 @@ package com.fragment.labbooking.reservation.messaging;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fragment.labbooking.common.exception.BusinessException;
 import com.fragment.labbooking.reservation.redis.HotReservationRedisService;
+import com.fragment.labbooking.reservation.redis.RedisDecisionUnknownException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.client.producer.LocalTransactionState;
@@ -45,13 +46,11 @@ public class ReservationTransactionListener implements TransactionListener {
             // 预占成功
             context.commit(state);
             return LocalTransactionState.COMMIT_MESSAGE;
+        } catch (RedisDecisionUnknownException exception) {
+            log.warn("Redis decision is unknown for reservation transaction: {}", exception.getMessage());
+            return LocalTransactionState.UNKNOW;
         } catch (BusinessException exception) {
-            // 业务异常：503 表示"Redis 状态未知" 返回 UNKNOW 等回查兜底。
-            if (exception.getCode() != null && exception.getCode() == 503) {
-                log.warn("Redis decision is unknown for reservation transaction: {}", exception.getMessage());
-                return LocalTransactionState.UNKNOW;
-            }
-            // 其他业务异常(余量不足/重复预约等)：预占失败 → 回滚半消息，并记录失败原因。
+            // Lua 已给出明确拒绝结论：回滚半消息，并把原因返回请求线程。
             context.rollback(exception);
             return LocalTransactionState.ROLLBACK_MESSAGE;
         } catch (RuntimeException exception) {
