@@ -15,7 +15,7 @@ COUNT=500 QUOTA=200 /opt/lab-booking/loadtest/prepare-sql-baseline-pts.sh
 COUNT=500 QUOTA=200 /opt/lab-booking/loadtest/prepare-optimized-pts.sh
 ```
 
-分别上传脚本输出的 CSV；PTS 参数都设为 500 并发、5 秒升压、每用户一次。压测后分别执行：
+分别上传脚本输出的 CSV；PTS 参数都设为 500 并发、5 秒升压、每用户一次。PTS 会把正常售罄的 HTTP 409 统计为失败，因此面板成功率不作为业务成功率；以 200/202 受理数、409 售罄数和压测后的库存一致性校验为准。压测后分别执行：
 
 ```bash
 /opt/lab-booking/loadtest/verify-sql-baseline-pts.sh <SQL_SLOT_ID> 200
