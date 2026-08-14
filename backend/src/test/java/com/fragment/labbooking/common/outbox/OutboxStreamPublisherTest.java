@@ -1,7 +1,6 @@
 package com.fragment.labbooking.common.outbox;
 
 import com.fragment.labbooking.entity.MessageOutbox;
-import com.fragment.labbooking.knowledge.mq.DocumentProcessProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.stream.function.StreamBridge;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -19,8 +18,7 @@ class OutboxStreamPublisherTest {
     void publishShouldRouteDelayEventsToDedicatedBinding() {
         StreamBridge bridge = mock(StreamBridge.class);
         MessageOutboxProperties outboxProperties = new MessageOutboxProperties();
-        DocumentProcessProperties documentProperties = new DocumentProcessProperties();
-        OutboxStreamPublisher publisher = new OutboxStreamPublisher(bridge, outboxProperties, documentProperties);
+        OutboxStreamPublisher publisher = new OutboxStreamPublisher(bridge, outboxProperties);
         ReflectionTestUtils.setField(publisher, "auditTopic", "admin-audit-log");
         when(bridge.send(eq(OutboxStreamPublisher.DELAY_OUTPUT), any())).thenReturn(true);
 
@@ -32,7 +30,7 @@ class OutboxStreamPublisherTest {
     @Test
     void publishShouldRejectUnknownTopicBeforeItCanBeMarkedSent() {
         OutboxStreamPublisher publisher = new OutboxStreamPublisher(mock(StreamBridge.class),
-                new MessageOutboxProperties(), new DocumentProcessProperties());
+                new MessageOutboxProperties());
         ReflectionTestUtils.setField(publisher, "auditTopic", "admin-audit-log");
 
         assertThatThrownBy(() -> publisher.publish(outbox("unknown-topic"), envelope()))
@@ -44,7 +42,7 @@ class OutboxStreamPublisherTest {
     void publishShouldRouteReservationResultsToResultBinding() {
         StreamBridge bridge = mock(StreamBridge.class);
         OutboxStreamPublisher publisher = new OutboxStreamPublisher(
-                bridge, new MessageOutboxProperties(), new DocumentProcessProperties());
+                bridge, new MessageOutboxProperties());
         ReflectionTestUtils.setField(publisher, "auditTopic", "admin-audit-log");
         ReflectionTestUtils.setField(publisher, "reservationResultTopic", "reservation-result");
         when(bridge.send(eq(OutboxStreamPublisher.RESERVATION_RESULT_OUTPUT), any())).thenReturn(true);

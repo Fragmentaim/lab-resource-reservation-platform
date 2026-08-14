@@ -2,12 +2,19 @@ server:
   port: ${SERVER_PORT:8081}
 
 spring:
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/lab_booking?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:0}
+      timeout: 3000ms
   cloud:
     function:
-      definition: reservationDelayConsumer;adminAuditConsumer;documentProcessConsumer;reservationCommandConsumer;reservationResultConsumer
-      # Spring Boot 4 and Spring AI currently expose different Jackson major
-      # versions; isolate binder conversion with Gson.
-      preferred-json-mapper: gson
+      definition: reservationDelayConsumer;adminAuditConsumer;reservationCommandConsumer;reservationResultConsumer
     stream:
       rocketmq:
         binder:
@@ -23,11 +30,6 @@ spring:
               subscription: admin-audit
               push:
                 max-reconsume-times: ${app.audit.mq.max-reconsume-times:-1}
-          documentProcessConsumer-in-0:
-            consumer:
-              subscription: ${app.knowledge.document-processing.tag:KNOWLEDGE_DOCUMENT_PROCESS}
-              push:
-                max-reconsume-times: ${app.knowledge.document-processing.max-reconsume-times:-1}
           reservationCommandConsumer-in-0:
             consumer:
               subscription: CREATE
@@ -42,13 +44,10 @@ spring:
                 max-reconsume-times: ${app.reservation.command.max-reconsume-times:16}
           reservationDelay-out-0:
             producer:
-              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
+              group: ${app.message-outbox.producer-group:lab-booking-outbox-producer-group}
           adminAudit-out-0:
             producer:
-              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
-          documentProcess-out-0:
-            producer:
-              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
+              group: ${app.message-outbox.producer-group:lab-booking-outbox-producer-group}
           reservationCommand-out-0:
             producer:
               group: ${app.reservation.command.producer-group:reservation-command-producer-group}
@@ -59,26 +58,20 @@ spring:
               retry-times-when-send-failed: ${app.reservation.command.send-retry-times:2}
           reservationResult-out-0:
             producer:
-              group: ${app.message-outbox.producer-group:lab-booking-message-outbox-producer-group}
+              group: ${app.message-outbox.producer-group:lab-booking-outbox-producer-group}
       bindings:
         reservationDelayConsumer-in-0:
           destination: ${app.message-outbox.delay-topic:reservation-delay}
-          group: ${app.message-outbox.delay-consumer-group:lab-booking-delay-consumer-group}
+          group: ${app.message-outbox.delay-consumer-group:reservation-delay-consumer-group}
           content-type: application/json
           consumer:
             auto-startup: ${app.message-outbox.enabled:false}
         adminAuditConsumer-in-0:
           destination: ${app.audit.mq.topic:admin-audit-log}
-          group: ${app.audit.mq.consumer-group:lab-booking-audit-consumer-group}
+          group: ${app.audit.mq.consumer-group:admin-audit-consumer-group}
           content-type: application/json
           consumer:
             auto-startup: ${app.audit.mq.enabled:false}
-        documentProcessConsumer-in-0:
-          destination: ${app.knowledge.document-processing.topic:knowledge-document-process}
-          group: ${app.knowledge.document-processing.consumer-group:lab-booking-knowledge-document-consumer-group}
-          content-type: application/json
-          consumer:
-            auto-startup: ${app.knowledge.document-processing.enabled:false}
         reservationCommandConsumer-in-0:
           destination: ${app.reservation.command.topic:reservation-command}
           group: ${app.reservation.command.consumer-group:reservation-confirm-group}
@@ -99,50 +92,24 @@ spring:
         adminAudit-out-0:
           destination: ${app.audit.mq.topic:admin-audit-log}
           content-type: application/json
-        documentProcess-out-0:
-          destination: ${app.knowledge.document-processing.topic:knowledge-document-process}
-          content-type: application/json
         reservationCommand-out-0:
           destination: ${app.reservation.command.topic:reservation-command}
           content-type: application/json
         reservationResult-out-0:
           destination: ${app.reservation.command.result-topic:reservation-result}
           content-type: application/json
-  ai:
-    openai:
-      base-url: ${AGENT_LLM_BASE_URL:${LLM_BASE_URL:http://127.0.0.1:11434/v1}}
-      api-key: ${AGENT_LLM_API_KEY:${LLM_API_KEY:local-no-key}}
-      chat:
-        model: ${AGENT_MODEL:${CHAT_MODEL:qwen2.5:7b}}
-        timeout: ${LLM_TIMEOUT_SECONDS:60}s
-        max-retries: ${LLM_MAX_RETRIES:1}
-        parallel-tool-calls: false
-        reasoning-effort: ${AGENT_REASONING_EFFORT:${LLM_REASONING_EFFORT:}}
-  datasource:
-    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/lab_booking?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8}
-    username: ${MYSQL_USERNAME:root}
-    password: ${MYSQL_PASSWORD:}
-  data:
-    redis:
-      host: ${REDIS_HOST:127.0.0.1}
-      port: ${REDIS_PORT:6379}
-      database: ${REDIS_DATABASE:0}
-      timeout: 3000ms
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
-  configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 
 app:
   jwt:
     secret: ${JWT_SECRET:local-development-secret-change-before-production}
     expire-hours: 24
   cors:
-    allowed-origins: http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5175,http://127.0.0.1:5188,http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5188
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://127.0.0.1:5173,http://localhost:5173}
   reservation:
     hot-redis-enabled: false
-    hot-init-wait-millis: 1000
     hot-cache-retention-hours: 24
     hot-request-retention-hours: 24
     command:
@@ -173,82 +140,25 @@ app:
       check-in-before-start-minutes: 30
   message-outbox:
     enabled: false
-    producer-group: lab-booking-message-outbox-producer-group
+    producer-group: lab-booking-outbox-producer-group
     max-reconsume-times: -1
     lock-seconds: 60
     delay-topic: reservation-delay
-    delay-consumer-group: lab-booking-delay-consumer-group
+    delay-consumer-group: reservation-delay-consumer-group
     outbox:
       dispatch-delay-millis: 1000
       batch-size: 20
+      max-retry-count: 10
+      initial-retry-delay-millis: 1000
+      max-retry-delay-millis: 300000
   audit:
     enabled: true
     mq:
       enabled: false
       topic: admin-audit-log
-      consumer-group: lab-booking-audit-consumer-group
+      consumer-group: admin-audit-consumer-group
       max-reconsume-times: -1
-      demo:
-        fail-once-enabled: false
-        fail-once-match:
-        fail-always-match:
   resource-cache:
     enabled: ${RESOURCE_CACHE_ENABLED:false}
     ttl-seconds: ${RESOURCE_CACHE_TTL_SECONDS:300}
     double-delete-delay-millis: ${RESOURCE_CACHE_DOUBLE_DELETE_DELAY_MILLIS:500}
-  knowledge:
-    ai-service:
-      base-url: ${AI_SERVICE_BASE_URL:http://127.0.0.1:8000}
-      service-token: ${AI_SERVICE_TOKEN:change-me-before-production}
-      connect-timeout: 5000
-      read-timeout: 180000
-    storage:
-      type: ${KNOWLEDGE_STORAGE_TYPE:local}
-      local-dir: ${KNOWLEDGE_LOCAL_DIR:../uploads/knowledge}
-      minio:
-        endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
-        access-key: ${MINIO_ACCESS_KEY:minioadmin}
-        secret-key: ${MINIO_SECRET_KEY:minioadmin}
-        bucket: ${MINIO_BUCKET:lab-knowledge}
-        presign-expiry-seconds: 900
-    document-processing:
-      enabled: false
-      topic: knowledge-document-process
-      tag: KNOWLEDGE_DOCUMENT_PROCESS
-      event-type: KNOWLEDGE_DOCUMENT_PROCESS
-      consumer-group: lab-booking-knowledge-document-consumer-group
-      max-reconsume-times: -1
-      max-retry-attempts: 3
-    # Operator-owned model capabilities. End users never configure per-bucket
-    # history/RAG limits; change active-profile when changing the LLM.
-    model-context:
-      active-profile: safe-default
-      profiles:
-        safe-default:
-          context-window-tokens: 12000
-          max-output-tokens: 2000
-          safety-margin-tokens: 512
-          compaction-target-ratio: 0.70
-        long-context-256k:
-          context-window-tokens: 256000
-          max-output-tokens: 8000
-          safety-margin-tokens: 4096
-          compaction-target-ratio: 0.70
-        # Evaluation-only constrained profile. It exercises rolling memory
-        # without changing the production default or a provider's real limit.
-        context-eval-48k:
-          context-window-tokens: 48000
-          max-output-tokens: 4000
-          safety-margin-tokens: 2048
-          compaction-target-ratio: 0.70
-    agent:
-      # Spring AI owns the model/tool loop. This limit guards against a model
-      # repeatedly selecting tools without finishing the user's task.
-      max-tool-calls: ${AGENT_MAX_TOOL_CALLS:8}
-    agent-reservation-confirmation:
-      # A draft is user-bound and short-lived. Confirmation always reuses the
-      # reservation service, which performs the authoritative business checks.
-      ttl-seconds: ${AGENT_RESERVATION_CONFIRMATION_TTL_SECONDS:600}
-    agent-checkpoint:
-      # Private runtime recovery state is short-lived and excludes raw prompts/tool payloads.
-      ttl-seconds: ${AGENT_CHECKPOINT_TTL_SECONDS:900}

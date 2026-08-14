@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="620" viewBox="0 0 1900 620"><defs><style>
-.bg { fill: #fff; }
-.title { font-family: SimSun, "Microsoft YaHei", sans-serif; font-size: 46px; font-weight: 700; fill: #111; }
-.text { font-family: SimSun, "Microsoft YaHei", sans-serif; font-size: 35px; fill: #111; }
-.note { font-family: SimSun, "Microsoft YaHei", sans-serif; font-size: 25px; fill: #333; }
-.pk { font-weight: 700; text-decoration-line: underline; text-underline-offset: 6px; }
-</style></defs><rect class="bg" x="0" y="0" width="1900" height="620"/><text class="title" x="90" y="80">关系模式</text><text class="note" x="90" y="122">下划线：主键；(FK)：外键</text><text class="text" x="90" y="200">用户(</text><text class="text pk" x="190" y="200">用户编号</text><text class="text" x="350" y="200">, 用户名, 手机号, 角色)</text><text class="text" x="90" y="278">预约(</text><text class="text pk" x="190" y="278">用户编号</text><text class="text" x="350" y="278">(FK), </text><text class="text pk" x="465" y="278">时段编号</text><text class="text" x="625" y="278">(FK), 提交时间, 预约状态)</text><text class="text" x="90" y="356">预约时段(</text><text class="text pk" x="275" y="356">时段编号</text><text class="text" x="435" y="356">, 资源编号(FK), 开始时间, 结束时间, 总名额)</text><text class="text" x="90" y="434">资源(</text><text class="text pk" x="190" y="434">资源编号</text><text class="text" x="350" y="434">, 类型编号(FK), 资源名称, 资源状态, 资源位置)</text><text class="text" x="90" y="512">资源类型(</text><text class="text pk" x="275" y="512">类型编号</text><text class="text" x="435" y="512">, 类型名称)</text></svg>

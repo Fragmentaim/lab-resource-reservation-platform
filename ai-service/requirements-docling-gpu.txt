@@ -1,6 +1,0 @@
-# Install after requirements.txt on a GPU document-processing worker.
-# Keeping the CUDA runtime explicit prevents pip from silently replacing it
-# with a CPU-only torch build while resolving Docling dependencies.
---index-url https://download.pytorch.org/whl/cu130
-torch==2.13.0+cu130
-torchvision==0.28.0+cu130

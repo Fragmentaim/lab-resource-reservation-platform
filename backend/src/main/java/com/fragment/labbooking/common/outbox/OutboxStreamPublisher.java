@@ -2,7 +2,6 @@ package com.fragment.labbooking.common.outbox;
 
 import com.alibaba.cloud.stream.binder.rocketmq.constant.RocketMQConst;
 import com.fragment.labbooking.entity.MessageOutbox;
-import com.fragment.labbooking.knowledge.mq.DocumentProcessProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.stream.function.StreamBridge;
@@ -17,12 +16,10 @@ public class OutboxStreamPublisher {
 
     static final String DELAY_OUTPUT = "reservationDelay-out-0";
     static final String AUDIT_OUTPUT = "adminAudit-out-0";
-    static final String DOCUMENT_OUTPUT = "documentProcess-out-0";
     static final String RESERVATION_RESULT_OUTPUT = "reservationResult-out-0";
 
     private final StreamBridge streamBridge;
     private final MessageOutboxProperties outboxProperties;
-    private final DocumentProcessProperties documentProcessProperties;
 
     @Value("${app.audit.mq.topic:admin-audit-log}")
     private String auditTopic;
@@ -53,9 +50,6 @@ public class OutboxStreamPublisher {
         }
         if (auditTopic.equals(topic)) {
             return AUDIT_OUTPUT;
-        }
-        if (documentProcessProperties.getTopic().equals(topic)) {
-            return DOCUMENT_OUTPUT;
         }
         if (reservationResultTopic != null && reservationResultTopic.equals(topic)) {
             return RESERVATION_RESULT_OUTPUT;

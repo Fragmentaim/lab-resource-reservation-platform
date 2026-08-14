@@ -1,215 +1,180 @@
-# 实验室智能预约与知识库 Agent 平台（后端）
+# 实验室资源预约平台（后端）
 
-面向实验室资源预约、制度问答和业务查询场景的后端项目。仓库由 **Spring Boot + Spring AI Agent 服务**与 **FastAPI RAG 服务**组成，不包含前端；重点展示预约一致性、可靠异步链路、原生 LLM Function Calling、RAG 权限控制、上下文管理和可观测性。
+面向实验室公共设备与热门时段抢占场景的 Java 后端项目。系统同时保留普通预约的同步事务链路，并为热门时段实现 **RocketMQ 事务半消息 + Redis Lua 原子预占 + MySQL 异步确认 + Outbox 可靠事件**，重点解决高并发受理、一人一单、库存防超卖、重复投递和跨组件一致性问题。
+
+> 本仓库是用于求职展示的预约后端版本，聚焦 Java 业务与中间件设计；Agent/RAG 子系统、压测账号、JMeter 脚本和原始报告独立维护，不放入本仓库。
+
+## 项目亮点
+
+- **冷热链路分离**：普通时段使用 MySQL 同步事务；已预热热门时段走 Redis + RocketMQ 异步确认，避免所有请求争抢数据库连接。
+- **事务消息缩小双写窗口**：先向 RocketMQ 发送半消息，再以 Redis Lua 作为本地事务；只有预占成功才提交消息，Redis 结果未知时由 Broker 回查。
+- **单次 Lua 原子裁决**：在 Redis 内一次完成时段快照校验、开放状态校验、幂等校验、一人一单和库存扣减，不在请求线程等待或重建热点数据。
+- **消费端最终一致**：`requestId` 请求账本抵御至少一次投递；MySQL 条件扣减与唯一约束作为最终防超卖、防重复保障。
+- **Outbox 可靠发布结果**：预约落库与结果事件在同一数据库事务中提交，后续统一驱动 Redis 状态收敛、站内通知、预约提醒和自动取消。
+- **可复现实验结论**：同一 ECS 与 PTS 环境下，500 并发抢 20 个名额，热门受理链路相较 SQL 基线 TPS 提升 57.2%，平均响应时间降低 48.9%。
 
 ## 系统架构
 
 ```mermaid
 flowchart LR
-    Client[API Client] --> Java[Spring Boot Business Service]
-    Java --> Auth[JWT / RBAC / Document ACL]
-    Java --> Booking[Reservation Domain]
-    Java --> Agent[Spring AI Agent Runtime]
-    Agent --> Tools[Business and RAG Tools]
-    Tools --> AI[FastAPI AI Service]
-    AI --> Parser[Docling / HybridChunker]
-    AI --> Retrieval[Vector + BM25 / RRF / Rerank]
-    Java --> MySQL[(MySQL)]
-    Java --> Redis[(Redis)]
-    Java --> MQ[RocketMQ]
-    Java --> MinIO[(MinIO)]
-    AI --> Qdrant[(Qdrant)]
-    AI --> ES[(Elasticsearch)]
+    Client["客户端 / PTS"] --> API["Spring Boot API"]
+    API --> Route{"时段类型"}
+    Route -->|普通时段| Normal["MySQL 同步事务"]
+    Normal --> DB[(MySQL)]
+    Route -->|热门且已预热| Half["RocketMQ 事务半消息"]
+    Half --> Lua["Redis Lua 原子预占"]
+    Lua -->|成功提交消息| Consumer["预约确认 Consumer"]
+    Lua -->|明确拒绝| Rollback["回滚半消息"]
+    Lua -->|结果未知| Check["Broker 事务回查"]
+    Check --> Redis[(Redis)]
+    Consumer --> Confirm["MySQL 最终确认事务"]
+    Confirm --> DB
+    Confirm --> Outbox["Message Outbox"]
+    Outbox --> Result["结果事件 Consumer"]
+    Result --> Redis
+    Result --> Follow["通知 / 提醒 / 自动取消"]
 ```
 
-Java 服务负责身份、权限、预约业务、文档元数据、Spring AI 工具编排与审计；Python 服务负责文档解析、切片、向量检索、重排和会话摘要。业务权限始终由 Java 侧校验，模型不能绕过服务层直接访问数据库。
+架构细节和异常窗口说明见 [docs/architecture.md](docs/architecture.md)。
 
-## 核心设计
+## 热门预约执行链路
 
-### 1. 预约与可靠异步链路
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant J as Spring Boot
+    participant M as RocketMQ
+    participant R as Redis
+    participant D as MySQL
+    participant O as Outbox
 
-- 通过数据库事务、名额条件更新与唯一约束保证同一用户、资源和时段不会重复预约。
-- 热门时段在开放前由 MySQL 预热 Redis 快照；请求先发送 RocketMQ 半消息，再由事务监听器通过单个 Lua 脚本原子完成时段校验、用户去重、库存扣减和短期请求状态写入，成功后提交消息，失败则回滚半消息。
-- RocketMQ 提供事务回查与至少一次投递；消费端以 `requestId` 幂等地写入精简请求账本，在事务内条件扣减 MySQL 名额并完成预约落库。
-- 使用 Outbox 记录待投递事件，避免“数据库提交成功但消息未发送”的双写不一致。
-- 预约结果通过 Outbox 发布，驱动 Redis 状态收敛、站内通知、预约提醒和未签到自动取消；不再维护 Redis Pending ZSet 和应用层定时重发器。
-- `POST /reservation` 使用 UUID `Idempotency-Key`：普通时段同步返回 `CONFIRMED`，热门时段返回 HTTP 202 `PENDING`；`GET /reservation/requests/{requestId}` 查询本人最终结果。
-- Redis 仅缓存首页资源目录，并承担热门时段原子预占、限流和重复提交控制；资源详情与普通时段实时读取 MySQL，MySQL 保存最终业务事实。
-
-### 2. 原生 Function Calling Agent
-
-RAG 不是固定前置步骤，而是 Agent 可按需调用的工具。当前工具包括：
-
-| 工具 | 作用 | 安全边界 |
-| --- | --- | --- |
-| `reservation_context` | 查询当前用户的预约摘要 | 默认只能读取本人数据 |
-| `resource_availability` | 查询资源和未来可预约时段 | 只读、限制返回字段和数量 |
-| `reservation_create_draft` | 基于确定的资源与时段生成预约草案 | 不扣减库存、不落库，必须等待界面显式确认 |
-| `reservation_cancellation_preview` | 预检预约是否可取消 | 不直接执行取消写操作 |
-| `knowledge_search` | 在有权限的文档范围内召回候选片段 | 返回候选定位信息 |
-| `knowledge_open_chunks` | 打开已召回候选的完整正文 | 只能读取本轮候选 chunk |
-
-Spring AI 负责模型调用、`tools/tool_calls` 解析和多轮工具循环；Java 业务工具继续负责参数校验、权限检查、执行、审计和结果裁剪。知识库回答采用“先检索候选、再打开证据”的两阶段读取，减少无关文本进入上下文并保留引用来源。
-
-预约写操作采用两阶段确认：Agent 只能用 `reservation_create_draft` 生成一个绑定当前用户、默认 10 分钟有效的确认令牌；前端展示资源、时段与余量后，用户点击确认并调用 `POST /knowledge/tools/reservation-drafts/{confirmationToken}/confirm`（请求体为 `{"confirmed": true}`）。确认接口会校验令牌归属，并从确认令牌派生稳定 UUID，重复确认始终复用同一个 `requestId`；最终由 `ReservationCommandService`、Redis 预占和 MQ 异步确认链路裁决。
-
-### 3. 会话上下文与可观测性
-
-- 根据模型能力配置动态计算上下文预算，组织系统提示、最近原始对话、可扩展 Markdown 会话交接、工具结果和证据；窗口不足时由 LLM 同步理解并重写完整交接记录。
-- 当历史内容逼近窗口时，由模型同步重写会话交接；旧交接与新增对话继续合并，避免只依赖固定轮数截断。
-- 大型工具结果保留摘要和结果标识，需要细节时再按需打开，降低上下文噪声。
-- `Agent Run / Step` 记录路由、工具调用、检索、模型执行、耗时、token 使用和异常，支持按 `traceId` 回溯完整链路。
-
-### 4. 多格式知识入库与文档 ACL
-
-- 支持 PDF、Word、Excel、Markdown、纯文本和图片入库，保留页码、标题路径、表格位置和 chunk 标识等元数据。
-- 文档解析统一采用 Docling，覆盖 PDF、Word、Excel、Markdown、纯文本和图片；同一结构化文档模型中保留标题层级、页码、表格、公式、图片及来源位置。
-- PDF 与图片由 Docling 完成版面分析、OCR、表格结构恢复、公式增强和图片分类；可选接入本地 VLM 或 OpenAI-compatible 多模态 API。流程图由 Python 侧生成“摘要、节点、连线条件和不确定项”结构化 Markdown，与页码和标题一起进入检索索引；Java 侧只负责任务编排、版本切换和 chunk 审计副本，不重复解析图结构。
-- 使用 Docling `HybridChunker` 按模型 Token 上限进行结构感知切片，保留标题上下文、表头和 DocItem 来源引用，避免自研字符切片破坏表格与章节语义。
-- 文档访问范围支持公开、管理员、上传者和指定用户；向量检索前先计算可访问文档集合并下推过滤条件。
-- 检索采用 Qdrant 向量召回与 Elasticsearch BM25 双路召回，将文档 ACL 过滤同时下推到两条检索链路；候选结果经加权 RRF 融合后统一 Rerank，最终只向 Agent 返回配置的 TopK 证据。
-- 文档上传、解析、切片和索引构建通过 RocketMQ + Outbox 异步执行，失败任务保留重试次数与处理轨迹。
-
-## 技术栈
-
-- Java 17、Spring Boot 4、Spring AI 2、MyBatis-Plus、MySQL、Redis、RocketMQ、JWT
-- Python 3.11+、FastAPI、Docling、Qdrant、Elasticsearch、Sentence Transformers
-- MinIO、Maven、Docker、Git
-
-## 仓库结构
-
-```text
-.
-├─ backend/                 Spring Boot 业务服务与 Agent 运行时
-├─ ai-service/              FastAPI 文档解析、检索和模型服务
-├─ sql/                     初始化与增量升级脚本
-├─ scripts/                 启动、模型验收和 RAG 评测脚本
-└─ docs/                    架构、数据模型和 RAG 评测说明
+    C->>J: POST /reservation + Idempotency-Key
+    J->>M: 发送事务半消息
+    M-->>J: 执行本地事务
+    J->>R: Lua 校验、去重、扣减库存
+    alt Redis 明确成功
+        J-->>M: COMMIT
+        J-->>C: 202 PENDING + requestId
+        M->>J: 至少一次投递预约命令
+        J->>D: 请求账本 + 条件扣减 + 预约落库
+        J->>O: 同事务写入结果事件
+        J-->>M: ACK
+        O->>M: 发布预约结果
+        M->>J: 消费结果事件
+        J->>R: 收敛 CONFIRMED / REJECTED 状态
+    else Redis 明确拒绝
+        J-->>M: ROLLBACK
+        J-->>C: 业务错误
+    else Redis 结果未知
+        J-->>M: UNKNOWN
+        M->>J: 回查本地事务
+        J->>R: 按 requestId 核对预占记录
+    end
 ```
 
-## 快速启动
+### 为什么是“先半消息，再执行 Lua”
 
-### 1. Docker Compose（推荐）
+如果先扣 Redis 再普通发送 MQ，会出现“Redis 已扣减，但应用在消息发送前宕机”的窗口，需要额外扫描和补偿。事务半消息把两个动作绑定为一个可回查流程：
 
-仓库提供 MySQL、Redis、RocketMQ 4.9、MinIO、Qdrant、Elasticsearch、Spring Boot 与 FastAPI 的本地运行编排。复制环境变量模板后启动：
+1. 半消息发送失败：Lua 尚未执行，不产生库存变化。
+2. Lua 明确成功：提交消息，交给 RocketMQ 可靠投递。
+3. Lua 明确拒绝：回滚半消息，不进入消费端。
+4. Lua 响应未知：不贸然提交或回滚，由 Broker 根据 Redis 中的 `requestId` 状态回查。
 
-```bash
-cp .env.example .env
-docker compose up --build
-```
+## 一致性设计
 
-首次启动会初始化演示数据库。默认端口为：后端 `8081`、AI 服务 `8000`、MinIO Console `9001`、Qdrant `6333`、Elasticsearch `9200`；可在根目录 `.env` 覆盖。后端健康检查为 `GET /system/health`，AI 服务健康检查为 `GET /api/v1/ai/health`。
-
-`.env.example` 中是仅供本地演示的默认值，部署前必须替换数据库密码、MinIO 密码和 JWT 密钥。`AGENT_LLM_*` 配置 Spring AI 使用的 OpenAI-compatible 模型，Embedding/Rerank 仍由 FastAPI 配置；未配置模型时，文档及基础设施服务仍可启动，但模型相关接口不可用。
-
-### 2. 手动启动基础设施
-
-准备 MySQL 8、Redis、RocketMQ 4.9.x、MinIO、Qdrant 和 Elasticsearch 8.19.x。首次初始化时按顺序执行：
-
-```sql
-source backend/src/main/resources/sql/lab-booking-rebuild-init.sql;
-source backend/src/main/resources/sql/knowledge-rag-module-init.sql;
-```
-
-如从旧版本升级，请按 `sql/` 中升级脚本的日期和说明依次执行。
-
-### 3. 启动 Java 服务
-
-```bash
-cd backend
-mvn spring-boot:run -Dspring-boot.run.profiles=mq
-```
-
-常用环境变量：
-
-| 变量 | 示例 |
+| 问题 | 处理方式 |
 | --- | --- |
-| `MYSQL_URL` | `jdbc:mysql://127.0.0.1:3306/lab_booking?...` |
-| `MYSQL_USERNAME` / `MYSQL_PASSWORD` | 数据库账号 |
-| `REDIS_HOST` / `REDIS_PORT` | Redis 地址 |
-| `ROCKETMQ_NAMESERVER` | `127.0.0.1:9876` |
-| `JWT_SECRET` | 至少 32 字节的随机字符串 |
-| `AI_SERVICE_BASE_URL` | `http://127.0.0.1:8000` |
-| `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | MinIO 配置 |
+| 客户端重复点击 | `Idempotency-Key` 作为稳定 `requestId`，同一请求不重复扣库存 |
+| 同一用户更换 requestId 重复抢同一时段 | Redis User Hash 实现一人一单；MySQL 唯一约束再次兜底 |
+| Redis 并发扣减 | Lua 脚本原子执行校验、去重和扣减 |
+| MQ 重复投递 | `reservation_request.request_id` 唯一账本幂等消费 |
+| MySQL 超卖 | `remain_quota > 0` 条件更新，受影响行数为 0 即拒绝 |
+| 数据库成功但结果消息未发出 | 业务结果与 Outbox 在同一事务提交，由调度器重试发布 |
+| 消费端业务拒绝 | 写入 `REJECTED` 终态并 ACK；结果事件只释放一次 Redis 预占 |
+| Redis 暂时不可用 | 热门预约快速失败，普通预约链路不受影响 |
+| 热点缓存缺失 | 热门请求返回“系统准备中”，不降级为高并发直打 MySQL |
 
-Java API 默认监听 `http://127.0.0.1:8081`。
+Redis 只保存热门时段的临时并发状态，MySQL 始终是最终业务事实来源。
 
-### 4. 启动 AI 服务
+## 性能测试
 
-```bash
-cd ai-service
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-# 可选：在支持 CUDA 的文档处理节点恢复 GPU PyTorch 运行时
-# pip install -r requirements-docling-gpu.txt
-cp .env.example .env
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
+测试条件：同一台阿里云 ECS（4 vCPU / 8 GiB）、阿里云 PTS VPC 内网施压、500 并发、20 个库存、相同接口数据与服务器配置。
 
-在 `.env` 中配置 OpenAI-compatible 模型接口、Embedding、Rerank、Qdrant、Elasticsearch 和 Docling。图片描述支持关闭、本地 VLM 或 OpenAI-compatible 多模态 API 三种模式；密钥及本地模型目录不会提交到仓库。
+| 指标 | SQL 同步基线 | Redis + MQ 热门受理 | 改善 |
+| --- | ---: | ---: | ---: |
+| TPS | 170.59 | 268.24 | **+57.2%** |
+| 平均响应时间 | 1.78 s | 0.91 s | **-48.9%** |
+| P99 | 2.57 s | 1.50 s | **-41.7%** |
 
-关键词检索默认使用 Elasticsearch 内置 `cjk` analyzer，无须安装插件即可运行。若部署环境已安装与 Elasticsearch **完全同版本**的 IK Analysis 插件，可将 `ELASTICSEARCH_INDEX_ANALYZER` / `ELASTICSEARCH_SEARCH_ANALYZER` 分别改为 `ik_max_word` / `ik_smart`；分析器变更后需要重建索引。
+这里衡量的是**热门预约受理接口**的吞吐和响应时间。HTTP 202 表示请求已被可靠受理，最终预约结果由 MQ 消费端落库后通过 `GET /reservation/requests/{requestId}` 查询；不把受理成功等同于最终确认成功。
 
-从只使用 Qdrant 的旧环境升级时，先启动 Qdrant 与 Elasticsearch，再执行一次回填：
+## 业务能力
 
-```bash
-cd ai-service
-python -m app.cli.rebuild_elasticsearch
-```
-
-该命令流式读取 Qdrant 中已有的 chunk payload，以稳定 `chunkId` 写入 Elasticsearch，不需要重新上传原始文档。新文档入库和文档删除会同时维护 Qdrant 与 Elasticsearch；任一索引写入失败时，本次异步文档任务保持失败状态并进入原有重试流程。项目不再保留进程内 BM25 旁路，避免多实例索引不一致和全量扫描 Qdrant。
-
-## 测试
-
-```bash
-cd backend
-mvn test
-
-cd ../ai-service
-python -m pip install -r requirements-dev.txt
-python -m pytest -q
-```
-
-当前 Java 测试集覆盖预约状态、权限边界、工具调用、上下文规划、文档 ACL、异步任务和异常路径；AI 测试覆盖 Docling 结构映射、上下文裁剪、重排回退、混合检索融合与 ACL 检索门槛。以 CI 实际结果为准，不在 README 固化会过期的性能或测试数量。
-
-每次推送和 PR 会由 GitHub Actions 运行 Java 测试、Python 编译检查、Docker Compose 配置校验和敏感信息扫描。实际容器联调依赖 Docker Daemon 与外部模型配置，因此只在本地或部署环境完成。
-
-### MCP Sidecar
-
-项目提供基于官方 Python MCP SDK 的独立 MCP Sidecar，暴露“我的预约上下文、资源可用性、取消预检、知识库问答”四个能力。它只转发 Java 后端已有的鉴权接口，JWT 由 MCP 进程环境中的 `MCP_ACCESS_TOKEN` 持有，不会作为模型可见的 Tool 参数传递；预约写操作不在 MCP 中暴露。
-
-本地 IDE 使用 stdio：
-
-```bash
-cd ai-service
-set MCP_ACCESS_TOKEN=your-jwt
-python -m app.mcp_server
-```
-
-需要 Streamable HTTP 时以单用户 Sidecar 方式启动：
-
-```bash
-docker compose --profile mcp up mcp
-```
-
-不要让多个用户共享同一个 `MCP_ACCESS_TOKEN`；多租户 HTTP 部署需要接入 OAuth/资源服务器后再开放。
+- JWT 登录认证与管理员权限控制
+- 资源、分类、时段、预约记录和字典管理
+- 普通预约同步确认、热门预约异步确认
+- 预约取消、签到、用户预约概览
+- Redis 资源目录缓存、热点预热、Lua 预占与接口限流
+- RocketMQ 事务消息、消费重试、死信处理
+- Outbox 可靠事件、预约提醒和未签到自动取消
+- 管理员关键操作审计
 
 ## 代码导航
 
-- Agent 模型入口：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/SpringAiAgentService.java`
-- Agent 工具定义与执行：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/tool/`
-- Agent 运行轨迹：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/AgentRunServiceImpl.java`
-- 会话上下文：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/QaSessionManager.java`
-- 文档权限与知识库：`backend/src/main/java/com/fragment/labbooking/knowledge/`
-- 文档解析与切片：`ai-service/app/core/docling_pipeline.py`
-- 混合检索：`ai-service/app/core/rag_pipeline.py`、`ai-service/app/core/elasticsearch_store.py`、`ai-service/app/core/vectorstore.py`、`ai-service/app/core/reranker.py`
-- 检索质量门槛：`ai-service/app/core/retrieval_eval.py`、`ai-service/evals/`
-- 数据库脚本：`sql/`
+```text
+backend/src/main/java/com/fragment/labbooking
+├─ reservation
+│  ├─ api                 # 预约接口、DTO、VO
+│  ├─ service             # 冷热路由、同步预约、异步确认、结果收敛
+│  ├─ messaging           # 事务消息发布、事务监听器、MQ Consumer
+│  ├─ redis               # 热点快照、Lua 预占、限流
+│  ├─ persistence         # 预约与请求账本 Mapper
+│  ├─ reminder            # 提醒与自动取消
+│  └─ support             # 预约持久化与编号生成
+├─ resource               # 资源与时段管理
+├─ common/outbox          # Outbox 入队、发布与消费适配
+├─ common/auth            # JWT 与登录上下文
+└─ common/audit           # 管理员操作审计
+```
 
-## 安全说明
+建议阅读顺序：
 
-- 示例配置仅用于本地开发；生产环境必须通过环境变量或密钥管理服务注入凭据。
-- 不要提交 `.env`、模型缓存、上传文件、向量库数据、日志或构建产物。
-- Agent 中会产生副作用的业务操作应保留人工确认；当前取消工具仅返回预检结果。
+1. [`ReservationController`](backend/src/main/java/com/fragment/labbooking/reservation/api/ReservationController.java)：接口入口。
+2. [`ReservationCommandService`](backend/src/main/java/com/fragment/labbooking/reservation/service/ReservationCommandService.java)：普通/热门链路路由。
+3. [`ReservationCommandPublisher`](backend/src/main/java/com/fragment/labbooking/reservation/messaging/ReservationCommandPublisher.java)：事务半消息发送。
+4. [`ReservationTransactionListener`](backend/src/main/java/com/fragment/labbooking/reservation/messaging/ReservationTransactionListener.java)：Lua 本地事务和事务回查。
+5. [`HotReservationRedisService`](backend/src/main/java/com/fragment/labbooking/reservation/redis/HotReservationRedisService.java)：热点快照与原子预占。
+6. [`ReservationConfirmationService`](backend/src/main/java/com/fragment/labbooking/reservation/service/ReservationConfirmationService.java)：MySQL 最终确认事务。
+7. [`ReservationResultService`](backend/src/main/java/com/fragment/labbooking/reservation/service/ReservationResultService.java)：Redis、通知和提醒状态收敛。
+
+## 快速启动
+
+环境要求：Docker Compose，或本机 Java 17 + MySQL 8 + Redis 7 + RocketMQ 4.9。
+
+```powershell
+Copy-Item .env.example .env
+docker compose --env-file .env up -d --build
+```
+
+启动后：
+
+- 后端地址：`http://localhost:8081`
+- 健康检查：`GET http://localhost:8081/system/health`
+- 初始化 SQL：`backend/src/main/resources/sql/lab-booking-rebuild-init.sql`
+
+`.env.example` 仅包含示例值；正式部署前请替换数据库密码和 `JWT_SECRET`。
+
+## 本地测试
+
+```powershell
+cd backend
+mvn test
+```
+
+GitHub Actions 会执行 Java 测试、Compose 配置校验和敏感信息扫描。
+
+## 技术栈
+
+Java 17、Spring Boot 4、MyBatis-Plus、MySQL 8、Redis、Redisson、RocketMQ、Spring Cloud Stream、JWT、Maven、Docker Compose

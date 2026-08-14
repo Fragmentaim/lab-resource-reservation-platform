@@ -7,7 +7,6 @@ import com.fragment.labbooking.reservation.reminder.messaging.ReservationReminde
 import com.fragment.labbooking.reservation.reminder.ReservationReminderDeliveryService;
 import com.fragment.labbooking.reservation.reminder.ReservationAutoCancelService;
 import com.fragment.labbooking.entity.AdminAuditLog;
-import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import com.fragment.labbooking.mapper.AdminAuditLogMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
@@ -66,8 +65,7 @@ class OutboxStreamConsumersTest {
     private OutboxStreamConsumers consumers(ReservationReminderDeliveryService reminders,
                                             ReservationAutoCancelService autoCancel,
                                             AdminAuditLogMapper adminAuditLogMapper) {
-        return new OutboxStreamConsumers(objectMapper, reminders, autoCancel, adminAuditLogMapper,
-                mock(KbDocumentService.class));
+        return new OutboxStreamConsumers(objectMapper, reminders, autoCancel, adminAuditLogMapper);
     }
 
     private org.springframework.messaging.Message<MessageOutboxEnvelope> message(String eventType, Object payload)

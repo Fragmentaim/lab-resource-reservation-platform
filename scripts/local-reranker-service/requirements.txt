@@ -1,5 +1,0 @@
-# Install in an isolated virtual environment before starting the service.
-fastapi>=0.110,<1
-uvicorn[standard]>=0.29,<1
-torch>=2.6,<3
-transformers>=4.51,<6

@@ -4,34 +4,8 @@ app:
     command:
       enabled: true
       consumer-enabled: true
-    reminder:
-      enabled: true
-    auto-cancel:
-      enabled: true
   message-outbox:
     enabled: true
-    producer-group: lab-booking-message-outbox-producer-group
-    max-reconsume-times: -1
-    lock-seconds: 60
-    delay-topic: reservation-delay
-    delay-consumer-group: lab-booking-delay-consumer-group
-    outbox:
-      dispatch-delay-millis: 1000
-      batch-size: 20
-      max-retry-count: 10
-      initial-retry-delay-millis: 1000
-      max-retry-delay-millis: 300000
   audit:
     mq:
       enabled: true
-  knowledge:
-    storage:
-      type: ${KNOWLEDGE_STORAGE_TYPE:minio}
-    document-processing:
-      enabled: true
-      topic: knowledge-document-process
-      tag: KNOWLEDGE_DOCUMENT_PROCESS
-      event-type: KNOWLEDGE_DOCUMENT_PROCESS
-      consumer-group: lab-booking-knowledge-document-consumer-group
-      max-reconsume-times: -1
-      max-retry-attempts: 3

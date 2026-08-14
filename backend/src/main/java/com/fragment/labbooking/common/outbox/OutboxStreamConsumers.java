@@ -8,9 +8,7 @@ import com.fragment.labbooking.reservation.reminder.messaging.ReservationAutoCan
 import com.fragment.labbooking.reservation.reminder.messaging.ReservationReminderDelayPayload;
 import com.fragment.labbooking.reservation.reminder.ReservationReminderDeliveryService;
 import com.fragment.labbooking.reservation.reminder.ReservationAutoCancelService;
-import com.fragment.labbooking.knowledge.mq.DocumentProcessMessage;
 import com.fragment.labbooking.mapper.AdminAuditLogMapper;
-import com.fragment.labbooking.knowledge.service.KbDocumentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
@@ -31,7 +29,6 @@ public class OutboxStreamConsumers {
     private final ReservationReminderDeliveryService reminderDeliveryService;
     private final ReservationAutoCancelService reservationAutoCancelService;
     private final AdminAuditLogMapper adminAuditLogMapper;
-    private final KbDocumentService kbDocumentService;
 
     @Bean
     Consumer<Message<MessageOutboxEnvelope>> reservationDelayConsumer() {
@@ -47,14 +44,6 @@ public class OutboxStreamConsumers {
             } catch (DuplicateKeyException duplicate) {
                 log.info("Admin audit event already consumed. eventId={}", event.getEventId());
             }
-        };
-    }
-
-    @Bean
-    Consumer<Message<MessageOutboxEnvelope>> documentProcessConsumer() {
-        return message -> {
-            DocumentProcessMessage event = payload(message, DocumentProcessMessage.class);
-            kbDocumentService.processDocumentMessage(event.getDocumentId(), event.getTraceId());
         };
     }
 
