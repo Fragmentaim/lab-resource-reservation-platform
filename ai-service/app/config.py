@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     docling_picture_api_key: str = ""
     docling_picture_model: str = ""
     docling_picture_timeout_seconds: float = 300.0
-    docling_picture_max_tokens: int = 1200
+    docling_picture_max_tokens: int = 1600
     document_download_timeout_seconds: float = 120.0
     document_download_max_bytes: int = 268435456
 

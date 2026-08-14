@@ -64,7 +64,7 @@ Spring AI 负责模型调用、`tools/tool_calls` 解析和多轮工具循环；
 
 - 支持 PDF、Word、Excel、Markdown、纯文本和图片入库，保留页码、标题路径、表格位置和 chunk 标识等元数据。
 - 文档解析统一采用 Docling，覆盖 PDF、Word、Excel、Markdown、纯文本和图片；同一结构化文档模型中保留标题层级、页码、表格、公式、图片及来源位置。
-- PDF 与图片由 Docling 完成版面分析、OCR、表格结构恢复、公式增强和图片分类；可选接入本地 VLM 或 OpenAI-compatible 多模态 API 生成图片语义描述。
+- PDF 与图片由 Docling 完成版面分析、OCR、表格结构恢复、公式增强和图片分类；可选接入本地 VLM 或 OpenAI-compatible 多模态 API。流程图由 Python 侧生成“摘要、节点、连线条件和不确定项”结构化 Markdown，与页码和标题一起进入检索索引；Java 侧只负责任务编排、版本切换和 chunk 审计副本，不重复解析图结构。
 - 使用 Docling `HybridChunker` 按模型 Token 上限进行结构感知切片，保留标题上下文、表头和 DocItem 来源引用，避免自研字符切片破坏表格与章节语义。
 - 文档访问范围支持公开、管理员、上传者和指定用户；向量检索前先计算可访问文档集合并下推过滤条件。
 - 检索采用 Qdrant 向量召回与 Elasticsearch BM25 双路召回，将文档 ACL 过滤同时下推到两条检索链路；候选结果经加权 RRF 融合后统一 Rerank，最终只向 Agent 返回配置的 TopK 证据。

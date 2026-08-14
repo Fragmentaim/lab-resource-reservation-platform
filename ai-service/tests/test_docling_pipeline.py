@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.docling_pipeline import (
+    _PICTURE_PROMPT,
     _block_type,
     _build_quality_report,
     _collect_page_numbers,
@@ -122,6 +123,15 @@ def test_picture_reasoning_is_not_indexed():
     value = "<think>internal reasoning</think>可检索的图片描述"
 
     assert _strip_reasoning(value) == "可检索的图片描述"
+
+
+def test_picture_prompt_preserves_diagram_topology_for_retrieval():
+    assert "图示摘要" in _PICTURE_PROMPT
+    assert "节点" in _PICTURE_PROMPT
+    assert "连线与条件" in _PICTURE_PROMPT
+    assert "-->" in _PICTURE_PROMPT
+    assert "不确定项" in _PICTURE_PROMPT
+    assert "禁止补充" in _PICTURE_PROMPT
 
 
 def test_quality_report_uses_real_docling_confidence_scores():
