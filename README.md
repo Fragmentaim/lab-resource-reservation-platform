@@ -2,7 +2,16 @@
 
 面向实验室公共设备与热门时段抢占场景的 Java 后端项目。系统同时保留普通预约的同步事务链路，并为热门时段实现 **RocketMQ 事务半消息 + Redis Lua 原子预占 + MySQL 异步确认 + Outbox 可靠事件**，重点解决高并发受理、一人一单、库存防超卖、重复投递和跨组件一致性问题。
 
-> 本仓库是用于求职展示的预约后端版本，聚焦 Java 业务与中间件设计；Agent/RAG 子系统、压测账号、JMeter 脚本和原始报告独立维护，不放入本仓库。
+## 版本入口
+
+预约系统与 Agent/RAG 平台在同一个仓库中维护，通过分支提供两个版本：
+
+| 分支 | 内容 |
+| --- | --- |
+| [`main`](https://github.com/Fragmentaim/lab-resource-reservation-platform/tree/main)（当前） | 用于求职展示的预约后端版本，聚焦 Java 业务与中间件设计 |
+| [`feature/agent-hardening-v2`](https://github.com/Fragmentaim/lab-resource-reservation-platform/tree/feature/agent-hardening-v2) | 预约后端 + Spring AI Agent + FastAPI RAG，包含 `ai-service/`、工具调用、文档权限与完整平台编排 |
+
+查看或运行 Agent 平台请进入对应分支，并使用该分支的环境模板、启动说明和 SQL。当前分支保留预约后端展示内容，压测账号和原始运行数据在本地隔离环境维护。
 
 ## 项目亮点
 
