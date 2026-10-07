@@ -2,6 +2,17 @@
 
 面向实验室资源预约、制度问答和业务查询场景的后端项目。仓库由 **Spring Boot + Spring AI Agent 服务**与 **FastAPI RAG 服务**组成，不包含前端；重点展示预约一致性、可靠异步链路、原生 LLM Function Calling、RAG 权限控制、上下文管理和可观测性。
 
+## 版本入口
+
+预约系统与 Agent/RAG 平台在同一个 GitHub 仓库中维护，通过分支提供两个版本：
+
+| 分支 | 内容 | 适用场景 |
+| --- | --- | --- |
+| [`main`](https://github.com/Fragmentaim/lab-resource-reservation-platform/tree/main) | 预约后端展示版本 | 查看预约一致性、事务消息与 Outbox 设计 |
+| [`feature/agent-hardening-v2`](https://github.com/Fragmentaim/lab-resource-reservation-platform/tree/feature/agent-hardening-v2)（当前） | 预约后端 + Spring AI Agent + FastAPI RAG | 开发和运行完整智能预约与知识库后端 |
+
+两个分支的服务、配置和数据库脚本不同。启动完整平台时请检出当前分支，并使用当前分支的 `.env.example`、`compose.yaml` 与 SQL 脚本。目录与文档入口见 [文档索引](docs/README.md)，日常启动及评测入口见 [脚本说明](scripts/README.md)。
+
 ## 系统架构
 
 ```mermaid
@@ -84,7 +95,10 @@ Spring AI 负责模型调用、`tools/tool_calls` 解析和多轮工具循环；
 ├─ ai-service/              FastAPI 文档解析、检索和模型服务
 ├─ sql/                     初始化与增量升级脚本
 ├─ scripts/                 启动、模型验收和 RAG 评测脚本
-└─ docs/                    架构、数据模型和 RAG 评测说明
+├─ docs/                    数据模型和 Agent/RAG 评测说明
+├─ docker/                  容器基础设施配置
+├─ compose.yaml             完整平台的本地服务编排
+└─ .github/workflows/       自动检查
 ```
 
 ## 快速启动
@@ -174,7 +188,7 @@ python -m pytest -q
 
 当前 Java 测试集覆盖预约状态、权限边界、工具调用、上下文规划、文档 ACL、异步任务和异常路径；AI 测试覆盖 Docling 结构映射、上下文裁剪、重排回退、混合检索融合与 ACL 检索门槛。以 CI 实际结果为准，不在 README 固化会过期的性能或测试数量。
 
-每次推送和 PR 会由 GitHub Actions 运行 Java 测试、Python 编译检查、Docker Compose 配置校验和敏感信息扫描。实际容器联调依赖 Docker Daemon 与外部模型配置，因此只在本地或部署环境完成。
+向 `main`、`agent/**` 或当前 Agent 分支推送，以及面向 `main` 的 PR，会由 GitHub Actions 运行 Java 测试、Python 编译和测试、Docker Compose 配置校验和敏感信息扫描。实际容器联调依赖 Docker Daemon 与外部模型配置，因此只在本地或部署环境完成。
 
 ### MCP Sidecar
 
@@ -198,6 +212,7 @@ docker compose --profile mcp up mcp
 
 ## 代码导航
 
+- 预约业务：`backend/src/main/java/com/fragment/labbooking/reservation/`，按 API、消息、模型、持久化、Redis、提醒与服务划分
 - Agent 模型入口：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/SpringAiAgentService.java`
 - Agent 工具定义与执行：`backend/src/main/java/com/fragment/labbooking/knowledge/agent/tool/`
 - Agent 运行轨迹：`backend/src/main/java/com/fragment/labbooking/knowledge/service/impl/AgentRunServiceImpl.java`
