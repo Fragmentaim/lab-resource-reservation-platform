@@ -63,4 +63,3 @@ echo "RESOURCE_ID=$resource_id"
 echo "SLOT_ID=$slot_id"
 echo "QUOTA=$QUOTA"
 echo "TOKEN_CSV=$csv"
-

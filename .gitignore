@@ -19,6 +19,7 @@ pnpm-debug.log*
 
 # Python / AI service
 __pycache__/
+.pytest_cache/
 *.py[cod]
 .venv/
 venv/

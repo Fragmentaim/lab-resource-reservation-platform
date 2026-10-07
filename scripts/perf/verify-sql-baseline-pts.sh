@@ -17,4 +17,3 @@ printf 'slot=%s total=%s mysqlRemain=%s booked=%s distinctBookedUsers=%s\n' \
 [[ "$total" == "$EXPECTED_QUOTA" && "$remain" == 0 && "$booked" == "$EXPECTED_QUOTA" \
    && "$distinct_users" == "$EXPECTED_QUOTA" ]]
 echo "Verification passed: pure SQL baseline has no oversell or duplicate booking."
-

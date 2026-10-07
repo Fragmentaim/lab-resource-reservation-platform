@@ -2,7 +2,7 @@ name: verify
 
 on:
   push:
-    branches: [main, "agent/**"]
+    branches: [main, "agent/**", "feature/agent-hardening-v2"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
       - run: mvn -q test
 
   ai-service-check:
-    name: Python compile check
+    name: Python tests
     runs-on: ubuntu-latest
     defaults:
       run:
